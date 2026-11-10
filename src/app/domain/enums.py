@@ -989,3 +989,52 @@ class EmailEditAction(StrEnum):
     EDIT = "edit"
     RESET = "reset"
     KEEP_EDIT = "keep_edit"
+
+
+# --------------------------------------------------------------------------
+# Where an account and a booking came from (PRD 30, decision 329);
+# coerced from what a visitor sends in `domain.attribution`.
+# --------------------------------------------------------------------------
+
+
+class SignupSource(StrEnum):
+    """How an account arrived (`users.signup_source`)."""
+
+    INVITE = "invite"
+    CAMPAIGN = "campaign"
+    REFERRAL_SITE = "referral_site"
+    DIRECT = "direct"
+    #: Carried over from the old platform: the migration's and the loader's.
+    MIGRATED = "migrated"
+
+
+class SignupChannel(StrEnum):
+    """Which channel a campaign came through (`users.signup_channel`)."""
+
+    LINKEDIN = "linkedin"
+    GOOGLE = "google"
+    WHATSAPP = "whatsapp"
+    INSTAGRAM = "instagram"
+    NEWSLETTER = "newsletter"
+    OTHER = "other"
+
+
+class AuthMethod(StrEnum):
+    """How an account signs in (`users.auth_method`)."""
+
+    EMAIL_CODE = "email_code"
+    GOOGLE_OAUTH = "google_oauth"
+
+
+class EntryPoint(StrEnum):
+    """Where in the app a booking began (`sessions.entry_point`).
+
+    No `messages`: whether the chat menu books is open (PRD 30 Q5). Widening
+    the `CHECK` later is one constraint swap.
+    """
+
+    MENTOR_PROFILE = "mentor_profile"
+    EXPLORE = "explore"
+    HOME = "home"
+    ONBOARDING_GUEST = "onboarding_guest"
+    REBOOK_AFTER_REVIEW = "rebook_after_review"

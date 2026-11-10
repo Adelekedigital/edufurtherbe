@@ -41,6 +41,7 @@ from app.api.deps.admin_mentors import (
     AdminMentorsSummaryDep,
 )
 from app.api.deps.admin_users import AdminUsersDep
+from app.api.deps.attribution import RecordedAcquisitionDep
 from app.api.deps.availability import (
     AvailabilityExceptionsDep,
     AvailabilityRulesDep,
@@ -330,6 +331,7 @@ __all__ = [
     "PublicMentorDep",
     "PushMessageCallbackDep",
     "ReadMarkedDep",
+    "RecordedAcquisitionDep",
     "RecordedOnboardingStepDep",
     "RefundPolicyDep",
     "RefuseInPreviewDep",

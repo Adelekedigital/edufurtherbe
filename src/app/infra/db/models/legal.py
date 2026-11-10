@@ -20,10 +20,11 @@ separate deliberate act, and nothing downstream should treat them as one.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, CheckConstraint, ForeignKey, Index, Text, Uuid, text
+from sqlalchemy import TIMESTAMP, Boolean, CheckConstraint, ForeignKey, Index, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.domain.attribution import CONSENT_VERSION_MAX_LENGTH
 from app.domain.enums import LegalDocumentType
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
@@ -104,5 +105,35 @@ class UserLegalConsent(TimestampMixin, Base):
             "user_id",
             "legal_document_id",
             unique=True,
+        ),
+    )
+
+
+class AnalyticsConsent(TimestampMixin, Base):
+    """A person's current answer to analytics cookies (PRD 30, decision 329).
+
+    **One row per person, holding a decline as well as a grant**, which
+    `user_legal_consents` cannot: it records acceptances only. Replaced in
+    place on every answer; `version` is the consent text it answered.
+
+    Only the client's tracking reads it: the server's outcome events are
+    first-party records and are sent whatever the answer.
+    """
+
+    __tablename__ = "analytics_consents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+    granted: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            f"char_length(version) BETWEEN 1 AND {CONSENT_VERSION_MAX_LENGTH}",
+            name="version_length",
         ),
     )

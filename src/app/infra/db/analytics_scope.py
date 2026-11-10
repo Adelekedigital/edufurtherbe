@@ -1,10 +1,10 @@
 """Who the admin Analytics numbers leave out, said once (PRD 31, decision 324).
 
 Every analytics statement composes `counted_user` or `counted_session`, so the
-tabs cannot disagree about who is excluded. Left out: anybody holding a live
-admin grant (`live_grant`) and the dev demo accounts (`DEMO_EMAIL_LIKE`).
-Preview sessions need nothing here: a preview writes nothing (decision 313).
-PRD 30's `is_internal` joins `_excluded_users` when it ships, and nowhere else.
+tabs cannot disagree about who is excluded. Left out: internal accounts,
+`users.is_internal` (PRD 30, decision 329), which the database keeps as a live
+admin grant or a demo address (`DEMO_EMAIL_LIKE`). Preview sessions need
+nothing here: a preview writes nothing (decision 313).
 
 A deleted account is **counted**: what it did happened.
 """
@@ -14,26 +14,20 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from sqlalchemy import select, union
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.mentor_stats import Window
-from app.infra.db.demo_seed import DEMO_EMAIL_LIKE
-from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
-from app.infra.db.predicates import live_grant
 
 
 def _excluded_users() -> Any:
-    """The ids no analytics figure counts: live admin grants (`live_grant`,
-    the rule `is_live_admin` reads) and demo accounts. A union of two cheap
-    scans rather than `users` filtered by a correlated `EXISTS`: every scalar
-    subquery of a tab evaluates it once, so its cost is paid ~100 times."""
-    return union(
-        select(AdminUser.user_id).where(live_grant()),
-        select(User.id).where(User.email.like(DEMO_EMAIL_LIKE)),
-    )
+    """The ids no analytics figure counts: the internal accounts. One flag,
+    so a revoked grant and a new demo account are right without a second
+    rule here; the union of grants and demo addresses it replaced is the
+    database's `internal_account()` now."""
+    return select(User.id).where(User.is_internal)
 
 
 def counted_user(user_id: Any) -> Any:

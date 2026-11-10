@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from app.domain.resolve import Resolution
 from app.domain.social_links import LEGACY_LINK_FIELDS, SocialNetwork, canonical_social
 from app.domain.transform import AdminGrantRow, IdentityRow, OnboardingRow, ProfileRow
+from app.infra.db.triggers import timestamps_from_source
 
 UPSERT_PROFILE = """
 INSERT INTO user_profiles (
@@ -257,12 +258,15 @@ class SatelliteLoader:
             identity_count += 1
 
         admin_count = 0
-        for grant in admin_grants:
-            await self._connection.execute(
-                text(UPSERT_ADMIN),
-                {"user_id": users[grant.user_bubble_id], "admin_role": grant.admin_role.value},
-            )
-            admin_count += 1
+        # A grant marks its holder internal (`trg_mark_internal_grantee`), an
+        # `UPDATE users`; held off so Bubble's `updated_at` survives it.
+        async with timestamps_from_source(self._connection, "users"):
+            for grant in admin_grants:
+                await self._connection.execute(
+                    text(UPSERT_ADMIN),
+                    {"user_id": users[grant.user_bubble_id], "admin_role": grant.admin_role.value},
+                )
+                admin_count += 1
 
         return SatelliteCounts(
             profiles=profile_count,

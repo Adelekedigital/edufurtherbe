@@ -249,6 +249,7 @@ exempt = [
     "api/deps/admin_emails.py",
     "api/deps/admin_mentors.py",
     "api/deps/admin_users.py",
+    "api/deps/attribution.py",
     "api/deps/availability.py",
     "api/deps/bio_draft.py",
     "api/deps/calendar.py",
