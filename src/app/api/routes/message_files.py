@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import MAX_FILE_MB, MessageFileDownloadDep, UploadedMessageFileDep
 from app.api.deps.files import FILE_REFUSED
+from app.api.errors import retry_after_header
 from app.api.limits import MAX_BODY_MB
 from app.api.schemas.intake import IntakeFileRead
 from app.core.config import Settings
@@ -71,12 +72,7 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
                 f"More than {UPLOADS_PER_HOUR} message files in the last hour. "
                 "`Retry-After` says how many seconds until the next is allowed."
             ),
-            "headers": {
-                "Retry-After": {
-                    "description": "Seconds until another upload is allowed.",
-                    "schema": {"type": "integer", "minimum": 1},
-                }
-            },
+            "headers": retry_after_header("Seconds until another upload is allowed."),
         },
         status.HTTP_500_INTERNAL_SERVER_ERROR: {
             "description": "File uploads are not configured on this deployment."

@@ -28,6 +28,7 @@ from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.core.errors import (
     AccountExistsError,
     AlreadyReviewedError,
+    AnalyticsUpstreamError,
     AnalyticsWindowError,
     AppError,
     AuthenticationError,
@@ -123,6 +124,8 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     WritingAssistUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # 503 likewise: push is unconfigured here, which is ours (decision 312).
     PushUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # 503 likewise: product analytics unconfigured or unreachable (decision 331).
+    AnalyticsUpstreamError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # 423: the email exists, but its lines are locked until its template is
     # the shared one (PRD 28).
     EmailNotSetUpError: status.HTTP_423_LOCKED,
@@ -169,6 +172,14 @@ def with_declined(
     return responses | {status.HTTP_409_CONFLICT: {"description": text}}
 
 
+def retry_after_header(description: str) -> dict[str, object]:
+    """The OpenAPI `headers` entry of a response carrying `Retry-After`
+    (`core.errors.retry_after`): whole seconds, at least one."""
+    return {
+        "Retry-After": {"description": description, "schema": {"type": "integer", "minimum": 1}}
+    }
+
+
 TYPE_BY_ERROR: dict[type[AppError], str] = {
     AccountExistsError: "/problems/account-exists",
     InviteForNewAccountsError: "/problems/invite-for-new-accounts",
@@ -213,6 +224,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     EmailLineConflictError: "/problems/email-line-conflict",
     EmailLineInvalidError: "/problems/email-line-invalid",
     AnalyticsWindowError: "/problems/analytics-window",
+    AnalyticsUpstreamError: "/problems/analytics-upstream",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx

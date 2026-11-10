@@ -1026,6 +1026,20 @@ class AuthMethod(StrEnum):
     GOOGLE_OAUTH = "google_oauth"
 
 
+class ProfileViewSource(StrEnum):
+    """Where a mentor profile view came from (`mentor_profile_viewed.source`,
+    PRD 30); any other value the client sends is read as `other`."""
+
+    EXPLORE = "explore"
+    HOME = "home"
+    BOOKINGS = "bookings"
+    MESSAGES = "messages"
+    SIMILAR_MENTORS = "similar_mentors"
+    INVITE_LINK = "invite_link"
+    DIRECT = "direct"
+    OTHER = "other"
+
+
 class EntryPoint(StrEnum):
     """Where in the app a booking began (`sessions.entry_point`).
 

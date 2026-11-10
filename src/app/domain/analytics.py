@@ -535,8 +535,14 @@ class TabCache:
             return None
         return entry[1]
 
-    def put(self, key: tuple[object, ...], value: object, now: dt.datetime) -> None:
+    def put(
+        self,
+        key: tuple[object, ...],
+        value: object,
+        now: dt.datetime,
+        keep_for: dt.timedelta = CACHE_FOR,
+    ) -> None:
         self._entries.pop(key, None)
         while len(self._entries) >= CACHE_SIZE:
             self._entries.pop(next(iter(self._entries)))
-        self._entries[key] = (now + CACHE_FOR, value)
+        self._entries[key] = (now + keep_for, value)

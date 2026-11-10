@@ -8,26 +8,54 @@ token is read, as previews are.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Path, Query, Request
 
 from app.api.deps.core import BookingWindowDep, QueueViewerDep, SessionDep, _configured
 from app.api.schemas.admin_analytics import (
+    AnalyticsBehaviourRead,
     AnalyticsCreditsRead,
+    AnalyticsFunnelRead,
     AnalyticsGrowthRead,
     AnalyticsOverviewRead,
     AnalyticsSessionsRead,
     AnalyticsSupplyRead,
 )
-from app.core.errors import NotFoundError
-from app.domain.analytics import Alert, Period, TabCache, resolve_compare, resolve_period
+from app.core.errors import AnalyticsUpstreamError, NotFoundError
+from app.domain.analytics import (
+    Alert,
+    Feature,
+    Period,
+    TabCache,
+    newest_first,
+    resolve_compare,
+    resolve_period,
+    yesterday,
+)
+from app.domain.analytics_behaviour import (
+    FUNNEL_NAMES,
+    BehaviourFigures,
+    LoginCodes,
+    behaviour_tab,
+    breakdown_for,
+    explore_feature,
+    explore_windows,
+    funnel_named,
+    funnel_tab,
+    login_alert,
+)
+from app.domain.ports import AnalyticsReader
+from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_for
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_growth import growth_tab
+from app.infra.db.analytics_scope import internal_ids
 from app.infra.db.analytics_supply import supply_tab
 from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
@@ -82,27 +110,87 @@ def analytics_ask(
 AnalyticsAskDep = Annotated[AnalyticsAsk, Depends(analytics_ask)]
 
 
-async def analytics_alerts(ask: AnalyticsAskDep, session: SessionDep) -> list[Alert]:
-    return await active_alerts(session, ask.now)
+def analytics_reader(request: Request) -> AnalyticsReader:
+    """The reader wired on `app.state`, else the one settings choose."""
+    wired: AnalyticsReader | None = getattr(request.app.state, "analytics_reader", None)
+    return wired if wired is not None else analytics_reader_for(_configured(request))
 
 
-AlertsDep = Annotated[list[Alert], Depends(analytics_alerts)]
+AnalyticsReaderDep = Annotated[AnalyticsReader, Depends(analytics_reader)]
+
+
+#: What an optional read keeps in place of figures when PostHog failed.
+_FAILED = object()
+#: How long an optional read leaves a failed PostHog alone: as long as the
+#: `503` routes tell the page to wait.
+FAILED_FOR = dt.timedelta(seconds=AnalyticsUpstreamError.RETRY_AFTER_SECONDS)
+
+
+async def _kept[T](
+    request: Request,
+    key: tuple[object, ...],
+    now: dt.datetime,
+    compute: Callable[[], Awaitable[T]],
+    *,
+    optional: bool = False,
+) -> T:
+    """Figures from this app's `TabCache`, or computed and kept. An ``optional``
+    read (one a database tab adds) also keeps a failure for `FAILED_FOR`."""
+    cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
+    if cache is None:
+        cache = request.app.state.analytics_cache = TabCache()
+    hit = cache.get(key, now)
+    if hit is _FAILED:
+        raise AnalyticsUpstreamError("product analytics failed a moment ago")
+    if hit is not None:
+        return hit  # type: ignore[return-value]
+    try:
+        value = await compute()
+    except AnalyticsUpstreamError:
+        if optional:
+            cache.put(key, _FAILED, now, keep_for=FAILED_FOR)
+        raise
+    cache.put(key, value, now)
+    return value
 
 
 async def _cached[T](
     request: Request, tab: str, ask: AnalyticsAsk, compute: Callable[[], Awaitable[T]]
 ) -> T:
-    """A tab's figures from this app's `TabCache`, or computed and kept."""
-    cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
-    if cache is None:
-        cache = request.app.state.analytics_cache = TabCache()
+    """A tab's figures, kept per tab, dates and compare."""
     key = (tab, ask.period.first, ask.period.last, ask.compare)
-    hit = cache.get(key, ask.now)
-    if hit is not None:
-        return hit  # type: ignore[return-value]
-    value = await compute()
-    cache.put(key, value, ask.now)
-    return value
+    return await _kept(request, key, ask.now, compute)
+
+
+async def _login_alert(
+    request: Request, reader: AnalyticsReader, session: SessionDep, now: dt.datetime
+) -> Alert | None:
+    """The log-in alert from yesterday's kept codes, or none when PostHog cannot
+    answer (PRD 31: skipped, not failed)."""
+    today = now.date()
+    day = yesterday(today)
+
+    async def compute() -> LoginCodes:
+        internal = await internal_ids(session)
+        return await asyncio.to_thread(reader.login_codes, day.window, internal)
+
+    try:
+        codes = await _kept(request, ("login_codes", day.first), now, compute, optional=True)
+    except AnalyticsUpstreamError:
+        return None
+    return login_alert(codes, today)
+
+
+async def analytics_alerts(
+    request: Request, ask: AnalyticsAskDep, session: SessionDep, reader: AnalyticsReaderDep
+) -> list[Alert]:
+    """Every alert firing now: the database's, and the log-in alert when the
+    product-analytics source answers."""
+    alerts = await active_alerts(session, ask.now)
+    return newest_first([*alerts, await _login_alert(request, reader, session, ask.now)])
+
+
+AlertsDep = Annotated[list[Alert], Depends(analytics_alerts)]
 
 
 async def analytics_credits(
@@ -121,14 +209,45 @@ async def analytics_overview(
     alerts: AlertsDep,
     session: SessionDep,
     booking_window: BookingWindowDep,
+    reader: AnalyticsReaderDep,
 ) -> AnalyticsOverviewRead:
-    tab = await _cached(
-        request,
-        "overview",
-        ask,
-        lambda: overview_tab(session, ask.period, ask.compare, booking_window),
-    )
+    # The Explore read runs beside the database's, in its own thread and
+    # never on this session: its ids are read first.
+    explore_read = asyncio.create_task(_explore(request, ask, reader, await internal_ids(session)))
+    try:
+        tab = await _cached(
+            request,
+            "overview",
+            ask,
+            lambda: overview_tab(session, ask.period, ask.compare, booking_window),
+        )
+    except BaseException:
+        explore_read.cancel()
+        raise
+    explore = await explore_read
+    if explore is not None:
+        features = [explore if f.key == "explore" else f for f in tab.features]
+        tab = replace(tab, features=features)
     return AnalyticsOverviewRead.of(ask.period, alerts, tab)
+
+
+async def _explore(
+    request: Request, ask: AnalyticsAsk, reader: AnalyticsReader, internal: list[UUID]
+) -> Feature | None:
+    """The Explore card, or ``None`` when PostHog cannot answer (the card stays
+    empty, nothing else changes)."""
+    windows = explore_windows(ask.period)
+    try:
+        figures = await _kept(
+            request,
+            ("explore", ask.period.first, ask.period.last),
+            ask.now,
+            lambda: asyncio.to_thread(reader.explore, windows, internal),
+            optional=True,
+        )
+    except AnalyticsUpstreamError:
+        return None
+    return explore_feature(figures, ask.compare)
 
 
 AnalyticsOverviewDep = Annotated[AnalyticsOverviewRead, Depends(analytics_overview)]
@@ -166,3 +285,57 @@ async def analytics_supply(
 
 
 AnalyticsSupplyDep = Annotated[AnalyticsSupplyRead, Depends(analytics_supply)]
+
+
+async def analytics_funnel(
+    name: Annotated[
+        str,
+        Path(description=", ".join(f"`{n}`" for n in FUNNEL_NAMES) + "; another is `404`."),
+    ],
+    request: Request,
+    ask: AnalyticsAskDep,
+    alerts: AlertsDep,
+    reader: AnalyticsReaderDep,
+    session: SessionDep,
+    by: Annotated[
+        str | None,
+        Query(description="One of the funnel's breakdowns; `all` (the default) is everyone."),
+    ] = None,
+) -> AnalyticsFunnelRead:
+    funnel = funnel_named(name)
+    chosen = breakdown_for(funnel, by)
+
+    async def compute() -> tuple[list[int], list[int] | None]:
+        internal = await internal_ids(session)
+        current = await asyncio.to_thread(
+            reader.funnel, funnel, chosen, ask.period.window, internal
+        )
+        if not ask.compare:
+            return current, None
+        before = ask.period.previous().window
+        return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
+
+    current, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
+    return AnalyticsFunnelRead.of(ask.period, alerts, funnel_tab(funnel, chosen, current, previous))
+
+
+AnalyticsFunnelDep = Annotated[AnalyticsFunnelRead, Depends(analytics_funnel)]
+
+
+async def analytics_behaviour(
+    request: Request,
+    ask: AnalyticsAskDep,
+    alerts: AlertsDep,
+    reader: AnalyticsReaderDep,
+    session: SessionDep,
+) -> AnalyticsBehaviourRead:
+    async def compute() -> BehaviourFigures:
+        internal = await internal_ids(session)
+        return await asyncio.to_thread(reader.behaviour, ask.period.window, internal)
+
+    figures = await _cached(request, "behaviour", ask, compute)
+    replay = replay_url_for(_configured(request))
+    return AnalyticsBehaviourRead.of(ask.period, alerts, behaviour_tab(figures), replay)
+
+
+AnalyticsBehaviourDep = Annotated[AnalyticsBehaviourRead, Depends(analytics_behaviour)]
