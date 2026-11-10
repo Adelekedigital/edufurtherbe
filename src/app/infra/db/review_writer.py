@@ -39,7 +39,7 @@ from app.core.errors import (
     NotFoundError,
     ReviewIntervalError,
 )
-from app.domain.analytics_events import AnalyticsEvent
+from app.domain.analytics_events import AnalyticsEvent, review_properties
 from app.domain.enums import SessionStatus
 from app.domain.notifications import Notification
 from app.domain.reviews import edit_window_open
@@ -124,7 +124,7 @@ async def write_review(
     review_id, rating = written.one()
     # About the reviewer, with the review's value (`review_stats`), 1-5 (PRD 30).
     await enqueue_analytics(
-        session, AnalyticsEvent.REVIEW_SUBMITTED, author, {"rating": rating}, at=now
+        session, AnalyticsEvent.REVIEW_SUBMITTED, author, review_properties(rating), at=now
     )
 
     # **In the writing transaction**, so a message about a review that rolled

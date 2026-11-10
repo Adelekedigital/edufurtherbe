@@ -84,3 +84,7 @@ scripts/daily_api_key.txt
 # covers the sanctioned location; these do not live there, and `git add -A`
 # stages one as an embedded git repository without being asked twice.
 _wt*/
+
+# The analytics backfill's resume cursor (scripts/backfill_analytics.py), local
+# to one run, and its half-written replacement.
+.analytics-backfill-cursor.json*

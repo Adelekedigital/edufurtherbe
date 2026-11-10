@@ -17,7 +17,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, JoinWindowClosedError, NotFoundError
-from app.domain.analytics_events import AnalyticsEvent
+from app.domain.analytics_events import SETTLED_EVENTS, session_properties
 from app.domain.attendance import (
     DOOR_STATUSES,
     JOIN_CLOSES,
@@ -283,13 +283,6 @@ def _window_shut(now: dt.datetime) -> Any:
     return _join_closes_sql() <= now
 
 
-#: The analytics event each settled outcome reports (PRD 30).
-SETTLED_EVENTS = {
-    SessionStatus.COMPLETED: AnalyticsEvent.SESSION_COMPLETED,
-    SessionStatus.NO_SHOW: AnalyticsEvent.SESSION_NO_SHOW,
-}
-
-
 async def settle_attendance(
     session: AsyncSession,
     *,
@@ -501,7 +494,7 @@ async def settle_attendance(
             session,
             event,
             [
-                (row["mentee_id"], {"session_id": row["id"]})
+                (row["mentee_id"], session_properties(row["id"]))
                 for row in settled
                 if row["status"] == outcome
             ],

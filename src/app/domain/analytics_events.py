@@ -18,9 +18,28 @@ import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid5
 
-__all__ = ["PERSONAL_KEYS", "PERSONAL_WORDS", "AnalyticsEvent", "analytics_event"]
+from app.domain.enums import SessionStatus
+
+__all__ = [
+    "HISTORY_NAMESPACE",
+    "PERSONAL_KEYS",
+    "PERSONAL_WORDS",
+    "SETTLED_EVENTS",
+    "AnalyticsEvent",
+    "analytics_event",
+    "cancelled_properties",
+    "first_confirmation",
+    "granted_properties",
+    "historical_event",
+    "history_event_id",
+    "requested_properties",
+    "review_properties",
+    "session_event_names",
+    "session_properties",
+    "spent_properties",
+]
 
 
 class AnalyticsEvent(StrEnum):
@@ -96,3 +115,119 @@ def _plain(key: str, value: object) -> str | int | bool | None:
     if value is None or isinstance(value, str | int | bool):
         return value
     raise ValueError(f"analytics property {key!r} must be an id, enum, count or code")
+
+
+# --------------------------------------------------------------------------
+# What each event carries: one shape, for the live writers and the backfill
+# --------------------------------------------------------------------------
+
+
+def requested_properties(session_id: UUID, session_type_id: UUID | None) -> dict[str, object]:
+    """`booking_requested`."""
+    return {"session_id": session_id, "session_type_id": session_type_id}
+
+
+def session_properties(session_id: UUID) -> dict[str, object]:
+    """`session_confirmed`, `session_completed` and `session_no_show`."""
+    return {"session_id": session_id}
+
+
+def cancelled_properties(
+    session_id: UUID, by: str | None, reason_code: object
+) -> dict[str, object]:
+    """`session_cancelled`: who cancelled (`session_stats.canceller`) and why."""
+    return {"session_id": session_id, "by": by, "reason_code": reason_code}
+
+
+def spent_properties(amount: int, session_id: UUID | None) -> dict[str, object]:
+    """`credit_spent`."""
+    return {"amount": amount, "session_id": session_id}
+
+
+def granted_properties(amount: int, source: object) -> dict[str, object]:
+    """`credit_granted`: the lot's `CreditSource`."""
+    return {"amount": amount, "source": source}
+
+
+def review_properties(rating: int | None) -> dict[str, object]:
+    """`review_submitted`: the review's value (`review_stats.review_value`), 1-5."""
+    return {"rating": rating}
+
+
+#: The event each settled outcome reports.
+SETTLED_EVENTS = {
+    SessionStatus.COMPLETED: AnalyticsEvent.SESSION_COMPLETED,
+    SessionStatus.NO_SHOW: AnalyticsEvent.SESSION_NO_SHOW,
+}
+
+
+def first_confirmation(moved_from: SessionStatus | None) -> bool:
+    """Whether a session booked confirmed is confirmed for the first time.
+
+    ``moved_from`` is the status the session a move ended had, ``None`` for a
+    new booking. A new booking is; a move only when what it ended was still
+    waiting on the mentor: a confirmed session moved stays confirmed (decision 300).
+    """
+    return moved_from is None or moved_from == SessionStatus.PENDING_MENTOR_APPROVAL
+
+
+def session_event_names(
+    from_status: SessionStatus | None,
+    to_status: SessionStatus,
+    *,
+    moved_from: SessionStatus | None,
+    moved_on: bool,
+) -> list[AnalyticsEvent]:
+    """The events one `session_events` row reports, as the live writers queue them.
+
+    A creation event (``from_status`` null) is a request unless it starts a
+    move (``moved_from`` set), and a confirmation when `first_confirmation`
+    says so. An acceptance is a confirmation; a cancellation is one unless it
+    ended a session that was moved on (``moved_on``); a settled outcome is
+    `SETTLED_EVENTS`'. Anything else (declined, withdrawn, expired) is none.
+    """
+    if from_status is None:
+        names = [] if moved_from is not None else [AnalyticsEvent.BOOKING_REQUESTED]
+        if to_status == SessionStatus.CONFIRMED and first_confirmation(moved_from):
+            names.append(AnalyticsEvent.SESSION_CONFIRMED)
+        return names
+    if to_status == SessionStatus.CONFIRMED:
+        return [AnalyticsEvent.SESSION_CONFIRMED]
+    if to_status == SessionStatus.CANCELLED and not moved_on:
+        return [AnalyticsEvent.SESSION_CANCELLED]
+    settled = SETTLED_EVENTS.get(to_status)
+    return [settled] if settled is not None else []
+
+
+# --------------------------------------------------------------------------
+# History (the one-off backfill, PRD 30 PR 7)
+# --------------------------------------------------------------------------
+
+#: Fixed for ever: every backfilled event's `uuid` is derived under it, so a
+#: second run gives each fact the uuid the first did. **Never change it.**
+HISTORY_NAMESPACE = UUID("401bd1b7-b938-49ad-ae51-48cb1b06581f")
+
+
+def history_event_id(event: AnalyticsEvent, fact_id: UUID) -> UUID:
+    """The same id for the same event about the same stored fact, on every run.
+
+    PostHog treats events sharing `uuid`, `event`, `timestamp` and
+    `distinct_id` as duplicates (https://posthog.com/docs/data/events, "Event
+    deduplication"), and all four are fixed by the fact, so a re-run or an
+    overlapping run is dropped rather than counted twice.
+    """
+    return uuid5(HISTORY_NAMESPACE, f"{event.value}:{fact_id}")
+
+
+def historical_event(
+    event: AnalyticsEvent,
+    *,
+    fact_id: UUID,
+    user_id: UUID,
+    at: dt.datetime,
+    properties: Mapping[str, object] | None = None,
+) -> dict[str, Any]:
+    """`analytics_event`, guard and all, with its `history_event_id`."""
+    built = analytics_event(event, user_id=user_id, at=at, properties=properties)
+    built["uuid"] = str(history_event_id(event, fact_id))
+    return built
