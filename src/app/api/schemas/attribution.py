@@ -1,14 +1,16 @@
-"""Where an account came from, as a client sends and reads it."""
+"""Where an account came from, and its analytics-cookie answer, as a client sends and reads them."""
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
+from app.domain.attribution import CONSENT_VERSION_MAX_LENGTH
 from app.domain.enums import SignupChannel, SignupSource
 
-__all__ = ["AcquisitionRead", "AcquisitionWrite"]
+__all__ = ["AcquisitionRead", "AcquisitionWrite", "AnalyticsConsentRead", "AnalyticsConsentWrite"]
 
 #: Long enough for any tag a campaign link carries; a longer value is cut.
 _RAW_MAX_LENGTH = 200
@@ -74,3 +76,28 @@ class AcquisitionRead(BaseModel):
         description="How the account arrived; `migrated` for one moved from the old platform."
     )
     channel: SignupChannel | None = Field(description="The campaign's channel, or null.")
+
+
+class AnalyticsConsentWrite(BaseModel):
+    """The caller's answer to analytics cookies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    granted: bool = Field(description="`true` to allow analytics cookies, `false` to decline.")
+    version: str = Field(
+        min_length=1,
+        max_length=CONSENT_VERSION_MAX_LENGTH,
+        description="Which consent text was answered, as the client names it.",
+    )
+
+
+class AnalyticsConsentRead(BaseModel):
+    """The caller's current answer."""
+
+    granted: bool
+    version: str
+    answered_at: datetime = Field(description="When this answer was given.")
+
+    @classmethod
+    def from_row(cls, row: Any) -> AnalyticsConsentRead:
+        return cls(granted=row.granted, version=row.version, answered_at=row.updated_at)

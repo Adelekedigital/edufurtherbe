@@ -13,6 +13,7 @@ from app.api.deps import (
     RefundPolicyDep,
     ResponseWindowHoursDep,
 )
+from app.api.schemas.attribution import AnalyticsConsentRead
 from app.api.schemas.links import LinkRead
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
@@ -113,6 +114,8 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "mentors alike.\n\n"
         "`session_type_limit` is how many session types a mentor may have (the "
         "default, or support's limit for them), null without a mentor profile.\n\n"
+        "`analytics_consent` is the caller's answer to analytics cookies, null "
+        "until they give one (`PUT /me/consents/analytics`).\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -159,6 +162,11 @@ async def read_me(
         mentee_cancel_refund_hours=int(refunds.mentee_cancel_notice.total_seconds() // 3600),
         session_type_limit=(
             mentor_profile["session_type_limit"] if mentor_profile is not None else None
+        ),
+        analytics_consent=(
+            AnalyticsConsentRead.from_row(consent)
+            if (consent := attributes["analytics_consent"]) is not None
+            else None
         ),
     )
 

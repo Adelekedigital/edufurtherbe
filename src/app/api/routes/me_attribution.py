@@ -1,4 +1,4 @@
-"""Where the caller came from (PRD 30 PR 2).
+"""Where the caller came from, and their answer to analytics cookies (PRD 30 PR 2).
 
 **Another router on `/api/v1/me`**, as `me_referrals` records: the prefix is
 shared, the subject (analytics, decision 329) is not.
@@ -6,9 +6,9 @@ shared, the subject (analytics, decision 329) is not.
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import RecordedAcquisitionDep
+from app.api.deps import RecordedAcquisitionDep, RecordedConsentDep
 from app.api.routes.me_referrals import UNAUTHORISED
-from app.api.schemas.attribution import AcquisitionRead
+from app.api.schemas.attribution import AcquisitionRead, AnalyticsConsentRead
 
 router = APIRouter(prefix="/api/v1/me", tags=["analytics"])
 
@@ -42,3 +42,22 @@ async def record_own_acquisition(
     if not acquisition.recorded:
         response.status_code = status.HTTP_200_OK
     return AcquisitionRead(source=acquisition.source, channel=acquisition.channel)
+
+
+@router.put(
+    "/consents/analytics",
+    response_model=AnalyticsConsentRead,
+    summary="Answer analytics cookies",
+    description=(
+        "Records the caller's answer to analytics cookies, replacing any "
+        "earlier one: a decline is kept as an answer, and a later grant "
+        "replaces it. `GET /me` → `analytics_consent` reads it back.\n\n"
+        "It governs the app's own tracking in the browser. The outcomes the "
+        "server records (a booking, a session held) are the platform's own "
+        "records, by account id and never by name, and are counted in product "
+        "analytics whatever the answer."
+    ),
+    responses=UNAUTHORISED,
+)
+async def answer_analytics_consent(consent: RecordedConsentDep) -> AnalyticsConsentRead:
+    return AnalyticsConsentRead.from_row(consent)

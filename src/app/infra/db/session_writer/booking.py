@@ -456,6 +456,8 @@ async def book_session(
                     duration_minutes=duration,
                     topic=payload.get("topic"),
                     booking_message=payload.get("booking_message"),
+                    # Where it began, for analytics; a move carries its original's.
+                    entry_point=payload.get("entry_point"),
                     rescheduled_from_session_id=moved_from["id"] if moved_from else None,
                 )
                 .returning(Session.id)
@@ -579,13 +581,17 @@ async def book_session(
             session,
             AnalyticsEvent.BOOKING_REQUESTED,
             mentee_id,
-            requested_properties(session_id, payload["session_type_id"]),
+            requested_properties(
+                session_id, payload["session_type_id"], payload.get("entry_point")
+            ),
             at=now,
         )
     if status is SessionStatus.CONFIRMED and first_confirmation(
         moved_from["status"] if moved_from else None
     ):
-        await queue_session_confirmed(session, mentee_id, session_id, now=now)
+        await queue_session_confirmed(
+            session, mentee_id, session_id, payload.get("entry_point"), now=now
+        )
 
     # **The request's deadline nudges, scheduled here and fired by a callback
     # later.** These are not the session reminders: a session confirmed outright

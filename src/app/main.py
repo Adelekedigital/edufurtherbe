@@ -237,7 +237,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": "analytics",
         "description": (
-            "Where the caller's account came from, recorded once, after the first sign-in (PRD 30)."
+            "Where the caller's account came from (recorded once, after the "
+            "first sign-in) and their answer to analytics cookies (PRD 30)."
         ),
     },
     {

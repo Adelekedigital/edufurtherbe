@@ -467,7 +467,7 @@ class Settings(BaseSettings):
             raise ValueError("DAILY_WEBHOOK_SECRET must decode to at least 16 bytes")
         return value
 
-    @field_validator("app_base_url", "analytics_host")
+    @field_validator("app_base_url", "analytics_host", "analytics_api_host")
     @classmethod
     def an_absolute_web_origin(cls, value: str | None, info: ValidationInfo) -> str | None:
         """Every link into the app is this with a path appended, in emails and on
@@ -923,6 +923,15 @@ class Settings(BaseSettings):
     analytics_api_key: SecretStr | None = Field(
         default=None, validation_alias=env_key("analytics_api_key")
     )
+    #: The vendor's private API origin (`https://us.posthog.com`), which is not
+    #: the ingestion host: erasing a person is a private endpoint.
+    analytics_api_host: str | None = Field(
+        default=None, validation_alias=env_key("analytics_api_host")
+    )
+    #: The project's numeric id, which the private API's paths carry.
+    analytics_project_id: str | None = Field(
+        default=None, validation_alias=env_key("analytics_project_id")
+    )
 
     #: How many Google free/busy calls one worker process makes in any minute,
     #: for every caller together (decision 242). The public `/slots` read can
@@ -946,6 +955,8 @@ class Settings(BaseSettings):
         "analytics_host",
         "analytics_project_token",
         "analytics_api_key",
+        "analytics_api_host",
+        "analytics_project_id",
         mode="before",
     )
     @classmethod
@@ -1153,6 +1164,10 @@ WRITING_ASSIST_REQUIRED = ("ai_router_url", "ai_router_private_key")
 #: What analytics needs once `ANALYTICS_ENABLED` is on, in every environment.
 ANALYTICS_REQUIRED = ("analytics_host", "analytics_project_token")
 
+#: What erasing a purged account's person needs besides (PRD 30 PR 2). Only
+#: the erase asks for these, so events send without them.
+ANALYTICS_ERASE_REQUIRED = ("analytics_api_host", "analytics_project_id", "analytics_api_key")
+
 
 def _is_set(value: object) -> bool:
     raw = value.get_secret_value() if isinstance(value, SecretStr) else value
@@ -1164,15 +1179,18 @@ def _unset(settings: Settings, names: tuple[str, ...]) -> list[str]:
     return [f"{env_key(name)} is not set" for name in names if not _is_set(getattr(settings, name))]
 
 
-def analytics_gaps(settings: Settings) -> list[str]:
-    """Why analytics, switched on, cannot send; empty when off or ready.
+def analytics_gaps(settings: Settings, *, erase: bool = False) -> list[str]:
+    """Why analytics, switched on, cannot send (or, with ``erase``, also
+    erase a person); empty when off or ready.
 
     **Checked by the web app at startup in every environment**, not only
-    production: on but unconfigured would queue every event and send none,
-    with nothing saying so. Not a model validator, for the reason
-    `production_gaps` gives.
+    production, without ``erase``: on but unconfigured would queue every event
+    and send none, with nothing saying so. Not a model validator, for the
+    reason `production_gaps` gives.
     """
-    return _unset(settings, ANALYTICS_REQUIRED) if settings.analytics_enabled else []
+    if not settings.analytics_enabled:
+        return []
+    return _unset(settings, ANALYTICS_REQUIRED + (ANALYTICS_ERASE_REQUIRED if erase else ()))
 
 
 def production_gaps(settings: Settings) -> list[str]:

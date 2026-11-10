@@ -138,6 +138,7 @@ def session_event_facts(
             Session.mentee_id.label("user_id"),
             Session.id.label("session_id"),
             Session.session_type_id,
+            Session.entry_point,
             SessionEvent.from_status,
             SessionEvent.to_status,
             SessionEvent.reason_code,
