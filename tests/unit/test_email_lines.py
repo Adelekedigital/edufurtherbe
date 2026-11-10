@@ -179,10 +179,19 @@ def test_a_template_one_email_still_uses_alone_fails_as_before() -> None:
         build_variables(["intervalTime"], a_context(N.CREDITS_GRANTED, extras={}))
 
 
-@pytest.mark.parametrize("email", [N.CREDITS_GRANTED, N.CREDITS_RENEWED])
+@pytest.mark.parametrize("email", [N.CREDITS_RENEWED, N.CREDITS_EXPIRING])
 def test_an_owner_still_needs_its_variable(email: Notification) -> None:
     with pytest.raises(UnresolvedVariableError, match="creditCount"):
         build_variables(["emailType", "creditCount"], a_context(email, extras={}))
+
+
+def test_first_credits_fill_their_count_and_send_without_one_queued_before_it() -> None:
+    """Decision 323: granted is an owner, so its count fills; a row queued
+    before the change has none and sends empty rather than failing."""
+    with_count = a_context(N.CREDITS_GRANTED, extras={"credit_count": 2})
+    assert build_variables(["emailType", "creditCount"], with_count)["creditCount"] == "2"
+    old_row = a_context(N.CREDITS_GRANTED, extras={})
+    assert build_variables(["emailType", "creditCount"], old_row)["creditCount"] == ""
 
 
 def test_outside_the_group_a_variable_still_fails_by_name() -> None:

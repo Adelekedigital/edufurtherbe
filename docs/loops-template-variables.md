@@ -549,8 +549,8 @@ If the intent is instead to prompt a new signup to finish their profile, that is
 a second, different message and it has no producer.
 
 **Since decision 323 it carries `creditCount`**: what the completion actually
-paid, the month topped up to the mentee's credit level (1 at the default ladder,
-2 when an invite of theirs already qualified), so the shared Credits template
+paid, the month topped up to the mentee's credit level (its amount on the
+configured ladder, so 1, 2 or 3 by level), so the shared Credits template
 can show `{creditCount}` for all three emails.
 
 **`Credit renewal` → `credits_renewed`. Built.** Enqueued by
