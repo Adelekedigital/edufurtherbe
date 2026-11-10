@@ -8,10 +8,14 @@ factory there chooses the real one or the null one from settings (decision
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
-__all__ = ["AnalyticsSink"]
+from app.domain.analytics_behaviour import BehaviourFigures, ExploreFigures, Funnel, LoginCodes
+from app.domain.mentor_stats import Window
+
+__all__ = ["AnalyticsReader", "AnalyticsSink"]
 
 
 class AnalyticsSink(Protocol):
@@ -25,4 +29,30 @@ class AnalyticsSink(Protocol):
     def delete_person(self, user_id: UUID) -> None:
         """Erase the person ``user_id`` names, and their events, at the vendor
         (the account purge). Raises `UpstreamError` when it was not taken."""
+        ...
+
+
+class AnalyticsReader(Protocol):
+    """Where product-analytics figures are read from (PRD 31, decision 331).
+
+    Every method raises `AnalyticsUpstreamError` when the source
+    cannot answer, whatever the cause; nothing else escapes. Internal accounts
+    are never counted.
+    """
+
+    def funnel(self, funnel: Funnel, by: str, window: Window) -> list[int]:
+        """People reaching each of the funnel's tracked steps, in order, for
+        those entering it in ``window`` and narrowed by the ``by`` option."""
+        ...
+
+    def behaviour(self, window: Window) -> BehaviourFigures:
+        """The event cards' counts in ``window``."""
+        ...
+
+    def explore(self, windows: Sequence[Window]) -> ExploreFigures:
+        """Searchers per window, and the first window's who booked soon after."""
+        ...
+
+    def login_codes(self, window: Window) -> LoginCodes:
+        """Log-in code attempts and failures in ``window``."""
         ...

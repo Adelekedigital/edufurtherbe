@@ -28,6 +28,7 @@ from app.api.request_id import HEADER as REQUEST_ID_HEADER
 from app.core.errors import (
     AccountExistsError,
     AlreadyReviewedError,
+    AnalyticsUpstreamError,
     AnalyticsWindowError,
     AppError,
     AuthenticationError,
@@ -123,6 +124,8 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     WritingAssistUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # 503 likewise: push is unconfigured here, which is ours (decision 312).
     PushUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # 503 likewise: product analytics unconfigured or unreachable (decision 331).
+    AnalyticsUpstreamError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # 423: the email exists, but its lines are locked until its template is
     # the shared one (PRD 28).
     EmailNotSetUpError: status.HTTP_423_LOCKED,
@@ -213,6 +216,7 @@ TYPE_BY_ERROR: dict[type[AppError], str] = {
     EmailLineConflictError: "/problems/email-line-conflict",
     EmailLineInvalidError: "/problems/email-line-invalid",
     AnalyticsWindowError: "/problems/analytics-window",
+    AnalyticsUpstreamError: "/problems/analytics-upstream",
 }
 
 # An operator fault, never a caller fault. Mapping a missing setting to a 4xx
