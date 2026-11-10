@@ -478,6 +478,48 @@ and where it is used). An email whose template is not yet the shared one reads
 as `not_set_up` and cannot be saved (423). The next send uses a saved line; a line
 that cannot fill sends the default.
 
+## The sign-in code (decision 322)
+
+Sent by **Supabase**, through Loops' SMTP: this backend never sees the code.
+Supabase → Authentication → Emails → SMTP Settings: host `smtp.loops.so`, port
+`587`, username `loops`, password a Loops API key (Loops → Settings → Supabase
+can fill these in). Then replace the **Message body** of two Supabase email
+templates with these payloads exactly:
+
+*Confirm signup*
+
+```json
+{
+  "transactionalId": "cmw9zur4909lq0jyh8ggng17u",
+  "email": "{{ .Email }}",
+  "dataVariables": { "code": "{{ .Token }}", "codeFor": "sign_up" }
+}
+```
+
+*Magic Link*
+
+```json
+{
+  "transactionalId": "cmw9zur4909lq0jyh8ggng17u",
+  "email": "{{ .Email }}",
+  "dataVariables": { "code": "{{ .Token }}", "codeFor": "sign_in" }
+}
+```
+
+- `codeFor` picks the heading (`sign_up`: "Welcome to EduFurther"; `sign_in`:
+  "Your sign-in code"). Loops lists only `code`, since `codeFor` is used only in
+  conditions, so it must always be sent.
+- The subject (`{code} is your EduFurther code`) and the sender come from the
+  Loops template; whatever Supabase holds is ignored.
+- Only these two are set up: sign-in is by code alone (owner, 2026-11-10: no
+  reset, invite or change-email emails for now). Any other Supabase email left
+  as HTML fails to send once SMTP points at Loops, so a new one needs its own
+  Loops template and payload first.
+- The template has no BCC. Loops adds a team BCC to new templates by default:
+  clear it on every new template except the two mentor ones (*New mentor
+  application*, *Mentor status*), which BCC `mentorteam@edufurther.org`.
+- Test: Supabase → Authentication → Users → a test user → *Send magic link*.
+
 ## Open questions
 
 - ~~**`reasonTitle` needs a code-to-words mapping.**~~ **Settled 2026-10-03:**
