@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, tuple_
 from sqlalchemy.orm import aliased
 
 from app.domain.availability import BookingWindow
@@ -33,6 +33,7 @@ from app.domain.enums import MentorStatusType, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
 from app.infra.db.analytics_scope import Measure, counted_session, counted_user
 from app.infra.db.analytics_sessions import requests
+from app.infra.db.chat_store import pair
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.messaging import Conversation, Message
@@ -68,21 +69,21 @@ def booking() -> tuple[Measure, Measure]:
 # --- messaging -------------------------------------------------------------
 
 
-def _first_messages() -> Any:
-    """Each chat's first message: its time and who sent it."""
-    return (
-        select(Message.conversation_id, Message.sender_id, Message.sent_at)
-        .where(Message.deleted_at.is_(None))
-        .distinct(Message.conversation_id)
-        .order_by(Message.conversation_id, Message.sent_at, Message.id)
-        .subquery("first_messages")
-    )
-
-
 def _chats_started(window: Window, *, answered: bool) -> Any:
-    first = _first_messages()
+    """Chats whose first message (not deleted) was sent in ``window``: a message
+    in the window with no earlier one in its chat, so the read is bounded by the
+    window rather than by every message ever sent."""
+    first, earlier = aliased(Message), aliased(Message)
     where = [
-        during(first.c.sent_at, window),
+        first.deleted_at.is_(None),
+        during(first.sent_at, window),
+        ~select(earlier.id)
+        .where(
+            earlier.conversation_id == first.conversation_id,
+            earlier.deleted_at.is_(None),
+            tuple_(earlier.sent_at, earlier.id) < tuple_(first.sent_at, first.id),
+        )
+        .exists(),
         counted_user(Conversation.mentor_user_id),
         counted_user(Conversation.mentee_user_id),
     ]
@@ -91,18 +92,18 @@ def _chats_started(window: Window, *, answered: bool) -> Any:
         where.append(
             select(reply.id)
             .where(
-                reply.conversation_id == first.c.conversation_id,
+                reply.conversation_id == first.conversation_id,
                 reply.deleted_at.is_(None),
-                reply.sender_id != first.c.sender_id,
-                reply.sent_at > first.c.sent_at,
-                reply.sent_at <= first.c.sent_at + REPLY_WITHIN,
+                reply.sender_id != first.sender_id,
+                reply.sent_at > first.sent_at,
+                reply.sent_at <= first.sent_at + REPLY_WITHIN,
             )
             .exists()
         )
     return _scalar(
         select(func.count())
         .select_from(first)
-        .join(Conversation, Conversation.id == first.c.conversation_id)
+        .join(Conversation, Conversation.id == first.conversation_id)
         .where(*where)
     )
 
@@ -127,8 +128,7 @@ def _confirmed_in(window: Window, *, messaged_first: bool) -> Any:
             select(Message.id)
             .join(Conversation, Conversation.id == Message.conversation_id)
             .where(
-                Conversation.mentor_user_id == Session.mentor_id,
-                Conversation.mentee_user_id == Session.mentee_id,
+                pair(Session.mentor_id, Session.mentee_id),
                 Message.deleted_at.is_(None),
                 Message.sent_at < SessionEvent.created_at,
             )
@@ -179,7 +179,7 @@ def invites() -> tuple[Measure, Measure]:
 def invitees_who_met(window: Window) -> Any:
     """Invites' contribution: invitees from invites created in ``window`` with
     a completed session as a mentee."""
-    return invites_made(window, extra=invitee_had(completed()))
+    return invites_made(window, extra=invitee_had(completed(), counted_session()))
 
 
 # --- activation ------------------------------------------------------------
@@ -208,6 +208,7 @@ def new_mentees(window: Window, *, activated: bool = False) -> Any:
             .where(
                 Session.mentee_id == User.id,
                 completed(),
+                counted_session(),
                 Session.starts_at < User.created_at + MENTEE_ACTIVATED_WITHIN,
             )
             .exists()
@@ -251,6 +252,7 @@ def mentors_who_held(window: Window) -> Any:
         .where(
             Session.mentor_id == event.mentor_user_id,
             completed(),
+            counted_session(),
             Session.starts_at >= event.created_at,
             Session.starts_at < event.created_at + MENTOR_FIRST_SESSION_WITHIN,
         )

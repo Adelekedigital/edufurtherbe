@@ -20,7 +20,6 @@ statement reads it for any number of windows (`analytics_scope.per_window`).
 
 from __future__ import annotations
 
-from itertools import count
 from typing import Any
 
 from sqlalchemy import Float, and_, cast, func, select
@@ -34,11 +33,8 @@ from app.infra.db.models.review_reports import ReviewReport
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session, SessionEvent
 from app.infra.db.predicates import during
-from app.infra.db.review_stats import review_value
+from app.infra.db.review_stats import published, review_value
 from app.infra.db.session_stats import completed
-
-#: Distinguishes each chain a statement declares.
-_CHAINS = count()
 
 #: The statuses a request can be decided into, from waiting on the mentor.
 ACCEPTED = SessionStatus.CONFIRMED
@@ -70,7 +66,7 @@ def request_outcomes(window: Window) -> Any:
     chain = paying_sessions(
         None,
         roots=and_(counted_session(), during(Session.created_at, window)),
-        name=f"request_chain_{next(_CHAINS)}",
+        name=f"request_chain_{window.since:%Y%m%d%H%M%S%f}_{window.until:%Y%m%d%H%M%S%f}",
     )
     return (
         select(chain.c.payer_id.label("root_id"), Session.status.label("status"))
@@ -168,9 +164,10 @@ def repeat_mentees(window: Window, *, at_least: int) -> Any:
 
 
 def _written(window: Window) -> Any:
+    """Reviews written in ``window`` that count publicly: `published()`, the
+    badge's rule, for whichever mentor each is about."""
     return and_(
-        Review.reviewed_for_role == "mentor",
-        Review.deleted_at.is_(None),
+        published(Review.reviewed_for),
         during(Review.created_at, window),
         counted_user(Review.reviewed_by),
         counted_user(Review.reviewed_for),

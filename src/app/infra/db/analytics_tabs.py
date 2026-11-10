@@ -32,7 +32,7 @@ from app.domain.analytics import (
 )
 from app.domain.availability import BookingWindow
 from app.domain.enums import MissedReason, SessionStatus
-from app.domain.mentor_stats import Window
+from app.domain.mentor_stats import Window, window_ending
 from app.infra.db import analytics_features as f
 from app.infra.db import analytics_sessions as s
 from app.infra.db.analytics_credits import credits_tab
@@ -152,9 +152,7 @@ async def overview_tab(
 
 async def sessions_tab(session: AsyncSession, period: Period, compare: bool) -> SessionsTab:
     windows = [period.window, period.previous().window]
-    repeat = [
-        Window(since=w.until - dt.timedelta(days=REPEAT_DAYS), until=w.until) for w in windows
-    ]
+    repeat = [window_ending(w.until, REPEAT_DAYS) for w in windows]
 
     (
         asked,

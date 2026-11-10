@@ -17,7 +17,13 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-from tests.integration.factories import admin_token
+from tests.integration.factories import (
+    admin_token,
+    make_bookable_mentor,
+    make_public_mentor,
+    mark_open,
+    status_event,
+)
 
 from app.core.config import Settings
 from app.infra.storage.supabase import SupabaseStorage
@@ -367,3 +373,63 @@ async def test_a_tab_is_served_from_cache_but_alerts_are_not(
     assert "no_signups" in [x["key"] for x in again["alerts"]]
     # Another window is another key, read fresh: the requests now sit 30+ days back.
     assert other["kpis"]["requests"]["value"] == 0
+
+
+async def test_supply_invites_and_mentor_activation_read_real_values(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    # Two listed mentors approved 5 days ago; only Ada can be booked and shows
+    # a free time within 14 days. Bo is listed but has no offering or hours.
+    ada = await make_bookable_mentor(db_engine, "ada")
+    bo = await make_public_mentor(db_engine, "bo")
+    await mark_open(db_engine, ada)
+    for mentor in (ada, bo):
+        await status_event(db_engine, mentor, "approved", by=None, days_ago=5)
+    async with db_engine.begin() as conn:
+        mentee = await person(conn)
+        # Ada held a session 2 days after approval: she counts toward sessions.
+        await session_row(conn, ada, mentee, status="completed", created=ago(4), starts=ago(3))
+        # Two invites made yesterday; one invitee qualified and held a session.
+        invitee = await person(conn)
+        for code, who, qualified in (("c-1", invitee, True), ("c-2", None, False)):
+            await conn.execute(
+                text(
+                    "INSERT INTO referrals (referrer_id, code, invitee_user_id, created_at, "
+                    "signed_up_at, qualified_at) VALUES (:r, :c, :i, :at, :q, :q)"
+                ),
+                {
+                    "r": mentee,
+                    "c": code,
+                    "i": who,
+                    "at": ago(1),
+                    "q": ago(1) if qualified else None,
+                },
+            )
+        await session_row(conn, ada, invitee, status="completed", created=ago(1), starts=ago(0, 5))
+        # Sessions with an admin count nowhere: not for Bo's activation, not
+        # for the second invitee, not for a new mentee's activation.
+        admin = await person(conn, admin=True)
+        await session_row(conn, bo, admin, status="completed", created=ago(3), starts=ago(2))
+        await conn.execute(
+            text("UPDATE referrals SET invitee_user_id = :i WHERE code = 'c-2'"),
+            {"i": (late := await person(conn))},
+        )
+        await session_row(conn, admin, late, status="completed", created=ago(1), starts=ago(0, 3))
+        # Mentees who signed up in the window: the mentee, the invitee and the
+        # late invitee (mentors and the admin are not mentees); the mentee and
+        # the invitee held a session with Ada, the late one only with an admin.
+        await conn.execute(
+            text("UPDATE users SET primary_role = 'mentor' WHERE id IN (:a, :b)"),
+            {"a": ada, "b": bo},
+        )
+    body = await read(db_engine, api_storage, "overview", window="7d")
+    features = {f["key"]: f for f in body["features"]}
+    # Listed: Ada and Bo; a free time within 14 days: Ada.
+    assert features["mentor_supply"]["value"] == {"value": 50.0, "previous": None}
+    # Approved in the window: Ada and Bo; taking bookings now: Ada.
+    assert features["mentor_activation"]["value"]["value"] == 50.0
+    assert features["mentor_activation"]["contribution"] == 1
+    # Two invites made, one qualified; its invitee held a session.
+    assert features["invites"]["value"]["value"] == 50.0
+    assert features["invites"]["contribution"] == 1
+    assert features["mentee_activation"]["value"]["value"] == 66.7

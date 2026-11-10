@@ -288,7 +288,9 @@ class AnalyticsSessionsRead(SectionRead):
     outcomes: OutcomesRead = Field(
         description=(
             "Requests made in the window, and what they became (a moved request by "
-            "where its moves ended). Pending or upcoming ones are in no bucket."
+            "where its moves ended). Requests still pending or upcoming, and those the "
+            "mentee withdrew, are in no bucket, so the buckets can add up to less than "
+            "`requests`."
         )
     )
     top_no_show_reason: TopReasonRead | None
