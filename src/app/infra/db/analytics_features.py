@@ -23,7 +23,6 @@ eight sparkline points are one statement (`analytics_scope.per_window`).
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import func, select
@@ -32,7 +31,7 @@ from sqlalchemy.orm import aliased
 from app.domain.availability import BookingWindow
 from app.domain.enums import MentorStatusType, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
-from app.infra.db.analytics_scope import counted_session, counted_user
+from app.infra.db.analytics_scope import Measure, counted_session, counted_user
 from app.infra.db.analytics_sessions import requests
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
@@ -44,8 +43,6 @@ from app.infra.db.next_available_state import free_within
 from app.infra.db.predicates import during
 from app.infra.db.public_visibility import mentor_is_public, taking_bookings
 from app.infra.db.session_stats import completed
-
-Measure = Callable[[Window], Any]
 
 #: How soon a chat's first message must be answered to count.
 REPLY_WITHIN = dt.timedelta(hours=24)

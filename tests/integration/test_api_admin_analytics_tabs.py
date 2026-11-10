@@ -333,3 +333,37 @@ async def test_fifteen_days_draw_by_seven_day_buckets(
         (today - dt.timedelta(days=7)).isoformat(),
         today.isoformat(),
     ]
+
+
+@pytest.mark.usefixtures("platform")
+async def test_a_tab_is_served_from_cache_but_alerts_are_not(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, admin_analytics_enabled=True)
+    )
+    headers = {"Authorization": f"Bearer {await admin_token(db_engine)}"}
+    async with client_for(app) as client:
+        first = (
+            await client.get(f"{ROOT}/sessions", params={"window": "7d"}, headers=headers)
+        ).json()
+        # The platform goes quiet: no request or sign-up in the last day.
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE sessions SET created_at = created_at - interval '30 days'")
+            )
+            await conn.execute(
+                text("UPDATE users SET created_at = created_at - interval '30 days'")
+            )
+        again = (
+            await client.get(f"{ROOT}/sessions", params={"window": "7d"}, headers=headers)
+        ).json()
+        other = (
+            await client.get(f"{ROOT}/sessions", params={"window": "30d"}, headers=headers)
+        ).json()
+    assert again["kpis"] == first["kpis"]
+    # Sign-ups were made today; after they move back, the sign-up alert fires.
+    assert "no_signups" not in [x["key"] for x in first["alerts"]]
+    assert "no_signups" in [x["key"] for x in again["alerts"]]
+    # Another window is another key, read fresh: the requests now sit 30+ days back.
+    assert other["kpis"]["requests"]["value"] == 0

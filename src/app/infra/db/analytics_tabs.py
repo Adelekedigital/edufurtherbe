@@ -36,7 +36,7 @@ from app.domain.mentor_stats import Window
 from app.infra.db import analytics_features as f
 from app.infra.db import analytics_sessions as s
 from app.infra.db.analytics_credits import credits_tab
-from app.infra.db.analytics_scope import per_window
+from app.infra.db.analytics_scope import Measure, per_window, per_window_each
 from app.infra.db.models.sessions import Session
 
 #: The repeat-booking look-back, ending at the window's end.
@@ -49,17 +49,16 @@ def _shift(window: Window, days: int) -> Window:
 
 
 async def _rates(
-    session: AsyncSession, windows: list[Window], num: f.Measure, den: f.Measure
+    session: AsyncSession, windows: list[Window], num: Measure, den: Measure
 ) -> list[float | None]:
-    tops = await per_window(session, windows, num)
-    bottoms = await per_window(session, windows, den)
+    tops, bottoms = await per_window_each(session, windows, num, den)
     return [rate(int(t or 0), int(b or 0)) for t, b in zip(tops, bottoms, strict=True)]
 
 
 async def _feature(
     session: AsyncSession,
     key: FeatureKey,
-    measures: tuple[f.Measure, f.Measure],
+    measures: tuple[Measure, Measure],
     period: Period,
     compare: bool,
     contribution: Any = None,
@@ -84,11 +83,11 @@ async def overview_tab(
         [current, previous, *buckets, *(_shift(b, period.days) for b in buckets)],
         s.completed_in,
     )
-    mentees = await per_window(
-        session, [current, previous], lambda w: s.completed_in(w, distinct=Session.mentee_id)
-    )
-    mentors = await per_window(
-        session, [current, previous], lambda w: s.completed_in(w, distinct=Session.mentor_id)
+    mentees, mentors = await per_window_each(
+        session,
+        [current, previous],
+        lambda w: s.completed_in(w, distinct=Session.mentee_id),
+        lambda w: s.completed_in(w, distinct=Session.mentor_id),
     )
     count = len(buckets)
     series = [
@@ -157,21 +156,37 @@ async def sessions_tab(session: AsyncSession, period: Period, compare: bool) -> 
         Window(since=w.until - dt.timedelta(days=REPEAT_DAYS), until=w.until) for w in windows
     ]
 
-    async def pair(measure: f.Measure, among: list[Window] = windows) -> list[Any]:
-        return await per_window(session, among, measure)
-
-    asked = await pair(s.requests)
-    accepted = await pair(lambda w: s.decided(w, (SessionStatus.CONFIRMED,)))
-    decided = await pair(s.decided)
-    expired = await pair(lambda w: s.decided(w, (SessionStatus.EXPIRED,)))
-    reply = await pair(s.median_reply_hours)
-    held = await pair(s.completed_in)
-    missed = await pair(s.no_shows_in)
-    twice = await pair(lambda w: s.repeat_mentees(w, at_least=2), repeat)
-    once = await pair(lambda w: s.repeat_mentees(w, at_least=1), repeat)
-    stars = await pair(s.average_rating)
-    written = await pair(s.reviews_written)
-    reported = await pair(s.reports)
+    (
+        asked,
+        accepted,
+        decided,
+        expired,
+        reply,
+        held,
+        missed,
+        stars,
+        written,
+        reported,
+    ) = await per_window_each(
+        session,
+        windows,
+        s.requests,
+        lambda w: s.decided(w, (SessionStatus.CONFIRMED,)),
+        s.decided,
+        lambda w: s.decided(w, (SessionStatus.EXPIRED,)),
+        s.median_reply_hours,
+        s.completed_in,
+        s.no_shows_in,
+        s.average_rating,
+        s.reviews_written,
+        s.reports,
+    )
+    twice, once = await per_window_each(
+        session,
+        repeat,
+        lambda w: s.repeat_mentees(w, at_least=2),
+        lambda w: s.repeat_mentees(w, at_least=1),
+    )
     ledgers = [await credits_tab(session, w) for w in windows]
 
     def both(values: list[Any]) -> Metric:

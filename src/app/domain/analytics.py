@@ -371,3 +371,34 @@ class SessionsTab:
     outcomes: dict[str, int]
     top_no_show_reason: TopReason | None
     guardrails: dict[str, Metric]
+
+
+# --- Cache -------------------------------------------------------------------
+
+#: How long a tab's database figures may be served again (PRD 31: "cached for
+#: up to 10 minutes, keyed on the query"). Alerts are never cached.
+CACHE_FOR = dt.timedelta(minutes=10)
+#: Entries kept; the oldest goes first past it, so memory stays bounded.
+CACHE_SIZE = 64
+
+
+class TabCache:
+    """A tab's figures by (tab, first day, last day, compare), each kept until
+    `CACHE_FOR` after it was computed. In-process and per app, so a figure is
+    at most `CACHE_FOR` old and each instance warms its own."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[object, ...], tuple[dt.datetime, object]] = {}
+
+    def get(self, key: tuple[object, ...], now: dt.datetime) -> object | None:
+        entry = self._entries.get(key)
+        if entry is None or entry[0] <= now:
+            self._entries.pop(key, None)
+            return None
+        return entry[1]
+
+    def put(self, key: tuple[object, ...], value: object, now: dt.datetime) -> None:
+        self._entries.pop(key, None)
+        while len(self._entries) >= CACHE_SIZE:
+            self._entries.pop(next(iter(self._entries)))
+        self._entries[key] = (now + CACHE_FOR, value)
