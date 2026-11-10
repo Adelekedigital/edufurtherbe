@@ -146,18 +146,18 @@ async def test_behaviour_returns_the_seven_cards_and_the_replay_link(
     assert answer.status_code == 200
     body = answer.json()
     login = {"attempts": 10, "failed_rate": 20.0, "failed_migrated_rate": 50.0}
-    assert body["login_codes"] == login
-    search = {"searches": 8, "no_results_rate": 25.0, "profile_views_from_search": 3}
+    assert body["login"] == login
+    search = {"searches": 8, "no_result_rate": 25.0, "profile_views": 3}
     assert body["search"] == search
     shares = [{"source": "explore", "share": 37.5}, {"source": "home", "share": 12.5}]
     assert body["profile_views_by_source"] == shares
-    joining = {"join_clicked": 5, "join_failed": 1, "median_minutes_from_start": 3.0}
+    joining = {"clicked": 5, "failed": 1, "median_minutes_before": 3.0}
     assert body["joining"] == joining
     assert body["writing_assist"] == {"used": 6, "accepted_rate": 50.0, "discarded_rate": 33.3}
     assert body["app"] == {"installed": 1, "push_allowed_rate": 10.0}
     routes = [{"route": "explore", "count": 3}, {"route": "home", "count": 1}]
     assert body["errors_by_screen"] == routes
-    assert body["replay_url"] == f"{HOST}/project/7/replay/home"
+    assert body["replays_url"] == f"{HOST}/project/7/replay/home"
 
 
 @pytest.mark.parametrize("path", ["/funnels/signup", "/behaviour"])

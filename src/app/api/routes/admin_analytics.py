@@ -248,7 +248,7 @@ async def analytics_funnel(read: AnalyticsFunnelDep, response: Response) -> Anal
     response_model=AnalyticsBehaviourRead,
     summary="Analytics: behaviour event cards",
     description=(
-        "The seven event cards for the window (no `previous`), and `replay_url`, this "
+        "The seven event cards for the window (no `previous`), and `replays_url`, this "
         "environment's session replays.\n\n" + _POSTHOG + _SECTION
     ),
     responses=_POSTHOG_RESPONSES,

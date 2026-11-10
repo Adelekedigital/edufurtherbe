@@ -26,7 +26,7 @@ from app.domain.analytics import (
     spark_buckets,
 )
 from app.domain.analytics_events import AnalyticsEvent
-from app.domain.enums import EntryPoint, PrimaryRole, SignupSource
+from app.domain.enums import EntryPoint, PrimaryRole, ProfileViewSource, SignupSource
 from app.domain.mentor_stats import Window
 
 FunnelName = Literal[
@@ -295,9 +295,8 @@ def funnel_tab(
 
 # --- Event cards -------------------------------------------------------------
 
-#: `mentor_profile_viewed.source` when the view came from a search result:
-#: the surfaces share the booking entry points' names (PRD 30).
-FROM_SEARCH = EntryPoint.EXPLORE.value
+#: `mentor_profile_viewed.source` when the view came from a search result.
+FROM_SEARCH = ProfileViewSource.EXPLORE.value
 #: `writing_assist_used.outcome` values the card shows.
 ACCEPTED, DISCARDED = "accepted", "discarded"
 #: The Errors by screen card's length.
@@ -345,13 +344,13 @@ class BehaviourFigures:
 
 @dataclass(frozen=True, slots=True)
 class Share:
-    key: str
+    key: ProfileViewSource
     share: float | None
 
 
 @dataclass(frozen=True, slots=True)
 class BehaviourTab:
-    login_codes: dict[str, int | float | None]
+    login: dict[str, int | float | None]
     search: dict[str, int | float | None]
     profile_views_by_source: list[Share]
     joining: dict[str, int | float | None]
@@ -360,28 +359,40 @@ class BehaviourTab:
     errors_by_screen: list[Counted]
 
 
+def _by_source(figures: BehaviourFigures) -> list[Share]:
+    """Profile views per `ProfileViewSource`, most first: a value outside it,
+    blank included, counts as `other`. Shares are of every view."""
+    counts: dict[ProfileViewSource, int] = {}
+    for row in figures.profile_views:
+        try:
+            source = ProfileViewSource(row.key)
+        except ValueError:
+            source = ProfileViewSource.OTHER
+        counts[source] = counts.get(source, 0) + row.count
+    order = list(ProfileViewSource)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], order.index(item[0])))
+    return [Share(key=key, share=rate(n, figures.profile_views_total)) for key, n in ranked]
+
+
 def behaviour_tab(figures: BehaviourFigures) -> BehaviourTab:
     """The seven cards' rows, rates as percentages (`rate`)."""
     login = figures.login
     return BehaviourTab(
-        login_codes={
+        login={
             "attempts": login.attempts,
             "failed_rate": rate(login.failed, login.attempts),
             "failed_migrated_rate": rate(login.failed_migrated, login.failed),
         },
         search={
             "searches": figures.searches,
-            "no_results_rate": rate(figures.searches_no_results, figures.searches),
-            "profile_views_from_search": figures.profile_views_from_search,
+            "no_result_rate": rate(figures.searches_no_results, figures.searches),
+            "profile_views": figures.profile_views_from_search,
         },
-        profile_views_by_source=[
-            Share(key=row.key, share=rate(row.count, figures.profile_views_total))
-            for row in figures.profile_views
-        ],
+        profile_views_by_source=_by_source(figures),
         joining={
-            "join_clicked": figures.join_clicked,
-            "join_failed": figures.join_failed,
-            "median_minutes_from_start": rounded(figures.median_minutes_from_start),
+            "clicked": figures.join_clicked,
+            "failed": figures.join_failed,
+            "median_minutes_before": rounded(figures.median_minutes_from_start),
         },
         writing_assist={
             "used": figures.assist_used,

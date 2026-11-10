@@ -33,7 +33,7 @@ from app.domain.analytics import (
     SupplyTab,
 )
 from app.domain.analytics_behaviour import BehaviourTab, FunnelName, FunnelTab
-from app.domain.enums import MissedReason
+from app.domain.enums import MissedReason, ProfileViewSource
 
 
 class WindowRead(BaseModel):
@@ -565,20 +565,22 @@ class LoginCodesRead(BaseModel):
 
 class SearchRead(BaseModel):
     searches: int
-    no_results_rate: float | None = Field(description="Searches with no result, %.")
-    profile_views_from_search: int
+    no_result_rate: float | None = Field(description="Searches with no result, %.")
+    profile_views: int = Field(description="Profile views from a search result.")
 
 
 class SourceShareRead(BaseModel):
-    source: str = Field(description="The `source` the profile view was tracked with.")
+    source: ProfileViewSource = Field(
+        description="Where the views came from; `other` for the rest."
+    )
     share: float | None = Field(description="Its share of profile views, as a percentage.")
 
 
 class JoiningRead(BaseModel):
-    join_clicked: int
-    join_failed: int
-    median_minutes_from_start: float | None = Field(
-        description="Median of join clicks; null with none."
+    clicked: int
+    failed: int
+    median_minutes_before: float | None = Field(
+        description="Median minutes before the start that Join was clicked; null with none."
     )
 
 
@@ -601,23 +603,25 @@ class RouteFailuresRead(BaseModel):
 class AnalyticsBehaviourRead(SectionRead):
     """The Behaviour tab's event cards. Now and for the window only: no `previous`."""
 
-    login_codes: LoginCodesRead
+    login: LoginCodesRead
     search: SearchRead
     profile_views_by_source: list[SourceShareRead] = Field(description="Most first.")
     joining: JoiningRead
     writing_assist: WritingAssistCardRead
     app: AppCardRead
     errors_by_screen: list[RouteFailuresRead] = Field(description="Top 3 routes by failures.")
-    replay_url: str | None = Field(description="This environment's PostHog replays; null if unset.")
+    replays_url: str | None = Field(
+        description="This environment's PostHog replays; null if unset."
+    )
 
     @classmethod
     def of(
-        cls, period: Period, alerts: list[Alert], tab: BehaviourTab, replay_url: str | None
+        cls, period: Period, alerts: list[Alert], tab: BehaviourTab, replays_url: str | None
     ) -> AnalyticsBehaviourRead:
         return cls(
             window=WindowRead.of(period),
             alerts=[AlertRead.of(alert) for alert in alerts],
-            login_codes=LoginCodesRead.model_validate(tab.login_codes),
+            login=LoginCodesRead.model_validate(tab.login),
             search=SearchRead.model_validate(tab.search),
             profile_views_by_source=[
                 SourceShareRead(source=row.key, share=row.share)
@@ -629,5 +633,5 @@ class AnalyticsBehaviourRead(SectionRead):
             errors_by_screen=[
                 RouteFailuresRead(route=row.key, count=row.count) for row in tab.errors_by_screen
             ],
-            replay_url=replay_url,
+            replays_url=replays_url,
         )

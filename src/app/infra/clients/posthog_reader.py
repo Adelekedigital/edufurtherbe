@@ -159,7 +159,8 @@ SELECT
     countIf(event = {viewed}) AS profile_views,
     countIf(event = {join_clicked}) AS join_clicked,
     countIf(event = {join_failed}) AS join_failed,
-    quantileIf(0.5)(toFloat(properties.minutes_from_start), event = {join_clicked})
+    if(countIf(event = {join_clicked}) > 0, quantileIf(0.5)(
+        toFloat(properties.minutes_from_start), event = {join_clicked}), NULL)
         AS median_minutes_from_start,
     countIf(event = {assist}) AS assist_used,
     countIf(event = {assist} AND toString(properties.outcome) = {accepted}) AS assist_accepted,
@@ -370,6 +371,12 @@ def _one(body: Any, columns: Sequence[str]) -> dict[str, Any]:
     return rows[0]
 
 
+def _tallied(body: Any) -> list[Counted]:
+    """Every row, its key as text (a missing one blank): the domain sorts them."""
+    rows = _rows(body, ("key", "count"))
+    return [Counted(key=str(row["key"] or ""), count=_int(row["count"])) for row in rows]
+
+
 def _counted(body: Any) -> list[Counted]:
     return [
         Counted(key=row["key"], count=_int(row["count"]))
@@ -509,7 +516,7 @@ class PostHogReader:
             lambda body: _one(body, (*_LOGIN_COLUMNS, *_COUNT_COLUMNS)),
         )
         sources = self._read(
-            hogql("admin_analytics_profile_sources", SOURCES_QUERY, values), _counted
+            hogql("admin_analytics_profile_sources", SOURCES_QUERY, values), _tallied
         )
         routes = self._read(hogql("admin_analytics_failed_routes", ROUTES_QUERY, values), _counted)
         try:

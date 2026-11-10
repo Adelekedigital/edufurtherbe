@@ -43,6 +43,7 @@ from app.domain.analytics_behaviour import (
     funnel_tab,
     login_alert,
 )
+from app.domain.enums import ProfileViewSource
 from app.domain.mentor_stats import Window
 from app.infra.clients import posthog_reader as queries
 from app.infra.clients.posthog_reader import (
@@ -52,6 +53,7 @@ from app.infra.clients.posthog_reader import (
     analytics_reader_for,
     replay_url_for,
 )
+from app.main import app
 
 WINDOW = Window(
     since=dt.datetime(2026, 11, 1, tzinfo=dt.UTC), until=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)
@@ -215,11 +217,11 @@ def test_the_cards_turn_counts_into_rates() -> None:
             errors=[Counted(f"/r{i}", 10 - i) for i in range(5)],
         )
     )
-    assert tab.login_codes == {"attempts": 200, "failed_rate": 10.0, "failed_migrated_rate": 75.0}
-    assert tab.search == {"searches": 80, "no_results_rate": 25.0, "profile_views_from_search": 30}
+    assert tab.login == {"attempts": 200, "failed_rate": 10.0, "failed_migrated_rate": 75.0}
+    assert tab.search == {"searches": 80, "no_result_rate": 25.0, "profile_views": 30}
     shares = [(r.key, r.share) for r in tab.profile_views_by_source]
     assert shares == [("explore", 37.5), ("home", 12.5)]
-    assert tab.joining["median_minutes_from_start"] == 2.8
+    assert tab.joining == {"clicked": 12, "failed": 2, "median_minutes_before": 2.8}
     assert tab.writing_assist == {"used": 8, "accepted_rate": 75.0, "discarded_rate": 25.0}
     assert tab.app == {"installed": 4, "push_allowed_rate": 12.5}
     assert [r.key for r in tab.errors_by_screen] == ["/r0", "/r1", "/r2"]
@@ -332,13 +334,13 @@ def cards_handler(row: list[Any], *sources: list[Any]) -> Handler:
             return rows(CARD_COLUMNS, row)
         if name == "admin_analytics_profile_sources":
             return rows(["key", "count"], *sources)
-        return rows(["key", "count"], ["/explore", 4], ["/home", 2])
+        # A value the app never sends as a route (spaces, free text) is not shown.
+        return rows(["key", "count"], ["/explore", 4], ["not a route", 3], ["/home", 2])
 
     return answer
 
 
 def test_the_cards_are_three_reads() -> None:
-    # A value the app never sends (spaces, free text) is not shown.
     sources = (["explore", 6], ["a search text", 1], ["home", 2])
     row = [10, 2, 1, 8, 2, 3, 40, 5, 1, 4.0, 6, 3, 2, 1, 2, 20]
     read, seen = posthog_reader(cards_handler(row, *sources))
@@ -346,19 +348,33 @@ def test_the_cards_are_three_reads() -> None:
     assert len(seen) == 3
     assert got.login == LoginCodes(attempts=10, failed=2, failed_migrated=1)
     assert (got.searches, got.active_people, got.median_minutes_from_start) == (8, 20, 4.0)
-    assert got.profile_views == [Counted("explore", 6), Counted("home", 2)]
+    assert got.profile_views == [
+        Counted("explore", 6),
+        Counted("a search text", 1),
+        Counted("home", 2),
+    ]
     assert got.profile_views_total == 40
     assert got.errors == [Counted("/explore", 4), Counted("/home", 2)]
 
 
-def test_profile_view_shares_are_of_every_view_including_unshown_ones() -> None:
-    # 100 views: 40 under the 20 rows shown, the rest past the limit or blank.
+def test_profile_view_sources_are_closed_and_shares_are_of_every_view() -> None:
+    # 100 views: an unknown and a blank source are one `other`; 50 sit past the limit.
     row = [0, 0, 0, 0, 0, 0, 100, 0, 0, None, 0, 0, 0, 0, 0, 0]
-    sources = [["", 30], *([f"source_{i:02}", 2] for i in range(20))]
+    sources = [["explore", 20], ["a search text", 10], ["", 10], [None, 10]]
     read, _ = posthog_reader(cards_handler(row, *sources))
     tab = behaviour_tab(read.behaviour(WINDOW, INTERNAL))
-    assert len(tab.profile_views_by_source) == 20
-    assert {row.share for row in tab.profile_views_by_source} == {2.0}
+    got = [(r.key, r.share) for r in tab.profile_views_by_source]
+    assert got == [(ProfileViewSource.OTHER, 30.0), (ProfileViewSource.EXPLORE, 20.0)]
+
+
+def test_the_profile_view_sources_are_published_as_an_enum() -> None:
+    schema = app.openapi()["components"]["schemas"]
+    assert schema["SourceShareRead"]["properties"]["source"] == {
+        "$ref": "#/components/schemas/ProfileViewSource",
+        "description": "Where the views came from; `other` for the rest.",
+    }
+    assert schema["ProfileViewSource"]["enum"] == [s.value for s in ProfileViewSource]
+    assert "other" in schema["ProfileViewSource"]["enum"]
 
 
 def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
@@ -500,3 +516,12 @@ def test_the_null_reader_refuses_every_read() -> None:
     ):
         with pytest.raises(AnalyticsUpstreamError):
             read()
+
+
+def test_the_median_is_null_not_nan_when_no_one_clicked_join() -> None:
+    """ClickHouse's median over no rows is NaN, which the reader refuses as
+    malformed: the query must answer NULL instead, or a quiet window is a 503."""
+    text = " ".join(queries.CARDS_QUERY.split())
+
+    assert "if(countIf(event = {join_clicked}) > 0, quantileIf(0.5)(" in text
+    assert text.index("quantileIf(0.5)(") > text.index("if(countIf(event = {join_clicked}) > 0,")
