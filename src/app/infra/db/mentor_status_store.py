@@ -55,7 +55,12 @@ from app.infra.db.mentor_listing import (
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue, enqueue_analytics
-from app.infra.db.predicates import LIVE, application_in_review, mentor_approved
+from app.infra.db.predicates import (
+    LIVE,
+    application_in_review,
+    mentor_approved,
+    mentor_listed,
+)
 from app.infra.db.public_visibility import mentor_is_published
 
 
@@ -98,6 +103,11 @@ async def record(
     """
     if not await lock_mentor(session, user_id):
         return False
+    # Read under the lock and before the insert, since the trigger projects it:
+    # listing a mentor who is already listed is a record, not supply going live.
+    goes_live = status_type is MentorStatusType.LISTED and not await _profile_flag(
+        session, user_id, mentor_listed()
+    )
 
     written_at = await session.scalar(
         insert(MentorStatusEvent)
@@ -116,7 +126,7 @@ async def record(
         .returning(MentorStatusEvent.created_at)
     )
     # Supply going live, as analytics counts it (PRD 30), at the event's time.
-    if status_type is MentorStatusType.LISTED and written_at is not None:
+    if goes_live and written_at is not None:
         await enqueue_analytics(session, AnalyticsEvent.MENTOR_LISTED, user_id, {}, at=written_at)
     # A `listed` event also clears the pause's return date — in the projection
     # trigger, so a listing written by any path ends the pause (#226).

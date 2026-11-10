@@ -11,7 +11,8 @@ the Supabase account), the contact a migrated account has at Loops, and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
-personal meeting links, and their browsers' push subscriptions. Every handle
+personal meeting links, their browsers' push subscriptions and the analytics
+events about them not yet sent. Every handle
 their invite link carried goes too, and the address of the invite they arrived
 through (decision 305).
 
@@ -77,6 +78,7 @@ from app.infra.db.models.user import (
     UserProfile,
 )
 from app.infra.db.models.writing_assist import WritingAssistRequest
+from app.infra.db.outbox import forget_unsent_analytics
 from app.infra.db.predicates import LIVE
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,7 @@ async def purge_account(
     )
     for model, column in _OWN_ROWS:
         await session.execute(delete(model).where(column == user_id))
+    await forget_unsent_analytics(session, user_id)
     # Why they missed a session stays, like the session; their own words go.
     await session.execute(
         update(SessionMissedReason).where(SessionMissedReason.user_id == user_id).values(note=None)

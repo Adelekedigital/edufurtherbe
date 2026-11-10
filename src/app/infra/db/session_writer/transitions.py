@@ -417,6 +417,16 @@ async def end_for_move(
     return row
 
 
+async def queue_session_confirmed(
+    session: AsyncSession, mentee_id: UUID, session_id: UUID, *, now: dt.datetime
+) -> None:
+    """`session_confirmed` about its mentee (PRD 30): the one place it is
+    written, for a booking confirmed outright and a request accepted."""
+    await enqueue_analytics(
+        session, AnalyticsEvent.SESSION_CONFIRMED, mentee_id, {"session_id": session_id}, at=now
+    )
+
+
 async def _report(
     session: AsyncSession,
     session_id: UUID,
@@ -431,13 +441,7 @@ async def _report(
     mentee (PRD 30). Who cancelled is `session_stats.canceller` read off the
     event just written, the one rule the dashboard and the session read use."""
     if to is SessionStatus.CONFIRMED:
-        await enqueue_analytics(
-            session,
-            AnalyticsEvent.SESSION_CONFIRMED,
-            row["mentee_id"],
-            {"session_id": session_id},
-            at=now,
-        )
+        await queue_session_confirmed(session, row["mentee_id"], session_id, now=now)
     elif to is SessionStatus.CANCELLED:
         by = await session.scalar(
             select(canceller(SessionEvent.actor_id, SessionEvent.actor_type))

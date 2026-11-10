@@ -25,7 +25,7 @@ from contextvars import ContextVar, Token
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Uuid, column, literal, select, text, true, update, values
+from sqlalchemy import Uuid, column, delete, literal, select, text, true, update, values
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -67,6 +67,7 @@ __all__ = [
     "enqueue",
     "enqueue_analytics",
     "enqueue_analytics_each",
+    "forget_unsent_analytics",
     "stop_collecting",
 ]
 
@@ -223,6 +224,20 @@ async def enqueue_analytics_each(
                 ).where(counted_user(rows.c.user_id)),
             )
         )
+
+
+async def forget_unsent_analytics(session: AsyncSession, user_id: UUID) -> None:
+    """Drop this person's analytics events not yet sent (decision 328). Does not
+    commit. The account purge's, so nothing about an erased person leaves later;
+    what was sent already is the vendor's to erase."""
+    await session.execute(
+        delete(OutboxEvent).where(
+            OutboxEvent.entity_type == "user",
+            OutboxEvent.entity_id == user_id,
+            OutboxEvent.destination == Channel.ANALYTICS,
+            OutboxEvent.status == "pending",
+        )
+    )
 
 
 async def _push_rows(

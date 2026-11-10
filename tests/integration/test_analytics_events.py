@@ -17,13 +17,15 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
-from tests.integration.factories import add_session, make_public_mentor
+from tests.integration.factories import add_session, make_public_mentor, token_for
 from tests.integration.test_api_admin_credits import a_user
 from tests.integration.test_api_admin_credits import grant as admin_grant
 from tests.integration.test_api_reviews import World, world  # noqa: F401 - world is a fixture
 from tests.integration.test_api_session_move import a_booking as a_movable_booking
 from tests.integration.test_api_session_move import move
 from tests.integration.test_api_session_transitions import a_booking, url
+from tests.integration.test_monthly_grant import LADDER, run_grant
+from tests.integration.test_monthly_grant import a_user as a_level_mentee
 from tests.integration.test_referral_unlock_attended import (
     a_session_attended_by,
     an_onboarded_referrer,
@@ -32,11 +34,13 @@ from tests.integration.test_referral_unlock_attended import (
 
 from app.domain.analytics_events import GEOIP_DISABLE, AnalyticsEvent
 from app.domain.enums import MentorStatusType
+from app.infra.db import outbox
+from app.infra.db.credit_grants import top_up_levels
 from app.infra.db.demo_seed import DEMO_DOMAIN
-from app.infra.db.mentor_status_store import record
+from app.infra.db.mentor_status_store import decide, record
 from app.infra.db.outbox import enqueue_analytics_each
 from app.infra.db.session_writer.attendance import settle_attendance
-from conftest import A_REASON, default_ladder
+from conftest import A_REASON, bearer, default_ladder
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
@@ -393,3 +397,144 @@ async def test_many_facts_in_one_statement_keep_their_own_people(db_engine: Asyn
 
     found = {UUID(p["distinct_id"]): p["properties"]["amount"] for p in await events(db_engine)}
     assert found == {user: n + 1 for n, user in enumerate(people)}
+
+
+async def test_many_facts_span_chunks_without_losing_one(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Five facts in chunks of two: three statements, every row written."""
+    monkeypatch.setattr(outbox, "ANALYTICS_CHUNK", 2)
+    people = [uuid4() for _ in range(5)]
+    async with async_sessionmaker(db_engine)() as session:
+        await enqueue_analytics_each(
+            session,
+            AnalyticsEvent.CREDIT_GRANTED,
+            [(user, {"amount": n + 1, "source": "admin_grant"}) for n, user in enumerate(people)],
+            at=AT,
+        )
+        await session.commit()
+
+    found = {UUID(p["distinct_id"]): p["properties"]["amount"] for p in await events(db_engine)}
+    assert found == {user: n + 1 for n, user in enumerate(people)}
+
+
+# --------------------------------------------------------------------------
+# Only news: a listing, a move, a grant
+# --------------------------------------------------------------------------
+
+
+async def test_listing_a_listed_mentor_again_is_not_a_second_listing(
+    db_engine: AsyncEngine,
+) -> None:
+    mentor = await make_public_mentor(db_engine, "ev-relist", listed=False)
+
+    for _ in range(2):
+        async with async_sessionmaker(db_engine)() as session:
+            assert await record(
+                session, user_id=mentor, status_type=MentorStatusType.LISTED, created_by=None
+            )
+            await session.commit()
+
+    assert [p["distinct_id"] for p in await events(db_engine, "mentor_listed")] == [str(mentor)]
+
+
+async def test_approving_an_approved_listed_mentor_lists_nobody(db_engine: AsyncEngine) -> None:
+    mentor = await make_public_mentor(db_engine, "ev-reapprove")
+    admin = await make_public_mentor(db_engine, "ev-reapprove-admin")
+
+    async with async_sessionmaker(db_engine)() as session:
+        assert await decide(session, user_id=mentor, admin_id=admin, approved=True)
+        await session.commit()
+
+    assert await events(db_engine, "mentor_listed") == []
+
+
+async def test_approving_an_unlisted_applicant_lists_them_once(db_engine: AsyncEngine) -> None:
+    mentor = await make_public_mentor(db_engine, "ev-approve", approved=False, listed=False)
+    admin = await make_public_mentor(db_engine, "ev-approve-admin")
+
+    async with async_sessionmaker(db_engine)() as session:
+        assert await decide(session, user_id=mentor, admin_id=admin, approved=True)
+        await session.commit()
+
+    assert [p["distinct_id"] for p in await events(db_engine, "mentor_listed")] == [str(mentor)]
+
+
+async def confirmation_off(engine: AsyncEngine, mentor: UUID, *, on: bool) -> None:
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE mentor_profiles SET requires_booking_confirmation = :c WHERE user_id = :u"
+            ),
+            {"c": on, "u": mentor},
+        )
+
+
+async def test_a_request_moved_onto_a_confirmed_time_is_confirmed_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    booking = await a_movable_booking(
+        api_client, db_engine, "ev-move-pending", mentor_confirms=True
+    )
+    assert booking["status"] == "pending_mentor_approval"
+    await confirmation_off(db_engine, booking["mentor"], on=False)
+
+    moved = await move(api_client, booking, booking["starts"][1])
+    assert moved.status_code == 201, moved.text
+    assert moved.json()["status"] == "confirmed"
+
+    (confirmed,) = await events(db_engine, "session_confirmed")
+    assert confirmed["distinct_id"] == str(booking["mentee"])
+    assert confirmed["properties"] == {"session_id": moved.json()["id"]}
+    assert len(await events(db_engine, "booking_requested")) == 1
+
+
+async def test_a_confirmed_session_moved_to_a_request_is_reconfirmed_on_accept(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The stated assumption: accepting the moved request is a re-confirmation."""
+    booking = await a_movable_booking(api_client, db_engine, "ev-move-reconfirm")
+    assert booking["status"] == "confirmed"
+    await confirmation_off(db_engine, booking["mentor"], on=True)
+
+    moved = await move(api_client, booking, booking["starts"][1])
+    assert moved.status_code == 201, moved.text
+    assert moved.json()["status"] == "pending_mentor_approval"
+    assert len(await events(db_engine, "session_confirmed")) == 1
+
+    mentor = bearer(await token_for(db_engine, booking["mentor"]))
+    accepted = await api_client.post(url(moved.json(), "accept"), headers=mentor)
+    assert accepted.status_code == 200, accepted.text
+
+    first, again = await events(db_engine, "session_confirmed")
+    assert first["properties"] == {"session_id": booking["id"]}
+    assert again["properties"] == {"session_id": moved.json()["id"]}
+
+
+async def lot_sources(engine: AsyncEngine, user: UUID) -> list[dict[str, Any]]:
+    async with engine.connect() as conn:
+        found = await conn.execute(
+            text("SELECT quantity_granted, source FROM credit_lots WHERE user_id = :u"),
+            {"u": user},
+        )
+        return [{"amount": row[0], "source": row[1]} for row in found.all()]
+
+
+async def test_the_firsts_grant_and_a_top_up_name_their_source(db_engine: AsyncEngine) -> None:
+    paid_monthly = await a_level_mentee(db_engine)
+
+    assert await run_grant(db_engine, now=AT) == 1
+    (monthly,) = await events(db_engine, "credit_granted")
+    assert monthly["distinct_id"] == str(paid_monthly)
+    assert [monthly["properties"]] == await lot_sources(db_engine, paid_monthly)
+    assert monthly["properties"]["source"] == "monthly_free"
+
+    topped = await a_level_mentee(db_engine)
+    async with async_sessionmaker(db_engine)() as session:
+        paid = await top_up_levels(session, [topped], ladder=LADDER, now=AT)
+        await session.commit()
+
+    assert set(paid) == {topped}
+    found = await events(db_engine, "credit_granted")
+    (top_up,) = [p for p in found if p["distinct_id"] == str(topped)]
+    assert top_up["properties"] == {"amount": paid[topped], "source": "level_top_up"}
