@@ -109,8 +109,9 @@ async def test_a_cancellation_names_who_called_it_off(
     await sweep(db_engine, recorder)
 
     (variables,) = sent(recorder, Notification.SESSION_CANCELLED)
-    assert variables["cancelinitiator"] == "Mo"
-    assert variables["cancelmessage"] == ""
+    assert variables["cancelInitiator"] == "Mo"
+    assert variables["reasonTitle"] == REASON_TITLES[SessionReasonCode.OTHER]
+    assert variables["reasonMessage"] == ""
 
 
 async def test_a_new_booking_tells_the_mentor_how_many_questions_were_answered(
