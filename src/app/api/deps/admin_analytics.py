@@ -17,6 +17,7 @@ from fastapi import Depends, Query, Request
 from app.api.deps.core import BookingWindowDep, QueueViewerDep, SessionDep, _configured
 from app.api.schemas.admin_analytics import (
     AnalyticsCreditsRead,
+    AnalyticsGrowthRead,
     AnalyticsOverviewRead,
     AnalyticsSessionsRead,
 )
@@ -24,6 +25,7 @@ from app.core.errors import NotFoundError
 from app.domain.analytics import Alert, Period, resolve_compare, resolve_period
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
+from app.infra.db.analytics_growth import growth_tab
 from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
 
@@ -112,3 +114,13 @@ async def analytics_sessions(
 
 
 AnalyticsSessionsDep = Annotated[AnalyticsSessionsRead, Depends(analytics_sessions)]
+
+
+async def analytics_growth(
+    ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+) -> AnalyticsGrowthRead:
+    tab = await growth_tab(session, ask.period, ask.compare, ask.now)
+    return AnalyticsGrowthRead.of(ask.period, alerts, tab)
+
+
+AnalyticsGrowthDep = Annotated[AnalyticsGrowthRead, Depends(analytics_growth)]

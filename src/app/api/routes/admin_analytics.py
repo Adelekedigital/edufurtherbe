@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.api.deps.admin_analytics import (
     AnalyticsCreditsDep,
+    AnalyticsGrowthDep,
     AnalyticsOverviewDep,
     AnalyticsSessionsDep,
     require_analytics_on,
@@ -19,6 +20,7 @@ from app.api.deps.core import PRIVATE_NO_STORE
 from app.api.routes.admin import ADMIN_RESPONSES
 from app.api.schemas.admin_analytics import (
     AnalyticsCreditsRead,
+    AnalyticsGrowthRead,
     AnalyticsOverviewRead,
     AnalyticsSessionsRead,
 )
@@ -122,5 +124,39 @@ async def analytics_overview(
 async def analytics_sessions(
     read: AnalyticsSessionsDep, response: Response
 ) -> AnalyticsSessionsRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return read
+
+
+@router.get(
+    "/growth",
+    response_model=AnalyticsGrowthRead,
+    summary="Analytics: growth",
+    description=(
+        "- `signups`: accounts made in the window, `mentees` and `mentors` by their "
+        "role; migrated accounts are not sign-ups\n"
+        "- `by_source`, `by_channel`: always empty until sign-ups record where they "
+        "came from\n"
+        "- `invites`: invites made in the window: all of them (`invited`), those "
+        "whose invitee signed up (`joined`), finished their profile (`qualified`), "
+        "has any session as a mentee (`first_booking`) or a completed one "
+        "(`first_completed`). `cost_per_completed` is always null: no credit is "
+        "tied to an invite. `top_inviter` is the inviter, not deleted, with the "
+        "most `joined`, ties by name; null when nobody joined\n"
+        "- `months`: sign-ups in each of the last 6 UTC calendar months, oldest "
+        "first, this one included, whatever the window\n"
+        "- `migrated`: accounts carried over from the old app, all time, with `on` "
+        "always null (no cutover date is recorded); null with none\n"
+        "- `completed_total`: completed sessions starting in the window\n"
+        "- `by_topic`: those sessions under each service offering their session "
+        "type covers, every offering in the platform's order; a session counts "
+        "under each of its type's topics, and one with no type under none\n"
+        "- `by_stage`: the same by application stage, each of the six in order and "
+        "then `not_set`, for a session whose type names no stage or that has no "
+        "type\n\n" + _SECTION
+    ),
+    responses=_RESPONSES,
+)
+async def analytics_growth(read: AnalyticsGrowthDep, response: Response) -> AnalyticsGrowthRead:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return read
