@@ -30,6 +30,7 @@ from app.api.routes import (
     intake_files,
     internal_jobs,
     invites,
+    me_attribution,
     me_calendar,
     me_conferencing,
     me_intake,
@@ -231,6 +232,12 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "the two have a booked session between them (confirmed, completed, "
             "missed or canceled). Keyed by the other person's user id. A paused "
             "mentor or a closed account makes a chat read only (ADR 0010)."
+        ),
+    },
+    {
+        "name": "analytics",
+        "description": (
+            "Where the caller's account came from, recorded once, after the first sign-in (PRD 30)."
         ),
     },
     {
@@ -594,6 +601,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(me_onboarding.router)
     application.include_router(me_mentor_application.router)
     application.include_router(me_referrals.router)
+    application.include_router(me_attribution.router)
     application.include_router(invites.router)
     application.include_router(me_reviews.router)
     application.include_router(me_writing_assist.router)

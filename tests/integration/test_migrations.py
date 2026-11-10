@@ -47,6 +47,10 @@ pytestmark = pytest.mark.db
 #: vouching for a stored next free time. Infrastructure like the rest — it
 #: decides nothing, it only invalidates a cache.
 #:
+#: `internal_account`, `mark_internal_user` and `mark_internal_grantee` join in
+#: `f6b1d3a8c925` (PRD 30): they keep `users.is_internal` a projection of a live
+#: admin grant or a demo address, whichever writer touched it.
+#:
 #: This tuple catching a *new* one is the test doing its job: a schema-level
 #: object added without a downgrade would survive `downgrade base` and break the
 #: next upgrade on "already exists", which is exactly what the assertion above
@@ -54,7 +58,10 @@ pytestmark = pytest.mark.db
 FUNCTION_NAMES = (
     "apply_mentor_status",
     "clear_stale_avatar_focus",
+    "internal_account",
     "log_availability_change",
+    "mark_internal_grantee",
+    "mark_internal_user",
     "session_window",
     "set_updated_at",
     "timemultirange",
@@ -213,6 +220,8 @@ EXPECTED_TABLES = [
     # Admins' wording for shared emails, and its history (decision 318).
     "email_line_overrides",
     "email_line_edits",
+    # A person's analytics-cookie answer (PRD 30, decision 329).
+    "analytics_consents",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

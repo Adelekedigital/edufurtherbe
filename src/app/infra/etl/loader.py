@@ -34,6 +34,7 @@ from dataclasses import asdict
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.domain.enums import SignupSource
 from app.domain.transform import UserRow
 from app.infra.db.triggers import timestamps_from_source
 
@@ -43,11 +44,11 @@ UPSERT_USER = """
 INSERT INTO users (
     legacy_bubble_id, email, primary_role, timezone,
     created_at, updated_at, email_verified_at,
-    first_name, last_name, slug, last_active_at
+    first_name, last_name, slug, last_active_at, signup_source
 ) VALUES (
     :legacy_bubble_id, :email, :primary_role, :timezone,
     :created_at, :updated_at, :email_verified_at,
-    :first_name, :last_name, :slug, :last_active_at
+    :first_name, :last_name, :slug, :last_active_at, :signup_source
 )
 ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     email             = EXCLUDED.email,
@@ -59,7 +60,8 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     first_name        = EXCLUDED.first_name,
     last_name         = EXCLUDED.last_name,
     slug              = EXCLUDED.slug,
-    last_active_at    = EXCLUDED.last_active_at
+    last_active_at    = EXCLUDED.last_active_at,
+    signup_source     = EXCLUDED.signup_source
 """
 
 
@@ -88,6 +90,8 @@ class UserLoader:
                 # existed to prevent one
                 # layer down.
                 parameters["primary_role"] = row.primary_role.value
+                # Every account this loads came from the old platform.
+                parameters["signup_source"] = SignupSource.MIGRATED.value
                 await self._connection.execute(text(UPSERT_USER), parameters)
 
         return len(rows)
