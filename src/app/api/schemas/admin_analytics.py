@@ -20,11 +20,15 @@ from app.domain.analytics import (
     CreditGroup,
     CreditsTab,
     FeatureKey,
+    GrowthTab,
     Metric,
     OverviewTab,
     Period,
     SeriesUnit,
     SessionsTab,
+    SignupChannel,
+    SignupSource,
+    StageKey,
     SupplyPlace,
     SupplyTab,
 )
@@ -304,6 +308,123 @@ class AnalyticsSessionsRead(SectionRead):
             if top is None
             else TopReasonRead(reason=top.reason, share=top.share),
             guardrails=GuardrailsRead(**{k: MetricRead.of(v) for k, v in tab.guardrails.items()}),
+        )
+
+
+class SignUpsRead(BaseModel):
+    all: MetricRead
+    mentees: MetricRead
+    mentors: MetricRead
+
+
+class SourceRead(BaseModel):
+    key: SignupSource
+    members: int
+    completed_share: float | None = Field(
+        description="The share of these members with a completed session, as a percentage."
+    )
+
+
+class ChannelRead(BaseModel):
+    key: SignupChannel
+    members: int
+    completed_share: float | None = Field(
+        description="The share of these members with a completed session, as a percentage."
+    )
+
+
+class TopInviterRead(BaseModel):
+    name: str = Field(description="First and last name, joined by a space.")
+    joined: int
+
+
+class InvitesRead(BaseModel):
+    invited: int
+    joined: int
+    qualified: int
+    first_booking: int
+    first_completed: int
+    cost_per_completed: float | None = Field(
+        description="Always null: since decision 308 no credit is tied to an invite."
+    )
+    top_inviter: TopInviterRead | None
+
+
+class MonthCountRead(BaseModel):
+    month: str = Field(description="`YYYY-MM`, a UTC calendar month.")
+    count: int
+
+
+class MigratedRead(BaseModel):
+    count: int
+    on: date | None = Field(description="Always null: no cutover date is recorded.")
+
+
+class TopicCountRead(BaseModel):
+    key: str = Field(description="The service offering's slug.")
+    name: str
+    count: int
+
+
+class StageCountRead(BaseModel):
+    key: StageKey
+    count: int
+
+
+class AnalyticsGrowthRead(SectionRead):
+    """The Growth tab."""
+
+    signups: SignUpsRead
+    by_source: list[SourceRead] = Field(
+        description="Always empty until sign-ups record where they came from."
+    )
+    by_channel: list[ChannelRead] = Field(
+        description="Always empty until sign-ups record where they came from."
+    )
+    invites: InvitesRead
+    months: list[MonthCountRead] = Field(
+        description="Sign-ups in each of the last 6 UTC months, oldest first, this one included."
+    )
+    migrated: MigratedRead | None = Field(
+        description="Accounts carried over from the old app, all time; null with none."
+    )
+    completed_total: int
+    by_topic: list[TopicCountRead] = Field(
+        description="Every service offering, in the platform's order, zeros included."
+    )
+    by_stage: list[StageCountRead] = Field(
+        description="Every application stage in order, then `not_set`, zeros included."
+    )
+
+    @classmethod
+    def of(cls, period: Period, alerts: list[Alert], tab: GrowthTab) -> AnalyticsGrowthRead:
+        cohort, top, moved = tab.invites, tab.invites.top_inviter, tab.migrated
+        return cls(
+            window=WindowRead.of(period),
+            alerts=[AlertRead.of(alert) for alert in alerts],
+            signups=SignUpsRead(
+                all=MetricRead.of(tab.signups.everyone),
+                mentees=MetricRead.of(tab.signups.mentees),
+                mentors=MetricRead.of(tab.signups.mentors),
+            ),
+            by_source=[],
+            by_channel=[],
+            invites=InvitesRead(
+                invited=cohort.invited,
+                joined=cohort.joined,
+                qualified=cohort.qualified,
+                first_booking=cohort.first_booking,
+                first_completed=cohort.first_completed,
+                cost_per_completed=None,
+                top_inviter=None
+                if top is None
+                else TopInviterRead(name=top.name, joined=top.joined),
+            ),
+            months=[MonthCountRead(month=m.month, count=m.count) for m in tab.months],
+            migrated=None if moved is None else MigratedRead(count=moved.count, on=moved.on),
+            completed_total=tab.completed_total,
+            by_topic=[TopicCountRead(key=t.key, name=t.name, count=t.count) for t in tab.by_topic],
+            by_stage=[StageCountRead(key=s.key, count=s.count) for s in tab.by_stage],
         )
 
 
