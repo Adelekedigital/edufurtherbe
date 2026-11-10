@@ -42,6 +42,9 @@ async def make_public_mentor(
     #: The legacy public profile handle. Nullable in the schema and on 4 of 43
     #: migrated users, so a mentor without one must stay reachable by id.
     slug: str | None = None,
+    #: Defaults to one built from ``tag``; a demo-domain address makes an
+    #: account the analytics leave out.
+    email: str | None = None,
 ) -> UUID:
     """A mentor and their profile, with every reason to be refused as a knob.
 
@@ -51,7 +54,7 @@ async def make_public_mentor(
     async with engine.begin() as conn:
         mentor = await add_user(
             conn,
-            f"mentor-{tag}@example.test",
+            email or f"mentor-{tag}@example.test",
             auth_id=uuid4(),
             first_name="Ada",
             last_name="Lovelace",
@@ -646,6 +649,9 @@ async def status_event(
     by: UUID | None,
     reason: str | None = None,
     days_ago: float = 0,
+    #: An exact instant instead of ``days_ago``, for a test that measures
+    #: between two rows written in different transactions.
+    at: dt.datetime | None = None,
 ) -> None:
     """One status transition; the trigger projects it onto the profile."""
     async with engine.begin() as conn:
@@ -653,9 +659,17 @@ async def status_event(
             text(
                 "INSERT INTO mentor_status_events "
                 "(mentor_user_id, status_type, reason, created_by, created_at) "
-                "VALUES (:m, :t, :r, :b, now() - make_interval(secs => :s))"
+                "VALUES (:m, :t, :r, :b, "
+                "COALESCE(:at, now() - make_interval(secs => :s)))"
             ),
-            {"m": mentor, "t": status_type, "r": reason, "b": by, "s": days_ago * 86400},
+            {
+                "m": mentor,
+                "t": status_type,
+                "r": reason,
+                "b": by,
+                "s": days_ago * 86400,
+                "at": at,
+            },
         )
 
 

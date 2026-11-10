@@ -15,11 +15,12 @@ from typing import Annotated
 from fastapi import Depends, Query, Request
 
 from app.api.deps.core import QueueViewerDep, SessionDep, _configured
-from app.api.schemas.admin_analytics import AnalyticsCreditsRead
+from app.api.schemas.admin_analytics import AnalyticsCreditsRead, AnalyticsSupplyRead
 from app.core.errors import NotFoundError
 from app.domain.analytics import Alert, Period, resolve_compare, resolve_period
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
+from app.infra.db.analytics_supply import supply_tab
 
 
 def require_analytics_on(request: Request) -> None:
@@ -87,3 +88,13 @@ async def analytics_credits(
 
 
 AnalyticsCreditsDep = Annotated[AnalyticsCreditsRead, Depends(analytics_credits)]
+
+
+async def analytics_supply(
+    ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+) -> AnalyticsSupplyRead:
+    tab = await supply_tab(session, ask.period.window)
+    return AnalyticsSupplyRead.of(ask.period, alerts, tab)
+
+
+AnalyticsSupplyDep = Annotated[AnalyticsSupplyRead, Depends(analytics_supply)]

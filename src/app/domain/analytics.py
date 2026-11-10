@@ -1,5 +1,6 @@
 """The admin Analytics page's rules (PRD 31, decision 324): windows, buckets,
-rates, the credit source groups and the alert copy.
+rates, the credit source groups, which places the Supply tab shows, and the
+alert copy.
 
 Pure: no I/O. The stores in `infra/db/analytics_*.py` count; this module says
 what a window is, how a count becomes a rate, and what an alert reads.
@@ -18,12 +19,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from itertools import pairwise
 from types import MappingProxyType
 from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
-from app.domain.enums import CreditSource
+from app.domain.accounts import UNLISTED_ON_DELETION
+from app.domain.enums import CreditSource, UnlistedReason
 from app.domain.mentor_stats import Window
 
 #: The presets the window control offers, in days ending today.
@@ -150,21 +153,32 @@ def spark_buckets(window: Window) -> list[Window]:
     return [Window(since=a, until=b) for a, b in pairwise(edges)]
 
 
+def rounded(value: Decimal, places: int = 1) -> float:
+    """``value`` to ``places`` decimals, halves away from zero (decision 171's
+    rounding): the one rounding every analytics figure goes through."""
+    return float(value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+
+
 def rate(numerator: int, denominator: int) -> float | None:
     """``numerator / denominator`` as a percentage, one decimal, halves away
-    from zero (decision 171's rounding); ``None`` with nothing to divide by."""
+    from zero; ``None`` with nothing to divide by."""
     if denominator <= 0:
         return None
-    percent = Decimal(numerator) * 100 / Decimal(denominator)
-    return float(percent.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+    return rounded(Decimal(numerator) * 100 / Decimal(denominator))
 
 
 def ratio(numerator: int, denominator: int, places: int = 2) -> float | None:
     """A plain ratio rounded half up to ``places``; ``None`` over zero."""
     if denominator <= 0:
         return None
-    value = Decimal(numerator) / Decimal(denominator)
-    return float(value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP))
+    return rounded(Decimal(numerator) / Decimal(denominator), places)
+
+
+def days_of(seconds: float | None) -> float | None:
+    """A duration in seconds as days, one decimal, half up; ``None`` stays."""
+    if seconds is None:
+        return None
+    return rounded(Decimal(str(seconds)) / 86400)
 
 
 # --- Credits -----------------------------------------------------------------
@@ -202,6 +216,60 @@ class CreditFigures:
 class CreditsTab:
     flow: CreditFigures
     by_source: dict[CreditGroup, CreditFigures]
+
+
+# --- Supply ------------------------------------------------------------------
+
+#: Unlistings that are a side effect of something else, so not counted as one:
+#: a decline (`decide` writes `never_approved`) and a deleted account.
+SIDE_EFFECT_UNLISTINGS: tuple[str, ...] = (
+    UnlistedReason.NEVER_APPROVED.value,
+    UNLISTED_ON_DELETION,
+)
+#: The most places a by-country or by-school list shows.
+TOP_PLACES = 5
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyCohort:
+    """Applications submitted in the window, by where they stand now."""
+
+    applied: int
+    approved: int
+    listed: int
+    bookable: int
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyPlace:
+    """A country or school mentees aim for, and the mentors who can take them."""
+
+    key: str
+    name: str
+    mentees: int
+    bookable_mentors: int
+
+
+@dataclass(frozen=True, slots=True)
+class SupplyTab:
+    cohort: SupplyCohort
+    median_review_days: float | None
+    unlisted: int
+    by_country: list[SupplyPlace]
+    by_school: list[SupplyPlace]
+
+
+def neediest(places: list[SupplyPlace]) -> list[SupplyPlace]:
+    """The `TOP_PLACES` places mentees are least served in: no bookable mentor
+    first, then most mentees per mentor, then by name. With no mentor the
+    ratio is unbounded, so those places tie and read by name."""
+
+    def need(place: SupplyPlace) -> tuple[bool, Fraction, str]:
+        served = place.bookable_mentors > 0
+        per_mentor = Fraction(place.mentees, place.bookable_mentors) if served else Fraction(0)
+        return served, -per_mentor, place.name
+
+    return sorted(places, key=need)[:TOP_PLACES]
 
 
 # --- Alerts ------------------------------------------------------------------

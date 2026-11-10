@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.api.deps.admin_analytics import AnalyticsCreditsDep, require_analytics_on
+from app.api.deps.admin_analytics import (
+    AnalyticsCreditsDep,
+    AnalyticsSupplyDep,
+    require_analytics_on,
+)
 from app.api.deps.core import PRIVATE_NO_STORE
 from app.api.routes.admin import ADMIN_RESPONSES
-from app.api.schemas.admin_analytics import AnalyticsCreditsRead
+from app.api.schemas.admin_analytics import AnalyticsCreditsRead, AnalyticsSupplyRead
 
 router = APIRouter(
     prefix="/api/v1/admin/analytics",
@@ -55,5 +59,35 @@ _RESPONSES = ADMIN_RESPONSES | {
     responses=_RESPONSES,
 )
 async def analytics_credits(read: AnalyticsCreditsDep, response: Response) -> AnalyticsCreditsRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return read
+
+
+@router.get(
+    "/supply",
+    response_model=AnalyticsSupplyRead,
+    summary="Analytics: mentor supply",
+    description=(
+        "Whether there are enough mentors, and where mentees go unserved.\n\n"
+        "**`cohort`**: mentor applications submitted in the window, profile and "
+        "account not deleted; `applied` is all of them, and `approved`, `listed` "
+        "and `bookable` how many are approved, approved and listed, and taking "
+        "bookings **now**. **`median_review_days`**: for approvals and declines "
+        "made in the window, the median days from submission to decision, one "
+        "decimal half up; an application never submitted is skipped; null with "
+        "none. **`unlisted`**: unlistings in the window, except those that come "
+        "with a decline or a deleted account.\n\n"
+        "**`by_country`** and **`by_school`**, now whatever the window: live "
+        "mentees aiming for each goal country, or catalogue school (approved, not "
+        "merged), against mentors taking bookings who guide that country, or have "
+        "an education entry at that school. `key` is the country's ISO code or the "
+        "school's id. Only places with a mentee, at most five: no bookable mentor "
+        "first, by name; then most mentees per mentor; then by name.\n\n"
+        "No change against the previous period: the tab shows none, so `compare` "
+        "changes nothing.\n\n" + _SECTION
+    ),
+    responses=_RESPONSES,
+)
+async def analytics_supply(read: AnalyticsSupplyDep, response: Response) -> AnalyticsSupplyRead:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return read
