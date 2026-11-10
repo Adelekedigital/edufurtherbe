@@ -1,5 +1,5 @@
 """What a mentor has actually done, derived every time it is asked — and the
-one mentee-side count, `received()`, which reads the same `_completed()` clause
+one mentee-side count, `received()`, which reads the same `completed()` clause
 so the two sides cannot disagree about what *completed* means.
 
 **Nothing here is stored, and D56 is why**: *"counts and ratios are derived at
@@ -106,6 +106,7 @@ __all__ = [
     "attended_by",
     "cancellations",
     "canceller",
+    "completed",
     "current_streak",
     "delivered",
     "held",
@@ -155,7 +156,7 @@ def delivered(mentor: Any) -> Any:
     Served by `ix_sessions_mentor_completed`, a partial index that existed from
     the M4 schema with no reader until the card.
     """
-    return and_(Session.mentor_id == mentor, _completed())
+    return and_(Session.mentor_id == mentor, completed())
 
 
 def received(mentee: Any) -> Any:
@@ -165,11 +166,12 @@ def received(mentee: Any) -> Any:
     reason: a dual-role user's sessions as a mentor are not sessions they
     received.
     """
-    return and_(Session.mentee_id == mentee, _completed())
+    return and_(Session.mentee_id == mentee, completed())
 
 
-def _completed() -> Any:
-    """What counts as a session that happened, for either side.
+def completed() -> Any:
+    """What counts as a session that happened, for either side; the admin
+    Analytics reads it platform-wide (decision 324).
 
     One clause so the two counts cannot drift — the day `completed` gains a
     sibling status that also means delivered, both sides change together.
