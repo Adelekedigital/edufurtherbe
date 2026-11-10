@@ -9,17 +9,25 @@ token is read, as previews are.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Query, Request
 
-from app.api.deps.core import QueueViewerDep, SessionDep, _configured
-from app.api.schemas.admin_analytics import AnalyticsCreditsRead
+from app.api.deps.core import BookingWindowDep, QueueViewerDep, SessionDep, _configured
+from app.api.schemas.admin_analytics import (
+    AnalyticsCreditsRead,
+    AnalyticsOverviewRead,
+    AnalyticsSessionsRead,
+    AnalyticsSupplyRead,
+)
 from app.core.errors import NotFoundError
-from app.domain.analytics import Alert, Period, resolve_compare, resolve_period
+from app.domain.analytics import Alert, Period, TabCache, resolve_compare, resolve_period
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
+from app.infra.db.analytics_supply import supply_tab
+from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
 
 def require_analytics_on(request: Request) -> None:
@@ -79,11 +87,68 @@ async def analytics_alerts(ask: AnalyticsAskDep, session: SessionDep) -> list[Al
 AlertsDep = Annotated[list[Alert], Depends(analytics_alerts)]
 
 
+async def _cached[T](
+    request: Request, tab: str, ask: AnalyticsAsk, compute: Callable[[], Awaitable[T]]
+) -> T:
+    """A tab's figures from this app's `TabCache`, or computed and kept."""
+    cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
+    if cache is None:
+        cache = request.app.state.analytics_cache = TabCache()
+    key = (tab, ask.period.first, ask.period.last, ask.compare)
+    hit = cache.get(key, ask.now)
+    if hit is not None:
+        return hit  # type: ignore[return-value]
+    value = await compute()
+    cache.put(key, value, ask.now)
+    return value
+
+
 async def analytics_credits(
-    ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+    request: Request, ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
 ) -> AnalyticsCreditsRead:
-    tab = await credits_tab(session, ask.period.window)
+    tab = await _cached(request, "credits", ask, lambda: credits_tab(session, ask.period.window))
     return AnalyticsCreditsRead.of(ask.period, alerts, tab)
 
 
 AnalyticsCreditsDep = Annotated[AnalyticsCreditsRead, Depends(analytics_credits)]
+
+
+async def analytics_overview(
+    request: Request,
+    ask: AnalyticsAskDep,
+    alerts: AlertsDep,
+    session: SessionDep,
+    booking_window: BookingWindowDep,
+) -> AnalyticsOverviewRead:
+    tab = await _cached(
+        request,
+        "overview",
+        ask,
+        lambda: overview_tab(session, ask.period, ask.compare, booking_window),
+    )
+    return AnalyticsOverviewRead.of(ask.period, alerts, tab)
+
+
+AnalyticsOverviewDep = Annotated[AnalyticsOverviewRead, Depends(analytics_overview)]
+
+
+async def analytics_sessions(
+    request: Request, ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+) -> AnalyticsSessionsRead:
+    tab = await _cached(
+        request, "sessions", ask, lambda: sessions_tab(session, ask.period, ask.compare)
+    )
+    return AnalyticsSessionsRead.of(ask.period, alerts, tab)
+
+
+AnalyticsSessionsDep = Annotated[AnalyticsSessionsRead, Depends(analytics_sessions)]
+
+
+async def analytics_supply(
+    request: Request, ask: AnalyticsAskDep, alerts: AlertsDep, session: SessionDep
+) -> AnalyticsSupplyRead:
+    tab = await _cached(request, "supply", ask, lambda: supply_tab(session, ask.period.window))
+    return AnalyticsSupplyRead.of(ask.period, alerts, tab)
+
+
+AnalyticsSupplyDep = Annotated[AnalyticsSupplyRead, Depends(analytics_supply)]

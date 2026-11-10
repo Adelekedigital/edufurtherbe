@@ -159,3 +159,20 @@ def test_alerts_come_newest_first() -> None:
         "no_booking_requests",
         "no_signups",
     ]
+
+
+def test_a_cached_tab_lives_until_cache_for_after_it_was_put() -> None:
+    cache = a.TabCache()
+    cache.put(("sessions", 1), "figures", NOW)
+    assert cache.get(("sessions", 1), NOW + a.CACHE_FOR - dt.timedelta(seconds=1)) == "figures"
+    assert cache.get(("sessions", 1), NOW + a.CACHE_FOR) is None
+    assert cache.get(("sessions", 2), NOW) is None
+
+
+def test_the_cache_drops_its_oldest_entry_past_its_size() -> None:
+    cache = a.TabCache()
+    for n in range(a.CACHE_SIZE + 1):
+        cache.put(("t", n), n, NOW)
+    assert cache.get(("t", 0), NOW) is None
+    assert cache.get(("t", 1), NOW) == 1
+    assert cache.get(("t", a.CACHE_SIZE), NOW) == a.CACHE_SIZE

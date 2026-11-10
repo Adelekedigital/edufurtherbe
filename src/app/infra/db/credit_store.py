@@ -93,11 +93,17 @@ async def expiring_on(
     return int(total or 0)
 
 
-def paying_sessions(mentee_id: UUID | None, *, roots: ColumnElement[bool] | None = None) -> CTE:
+def paying_sessions(
+    mentee_id: UUID | None,
+    *,
+    roots: ColumnElement[bool] | None = None,
+    name: str = "paying_sessions",
+) -> CTE:
     """Each of this mentee's sessions (every mentee's for ``None``, the admin
     Analytics, decision 324), beside the session whose debit paid for it.
     ``roots`` narrows which chains are walked, by a condition on their first
-    session, so a platform-wide read walks only the chains it needs.
+    session, so a platform-wide read walks only the chains it needs; ``name``
+    tells apart several chains declared in one statement.
 
     **The one statement of "which debit paid for a session"** (decision 300): a
     session paid for itself, unless a move made it, in which case the first
@@ -114,7 +120,7 @@ def paying_sessions(mentee_id: UUID | None, *, roots: ColumnElement[bool] | None
     chain = (
         select(Session.id.label("session_id"), Session.id.label("payer_id"))
         .where(*first)
-        .cte("paying_sessions", recursive=True)
+        .cte(name, recursive=True)
     )
     return chain.union_all(
         select(moved.id, chain.c.payer_id).join(
