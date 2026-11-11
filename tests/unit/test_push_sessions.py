@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 import pytest
@@ -24,13 +25,27 @@ from app.domain.push import (
 SID = UUID("00000000-0000-7000-8000-0000000000aa")
 
 
+def opens(url: str) -> str:
+    """Where a push leads, without its utm_* tags (decision 336 tests those)."""
+    parts = urlsplit(url)
+    kept = [(k, v) for k, v in parse_qsl(parts.query) if not k.startswith("utm_")]
+    return urlunsplit(parts._replace(query=urlencode(kept)))
+
+
 def push(
     notification: Notification, role: str = "mentor", *, moved: bool = False
 ) -> PushMessage | None:
     spec = session_push_spec(notification, recipient_role=role, moved=moved)
     if spec is None:
         return None
-    return session_push(spec, session_id=SID, other_name="Ada", unread=3, ttl=spec.ttl)
+    return session_push(
+        spec,
+        notification=notification,
+        session_id=SID,
+        other_name="Ada",
+        unread=3,
+        ttl=spec.ttl,
+    )
 
 
 @pytest.mark.parametrize(
@@ -93,7 +108,7 @@ def test_each_event_pushes_its_type_words_and_link(
     sent = push(notification, role)
 
     assert sent is not None
-    assert (sent.type, sent.body, sent.url, sent.tag, sent.badge) == (
+    assert (sent.type, sent.body, opens(sent.url), sent.tag, sent.badge) == (
         kind,
         body,
         url,
@@ -133,7 +148,7 @@ def test_a_moved_booking_pushes_as_a_change(
     sent = push(notification, moved=True)
 
     assert sent is not None
-    assert (sent.type, sent.body, sent.url) == (PushType.SESSION_CHANGED, body, url)
+    assert (sent.type, sent.body, opens(sent.url)) == (PushType.SESSION_CHANGED, body, url)
 
 
 def test_moved_only_changes_the_bookings() -> None:
@@ -146,7 +161,14 @@ def test_a_party_who_left_reads_with_a_capital() -> None:
     spec = session_push_spec(Notification.SESSION_CANCELLED, recipient_role="mentee", moved=False)
     assert spec is not None
 
-    sent = session_push(spec, session_id=SID, other_name="your mentor", unread=0, ttl=spec.ttl)
+    sent = session_push(
+        spec,
+        notification=Notification.SESSION_CANCELLED,
+        session_id=SID,
+        other_name="your mentor",
+        unread=0,
+        ttl=spec.ttl,
+    )
 
     assert sent.body == "Your mentor cancelled your session"
 
@@ -173,7 +195,7 @@ def test_ttl_and_urgency_stay_out_of_the_payload() -> None:
 def test_a_message_push_opens_the_chat_the_emails_link() -> None:
     sent = message_push(SID, "Ada", None, unread=1)
 
-    assert sent.url == f"/messages?with={SID}"
+    assert opens(sent.url) == f"/messages?with={SID}"
 
 
 def test_starting_soon_lives_no_longer_than_its_lead_before_the_start() -> None:

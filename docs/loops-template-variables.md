@@ -116,6 +116,8 @@ of that cost.
 mentor in Lagos and a mentee in Toronto. The outbox already stores one row per
 recipient, which is what makes this possible.
 
+Every `…Url` link above carries `utm_source=email&utm_medium=notification&utm_campaign=<emailType>` (decision 336), so a visit from an email is attributed to it. Templates use the variable as it is; never add tags by hand.
+
 **`sessionTimezone` is not optional.** The standing rule here is that instants go
 out as UTC and are never rendered server-side, because a cross-timezone session
 has no single local time. Email forces the exception — it cannot render
