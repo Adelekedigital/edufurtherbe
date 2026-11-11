@@ -216,6 +216,7 @@ async def test_the_analytics_drain_never_touches_an_email_row(db_engine: AsyncEn
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_pending_events_go_in_batches_of_a_hundred_oldest_first(
     db_engine: AsyncEngine,
 ) -> None:

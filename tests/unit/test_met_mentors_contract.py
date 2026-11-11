@@ -7,17 +7,16 @@ no default is true.
 
 from __future__ import annotations
 
-import pytest
+from typing import Any
 
-from app.core.config import Settings
-from app.main import create_app
+import pytest
 
 REQUIRED = {"id", "last_session_at", "bookability"}
 
 
-@pytest.fixture(scope="module")
-def schemas() -> dict[str, dict[str, object]]:
-    return create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]  # type: ignore[call-arg, no-any-return]
+@pytest.fixture
+def schemas(openapi_spec: dict[str, Any]) -> dict[str, dict[str, object]]:
+    return openapi_spec["components"]["schemas"]  # type: ignore[no-any-return]
 
 
 def test_exactly_the_identity_the_order_and_the_state_are_required(
@@ -26,8 +25,10 @@ def test_exactly_the_identity_the_order_and_the_state_are_required(
     assert set(schemas["MetMentorRead"].get("required", [])) == REQUIRED  # type: ignore[call-overload]
 
 
-def test_the_list_is_a_typed_page_on_me_mentors(schemas: dict[str, dict[str, object]]) -> None:
-    spec = create_app(Settings(_env_file=None)).openapi()  # type: ignore[call-arg]
+def test_the_list_is_a_typed_page_on_me_mentors(
+    schemas: dict[str, dict[str, object]], openapi_spec: dict[str, Any]
+) -> None:
+    spec = openapi_spec
     ok = spec["paths"]["/api/v1/me/mentors"]["get"]["responses"]["200"]
     ref = ok["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
     data = schemas[ref]["properties"]["data"]  # type: ignore[index]

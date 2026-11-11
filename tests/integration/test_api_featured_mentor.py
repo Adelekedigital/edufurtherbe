@@ -128,6 +128,7 @@ async def test_a_mentor_who_is_not_bookable_is_never_picked(db_engine: AsyncEngi
     assert picks == {bookable}
 
 
+@pytest.mark.isolated_db
 async def test_two_first_requests_agree(db_engine: AsyncEngine) -> None:
     """The week's first two requests arriving together must not each pick."""
     for n in range(5):

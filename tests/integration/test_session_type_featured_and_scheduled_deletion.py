@@ -242,6 +242,7 @@ async def test_another_mentors_offering_cannot_be_featured(
     assert await column(db_engine, theirs, "is_featured") is False
 
 
+@pytest.mark.isolated_db
 async def test_two_features_at_once_serialise(db_engine: AsyncEngine) -> None:
     """**The mentor-wide lock.** Two requests featuring two different offerings
     of one mentor: without it both clear "the others", both set their own, and

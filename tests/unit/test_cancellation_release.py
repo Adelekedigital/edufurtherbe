@@ -16,16 +16,15 @@ calendar.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.core.config import Settings
 from app.domain.availability import unavailable_windows
 from app.domain.enums import SessionRole, SessionStatus
 from app.domain.sessions import records_unavailability
 from app.infra.db.models.sessions import FREES_THE_HOUR, LIVE_STATUSES
-from app.main import create_app
 
 LAGOS = "Africa/Lagos"  # No DST, ever — so a local time can be written down.
 NEW_YORK = "America/New_York"
@@ -215,13 +214,13 @@ def test_every_freed_status_is_one_the_constraint_also_ignores() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_only_cancelling_advertises_the_question() -> None:
+def test_only_cancelling_advertises_the_question(openapi_spec: dict[str, Any]) -> None:
     """**`accept` must not gain a field policy would have to ignore.**
 
     Its own docstring names that as the thing to avoid, which is why cancelling
     has its own model rather than a field on the one all four transitions share.
     """
-    models = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]
+    models = openapi_spec["components"]["schemas"]
 
     assert "release_slot" in models["SessionCancellationWrite"]["properties"]
     assert "release_slot" not in models["SessionTransitionWrite"]["properties"]
@@ -229,12 +228,12 @@ def test_only_cancelling_advertises_the_question() -> None:
     assert "required" not in models["SessionTransitionWrite"]
 
 
-def test_cancelling_defaults_to_freeing_the_hour() -> None:
+def test_cancelling_defaults_to_freeing_the_hour(openapi_spec: dict[str, Any]) -> None:
     """The default is the failure you can see.
 
     An hour offered while the mentor is busy arrives as a booking they can
     decline; an hour withheld while they are free arrives as nothing at all.
     """
-    models = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]
+    models = openapi_spec["components"]["schemas"]
 
     assert models["SessionCancellationWrite"]["properties"]["release_slot"]["default"] is True

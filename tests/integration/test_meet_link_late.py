@@ -284,6 +284,7 @@ class LosesTheRace(FakeCalendar):
             )
 
 
+@pytest.mark.isolated_db
 async def test_a_refused_patch_still_hands_over_the_meet_someone_else_stored(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

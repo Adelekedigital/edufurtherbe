@@ -124,6 +124,7 @@ async def test_three_websites_fit_and_a_fourth_is_a_409(
     assert response.json()["limit"] == 3
 
 
+@pytest.mark.isolated_db
 async def test_websites_arriving_together_never_exceed_three(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -139,6 +140,7 @@ async def test_websites_arriving_together_never_exceed_three(
     assert len((await api_client.get(LINKS, headers=headers)).json()["data"]) == 3
 
 
+@pytest.mark.isolated_db
 async def test_the_same_platform_arriving_twice_together_lands_once(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

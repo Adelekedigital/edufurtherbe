@@ -741,6 +741,7 @@ async def test_the_list_comes_back_in_the_envelope(world: World) -> None:
     assert body["next_cursor"] is None
 
 
+@pytest.mark.isolated_db
 async def test_two_taps_produce_one_review(world: World, db_engine: AsyncEngine) -> None:
     """**The pre-check races, and the constraint is what actually decides.**
 
@@ -862,6 +863,7 @@ async def test_clearing_the_optional_feedback_is_still_allowed(world: World) -> 
     assert response.status_code == 200
 
 
+@pytest.mark.isolated_db
 async def test_a_withdrawal_landing_mid_edit_wins(world: World, db_engine: AsyncEngine) -> None:
     """**The scope belongs in the UPDATE, not only in the SELECT before it.**
 

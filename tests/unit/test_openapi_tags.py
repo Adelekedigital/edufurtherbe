@@ -11,13 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.config import Settings
-from app.main import create_app
-
-
-def spec() -> dict[str, Any]:
-    return dict(create_app(Settings(_env_file=None)).openapi())
-
 
 def used_tags(document: dict[str, Any]) -> set[str]:
     return {
@@ -32,34 +25,34 @@ def described_tags(document: dict[str, Any]) -> set[str]:
     return {tag["name"] for tag in document.get("tags", ())}
 
 
-def test_every_tag_on_a_route_is_described() -> None:
+def test_every_tag_on_a_route_is_described(openapi_spec: dict[str, Any]) -> None:
     """A tag with no description renders as a bare heading with the endpoints
     beneath it and nothing saying what they have in common — which is precisely
     where a reader looks first when the grouping is the only structure the page
     has."""
-    document = spec()
+    document = openapi_spec
 
     assert used_tags(document) - described_tags(document) == set()
 
 
-def test_every_description_belongs_to_a_tag_in_use() -> None:
+def test_every_description_belongs_to_a_tag_in_use(openapi_spec: dict[str, Any]) -> None:
     """The other direction, and the one that rots quietly. A description left
     behind by a rename or a removed router documents a section of the API that
     no longer exists, which is worse than an undescribed one: it is confidently
     wrong rather than merely thin."""
-    document = spec()
+    document = openapi_spec
 
     assert described_tags(document) - used_tags(document) == set()
 
 
-def test_a_mentors_own_offerings_are_their_own_tag() -> None:
+def test_a_mentors_own_offerings_are_their_own_tag(openapi_spec: dict[str, Any]) -> None:
     """**Settled decision #64: everything outside the catalogue takes its domain
     name.** These lived under `users` while the surface was one list, and the
     module said at the time that a tag "may still earn its place once `DELETE`
     joins them". It has, along with `POST`, `PATCH` and the four intake
     endpoints — eight, against `users`' own handful.
     """
-    document = spec()
+    document = openapi_spec
 
     assert "session-types" in used_tags(document)
     offerings = [

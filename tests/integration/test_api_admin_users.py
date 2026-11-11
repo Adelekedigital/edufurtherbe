@@ -393,6 +393,7 @@ async def plan_of(engine: AsyncEngine, **kwargs: Any) -> str:
     return "\n".join(row[0] for row in rows)
 
 
+@pytest.mark.isolated_db
 async def test_the_plan_at_five_thousand_users(db_engine: AsyncEngine) -> None:
     """Recorded in decision 310: at 5,000 users the admin exclusion is one anti
     join, never a subplan per row, and the page is a bounded top-N sort."""

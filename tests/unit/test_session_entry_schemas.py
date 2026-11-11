@@ -12,13 +12,10 @@ from typing import Any
 
 import pytest
 
-from app.core.config import Settings
-from app.main import create_app
 
-
-@pytest.fixture(scope="module")
-def document() -> dict[str, Any]:
-    return dict(create_app(Settings(_env_file=None)).openapi())
+@pytest.fixture
+def document(openapi_spec: dict[str, Any]) -> dict[str, Any]:
+    return openapi_spec
 
 
 @pytest.mark.parametrize(

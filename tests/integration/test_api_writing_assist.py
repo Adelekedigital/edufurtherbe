@@ -526,6 +526,7 @@ async def test_a_refused_request_does_not_count(
     assert await calls_of(db_engine, person) == 0
 
 
+@pytest.mark.isolated_db
 async def test_the_count_reads_the_index(db_engine: AsyncEngine) -> None:
     """The guardrail, on the statement the limit really runs (captured, then
     EXPLAINed with its own parameters), at a row count far past real use."""
@@ -568,6 +569,7 @@ async def test_the_count_reads_the_index(db_engine: AsyncEngine) -> None:
     assert "Seq Scan on writing_assist_requests" not in plan, plan
 
 
+@pytest.mark.isolated_db
 async def test_two_presses_at_once_cannot_both_pass_the_limit(db_engine: AsyncEngine) -> None:
     """The count and the insert are serialized per user and field: the second
     waits for the first to commit, then sees its row and is refused."""

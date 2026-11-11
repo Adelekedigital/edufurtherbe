@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -181,12 +182,10 @@ def test_the_booking_contract_lists_the_entry_points() -> None:
     assert "messages" not in published
 
 
-def test_the_consent_answer_is_optional_on_me() -> None:
+def test_the_consent_answer_is_optional_on_me(openapi_spec: dict[str, Any]) -> None:
     """Not in `/me`'s required list, as the other optional fields are not: the
     frontend's type-checked `/me` mock would break otherwise."""
-    from app.main import create_app
-
-    schema = create_app().openapi()["components"]["schemas"]["UserRead"]
+    schema = openapi_spec["components"]["schemas"]["UserRead"]
 
     assert "analytics_consent" in schema["properties"]
     assert "analytics_consent" not in schema.get("required", [])

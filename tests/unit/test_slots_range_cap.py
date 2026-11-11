@@ -9,6 +9,7 @@ real pair rather than reasoned about.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -50,17 +51,16 @@ def test_a_padded_request_covers_the_whole_window_from_any_zone(
     assert (end - start).days <= window.range_cap_days
 
 
-def test_the_published_422_quotes_the_enforced_cap() -> None:
+def test_the_published_422_quotes_the_enforced_cap(openapi_spec: dict[str, Any]) -> None:
     """The spec's number comes from `range_cap_days`, not a retyped literal."""
     from app.core.config import Settings
-    from app.main import create_app
 
     settings = Settings(_env_file=None)
     cap = BookingWindow(
         max_days=settings.max_booking_window_days,
         default_days=settings.default_booking_window_days,
     ).range_cap_days
-    spec = create_app(settings).openapi()
+    spec = openapi_spec
     slots = next(ops["get"] for path, ops in spec["paths"].items() if path.endswith("/slots"))
 
     text = slots["responses"]["422"]["description"]

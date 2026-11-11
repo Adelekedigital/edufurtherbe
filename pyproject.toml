@@ -214,6 +214,7 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: deselect with '-m \"not slow\"'",
     "db: needs a live PostgreSQL; set TEST_DATABASE_URL or these skip",
+    "isolated_db: a database copied for this test instead of a rolled-back transaction on the shared one (tests/savepoint.py)",
 ]
 
 [tool.coverage.run]

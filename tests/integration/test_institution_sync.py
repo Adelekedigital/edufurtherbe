@@ -137,6 +137,7 @@ async def test_a_record_with_no_web_page_still_lands(db_engine: AsyncEngine) -> 
     assert page.scalar_one() is None
 
 
+@pytest.mark.isolated_db
 async def test_a_second_sync_stamps_but_does_not_churn_updated_at(
     db_engine: AsyncEngine,
 ) -> None:
@@ -170,6 +171,7 @@ async def test_a_second_sync_stamps_but_does_not_churn_updated_at(
     assert total.scalar_one() == 6, "a re-sync duplicated rows"
 
 
+@pytest.mark.isolated_db
 async def test_a_collapsed_domain_does_not_churn_updated_at(
     db_engine: AsyncEngine,
 ) -> None:

@@ -93,6 +93,7 @@ async def test_a_backlog_larger_than_one_batch_is_cleared(db_engine: AsyncEngine
     assert not [n for n in names if await present(db_engine, n)]
 
 
+@pytest.mark.isolated_db
 async def test_a_reclaim_in_flight_survives_the_sweep(db_engine: AsyncEngine) -> None:
     """The race the outer `WHERE` exists for.
 

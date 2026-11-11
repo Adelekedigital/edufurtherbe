@@ -175,6 +175,7 @@ async def test_a_reason_of_exactly_500_characters_is_taken(
     assert response.status_code == 200, response.text
 
 
+@pytest.mark.isolated_db
 async def test_a_second_reveal_changes_and_logs_nothing(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -267,6 +268,7 @@ async def test_a_reveal_without_the_permission_is_404_before_its_body_is_read(
     assert response.status_code == 404
 
 
+@pytest.mark.isolated_db
 async def test_a_reveal_is_for_the_current_user_only(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -304,6 +306,7 @@ async def test_the_reveal_body_is_its_own_component() -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_preview_hides_message_contents_until_revealed(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -358,6 +361,7 @@ async def test_outside_a_preview_nothing_is_hidden(
     assert inbox["data"][0]["last"]["hidden_in_preview"] is False
 
 
+@pytest.mark.isolated_db
 async def test_a_masked_preview_downloads_no_file_until_revealed(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -379,6 +383,7 @@ async def test_a_masked_preview_downloads_no_file_until_revealed(
     assert await blocked(db_engine, preview) == []
 
 
+@pytest.mark.isolated_db
 async def test_a_send_in_a_preview_is_refused_and_stores_nothing(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -396,6 +401,7 @@ async def test_a_send_in_a_preview_is_refused_and_stores_nothing(
     assert count == 0
 
 
+@pytest.mark.isolated_db
 async def test_reading_chats_in_a_preview_marks_nothing_read(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

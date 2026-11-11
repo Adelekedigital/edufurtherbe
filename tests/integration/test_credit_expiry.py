@@ -507,6 +507,7 @@ async def test_an_aware_now_in_another_zone_reads_the_same_instant(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_spend_landing_mid_sweep_does_not_inflate_the_delta(
     db_engine: AsyncEngine,
 ) -> None:

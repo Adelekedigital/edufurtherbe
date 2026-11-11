@@ -144,6 +144,7 @@ async def test_another_account_on_the_browser_takes_it_over_with_its_keys(
     assert status.json() == {"subscribed": False}
 
 
+@pytest.mark.isolated_db
 async def test_past_the_cap_the_least_recently_subscribed_browser_goes(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -280,6 +281,7 @@ async def test_a_purged_account_loses_its_browsers(
     assert len(await rows(db_engine, endpoint=others)) == 1
 
 
+@pytest.mark.isolated_db
 async def test_in_a_preview_the_status_read_is_refused_and_logged(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)

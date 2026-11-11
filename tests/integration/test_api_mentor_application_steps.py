@@ -28,6 +28,7 @@ async def headers(engine: AsyncEngine, user: UUID) -> dict[str, str]:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_an_approved_mentor_marks_the_approval_seen_once(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

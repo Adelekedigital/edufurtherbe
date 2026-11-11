@@ -346,6 +346,7 @@ async def test_an_unknown_study_country_is_a_422_beside_them(
     assert await _stored(db_engine, mentor) == []
 
 
+@pytest.mark.isolated_db
 async def test_replacements_arriving_together_each_land_whole(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

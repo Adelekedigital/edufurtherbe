@@ -8,10 +8,9 @@ the spec does not yet know. Optional, and always sent (FE, 2026-10-09).
 
 from __future__ import annotations
 
-import pytest
+from typing import Any
 
-from app.core.config import Settings
-from app.main import create_app
+import pytest
 
 #: Each schema, and the fields added to it after the frontend first consumed it.
 ADDED = {
@@ -159,8 +158,10 @@ ADDED = {
 
 
 @pytest.mark.parametrize(("schema", "fields"), ADDED.items())
-def test_an_added_field_is_not_required(schema: str, fields: tuple[str, ...]) -> None:
-    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"][schema]  # type: ignore[call-arg]
+def test_an_added_field_is_not_required(
+    schema: str, fields: tuple[str, ...], openapi_spec: dict[str, Any]
+) -> None:
+    spec = openapi_spec["components"]["schemas"][schema]
 
     assert set(fields) <= set(spec["properties"])
     assert not set(fields) & set(spec.get("required", []))
@@ -177,7 +178,9 @@ NO_DEFAULT = {
 
 
 @pytest.mark.parametrize(("schema", "fields"), NO_DEFAULT.items())
-def test_an_added_field_publishes_no_default(schema: str, fields: tuple[str, ...]) -> None:
-    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"][schema]  # type: ignore[call-arg]
+def test_an_added_field_publishes_no_default(
+    schema: str, fields: tuple[str, ...], openapi_spec: dict[str, Any]
+) -> None:
+    spec = openapi_spec["components"]["schemas"][schema]
 
     assert not [field for field in fields if "default" in spec["properties"][field]]

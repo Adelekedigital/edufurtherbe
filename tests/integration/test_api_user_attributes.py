@@ -489,6 +489,7 @@ async def test_a_non_mentor_has_no_mentor_profile(
     assert response.status_code == 404
 
 
+@pytest.mark.isolated_db
 async def test_a_mentor_profile_comes_back_with_its_offerings(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

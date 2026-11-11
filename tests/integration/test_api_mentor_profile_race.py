@@ -23,6 +23,7 @@ from conftest import bearer
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 
+@pytest.mark.isolated_db
 async def test_offering_replacements_arriving_together_each_land_whole(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

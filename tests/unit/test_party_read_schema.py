@@ -6,15 +6,15 @@ schema to what it was before, compared as data, so key order is free.
 """
 
 import json
+from typing import Any
 
-from app.main import create_app
 from conftest import PROJECT_ROOT
 
 FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "party_read_schema.json"
 
 
-def test_a_session_party_s_published_shape_is_unchanged() -> None:
-    published = create_app().openapi()["components"]["schemas"]["PartyRead"]
+def test_a_session_party_s_published_shape_is_unchanged(openapi_spec: dict[str, Any]) -> None:
+    published = openapi_spec["components"]["schemas"]["PartyRead"]
 
     assert published == json.loads(FIXTURE.read_text(encoding="utf-8"))
 

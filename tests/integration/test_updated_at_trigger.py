@@ -15,7 +15,8 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+# DDL (a probe table and trigger) and `now()` moving between updates.
+pytestmark = [pytest.mark.db, pytest.mark.asyncio, pytest.mark.isolated_db]
 
 LEGACY_TIMESTAMP = datetime(2019, 5, 5, 10, 0, 0, tzinfo=UTC)
 

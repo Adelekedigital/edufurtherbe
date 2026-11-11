@@ -310,6 +310,7 @@ async def test_a_closed_account_gets_no_unread_email(world: World) -> None:
     assert (await fire(world, mentor)).json() == {"queued": False}
 
 
+@pytest.mark.isolated_db
 async def test_a_duplicate_delivery_sends_one_email(world: World) -> None:
     mentor, mentee = await pair(world.engine, "twice")
     await said(world, mentee, mentor)
@@ -348,6 +349,7 @@ async def _message(engine: AsyncEngine, chat: UUID, sender: Person) -> None:
         )
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("another_arrives", [False, True])
 async def test_two_jobs_at_once_queue_one_email(
     db_engine: AsyncEngine, another_arrives: bool

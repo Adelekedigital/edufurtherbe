@@ -185,6 +185,7 @@ async def test_a_retired_need_is_a_422_at_its_index(
     assert saved.status_code == 200, saved.text
 
 
+@pytest.mark.isolated_db
 async def test_first_goals_arriving_together_make_one_whole_goal(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -209,6 +210,7 @@ async def test_first_goals_arriving_together_make_one_whole_goal(
     assert {"notes": notes, "country_ids": stored} in bodies
 
 
+@pytest.mark.isolated_db
 async def test_replacements_arriving_together_each_land_whole(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

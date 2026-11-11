@@ -766,6 +766,7 @@ async def test_the_constraint_holds_under_a_non_utc_session_timezone(
         )
 
 
+@pytest.mark.isolated_db
 async def test_two_transactions_racing_for_one_slot_leave_exactly_one_winner(
     db_engine: AsyncEngine,
 ) -> None:
