@@ -22,7 +22,13 @@ from app.domain.message_emails import (
     unread_email,
     unread_kind,
 )
-from app.domain.messages import MessageContext, UnresolvedVariableError, build_variables
+from app.domain.messages import (
+    EMAIL_SOURCE,
+    MessageContext,
+    UnresolvedVariableError,
+    build_variables,
+    tracked,
+)
 from app.domain.notifications import Notification
 
 NOW = dt.datetime(2026, 10, 28, 14, 0, tzinfo=dt.UTC)
@@ -71,6 +77,11 @@ def lines(values: dict[str, str], kind: Notification) -> dict[str, str]:
 
 
 FEW_KIND = Notification.MESSAGE_UNREAD_FEW
+
+
+def emailed(url: str, kind: Notification) -> str:
+    """``url`` as an email of ``kind`` links it (decision 336)."""
+    return tracked(url, source=EMAIL_SOURCE, campaign=kind)
 
 
 def test_two_messages_are_few_and_three_are_many() -> None:
@@ -235,15 +246,16 @@ def test_the_few_email_resolves_every_name_in_the_recipients_zone() -> None:
     assert built["message1Time"] == "3:00 PM"  # 14:00 UTC in Lagos.
     assert built["message2Name"] == ""
     assert built["message2Time"] == ""
-    assert built["buttonUrl"] == f"https://app.example.test/messages?with={ADA}"
-    assert built["settingsUrl"] == "https://app.example.test/messages?settings=1"
-    assert built["messagesUrl"] == "https://app.example.test/messages"
+    assert built["buttonUrl"] == emailed(f"https://app.example.test/messages?with={ADA}", FEW_KIND)
+    assert built["settingsUrl"] == emailed("https://app.example.test/messages?settings=1", FEW_KIND)
+    assert built["messagesUrl"] == emailed("https://app.example.test/messages", FEW_KIND)
 
 
 def test_two_people_get_the_inbox_link() -> None:
     values = unread_email([said("One"), said("Two", sender=BEN, minutes=1)])
     assert build_variables(["buttonUrl"], context(values, notification=FEW_KIND))["buttonUrl"] == (
         "https://app.example.test/messages"
+        "?utm_source=email&utm_medium=notification&utm_campaign=message_unread_few"
     )
 
 
@@ -270,7 +282,9 @@ def test_the_instant_email_resolves_with_its_session() -> None:
     assert built["sessionName"] == "CV review"
     assert built["sessionDuration"] == "45 min"
     assert built["sessionTime"] == "3:00 PM"
-    assert built["sessionUrl"] == "https://app.example.test/sessions/s-1"
+    assert built["sessionUrl"] == emailed(
+        "https://app.example.test/sessions/s-1", Notification.MESSAGE_IN_SESSION_WINDOW
+    )
 
 
 def test_a_message_email_name_on_another_email_is_refused() -> None:
