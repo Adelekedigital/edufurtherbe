@@ -24,6 +24,7 @@ import pytest_asyncio
 import uvicorn
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import SecretStr
@@ -370,6 +371,85 @@ def migrated_database(admin_database_url: str, migrated_template: str) -> Iterat
     """
     with _scratch_database(admin_database_url, "test", migrated_template) as name:
         yield _database_url(admin_database_url, name)
+
+
+class RevisionTemplates:
+    """One migrated database per revision a migration test starts from, per worker.
+
+    **Why.** A migration test upgrades an empty database to the revision before
+    the one it tests, seeds rows, then runs that migration. Running the chain to
+    get there cost up to six seconds a test, for a state that is the same every
+    time. Each revision's state is built here once, and every later test copies
+    it with ``CREATE DATABASE ... TEMPLATE``, as ``migrated_template`` does for
+    head.
+
+    A revision is built from the nearest one already built below it, so a
+    worker runs the chain about once in all, not once per revision. The state is
+    exactly what the chain produces, because the chain produced it.
+    """
+
+    def __init__(self, admin_url: str) -> None:
+        self._admin_url = admin_url
+        self._script = ScriptDirectory.from_config(_alembic_config(admin_url))
+        self._built: dict[str, str] = {}
+
+    def template(self, revision: str) -> str:
+        """The template database at ``revision`` (an id or ``head``), built if new."""
+        target = self._script.get_revision(revision).revision
+        if target in self._built:
+            return self._built[target]
+        below = (r.revision for r in self._script.iterate_revisions(target, "base"))
+        start = next((r for r in below if r in self._built), None)
+        name = f"rev_{uuid.uuid4().hex[:16]}"
+        asyncio.run(_create_database(self._admin_url, name, self._built[start] if start else None))
+        try:
+            command.upgrade(_alembic_config(_database_url(self._admin_url, name)), target)
+            asyncio.run(_terminate_connections(self._admin_url, name))
+        except BaseException:
+            asyncio.run(_drop_database(self._admin_url, name))
+            raise
+        self._built[target] = name
+        return name
+
+    def drop_all(self) -> None:
+        for name in self._built.values():
+            asyncio.run(_drop_database(self._admin_url, name))
+
+
+@pytest.fixture(scope="session")
+def revision_templates(admin_database_url: str) -> Iterator[RevisionTemplates]:
+    templates = RevisionTemplates(admin_database_url)
+    try:
+        yield templates
+    finally:
+        templates.drop_all()
+
+
+@pytest.fixture
+def migrate_to(
+    admin_database_url: str, revision_templates: RevisionTemplates
+) -> Callable[[str, str], None]:
+    """``migrate_to(disposable_database, REVISION)``: the chain applied, copied in.
+
+    The same as ``command.upgrade(make_alembic_config(url), REVISION)`` on the
+    empty database ``disposable_database`` yields, and only that: the database
+    is replaced by a copy of the revision's template under the same name, so the
+    URL the test holds keeps working. Refuses a database the chain has touched,
+    since replacing it would discard what the test put there.
+
+    A test of the chain itself (from nothing, or back to nothing) keeps calling
+    ``command.upgrade`` on ``disposable_database``.
+    """
+
+    def migrate(url: str, revision: str) -> None:
+        if not asyncio.run(run_sql(url, "SELECT to_regclass('alembic_version') IS NULL")):
+            raise AssertionError(f"migrate_to wants an empty database; {url} has been migrated")
+        name = url.rpartition("/")[2]
+        template = revision_templates.template(revision)
+        asyncio.run(_drop_database(admin_database_url, name))
+        asyncio.run(_create_database(admin_database_url, name, template))
+
+    return migrate
 
 
 @pytest.fixture(scope="session")

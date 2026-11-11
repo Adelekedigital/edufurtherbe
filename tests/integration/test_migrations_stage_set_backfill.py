@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -80,10 +80,10 @@ def stored(url: str, index: int) -> tuple[list[Any], list[Any]]:
 
 
 def test_a_type_staged_only_in_the_column_gets_its_set_row(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     seed(disposable_database)
 
     command.upgrade(config, REVISION)
@@ -99,11 +99,11 @@ def test_a_type_staged_only_in_the_column_gets_its_set_row(
 
 
 def test_running_it_twice_adds_nothing(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Idempotent: once a type has its row, a rerun finds nothing to copy."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     seed(disposable_database)
     command.upgrade(config, REVISION)
     command.downgrade(config, PREVIOUS)

@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, scalar
 
 pytestmark = pytest.mark.db
 
@@ -20,11 +20,10 @@ COLUMN = (
 
 
 def test_reminder_sent_at_is_a_nullable_instant(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Null is "no reminder sent", which is true of every existing row."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     assert scalar(disposable_database, COLUMN) == 1
     assert scalar(
@@ -35,10 +34,10 @@ def test_reminder_sent_at_is_a_nullable_instant(
 
 
 def test_the_downgrade_removes_the_column(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     command.downgrade(config, PREVIOUS)
 

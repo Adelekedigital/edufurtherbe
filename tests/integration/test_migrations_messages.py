@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.chats import BODY_MAX_LENGTH
 
@@ -87,17 +87,17 @@ def attachment(
     )
 
 
-def upgraded(url: str, config_factory: ConfigFactory) -> None:
-    command.upgrade(config_factory(url), REVISION)
+def upgraded(url: str, migrate_to: MigrateTo) -> None:
+    migrate_to(url, REVISION)
     execute(url, SEED)
 
 
 def test_two_people_have_one_chat_whichever_is_the_mentor(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The pair is unordered: the same two people reversed are refused, and
     nobody chats with themselves. Another pair is free."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(Exception, match="uq_conversations_pair"):
         execute(disposable_database, chat(MENTOR, MENTEE))
@@ -112,12 +112,10 @@ def test_two_people_have_one_chat_whichever_is_the_mentor(
     assert scalar(disposable_database, "SELECT count(*) FROM conversations") == 2
 
 
-def test_a_client_id_lands_once_per_sender(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_a_client_id_lands_once_per_sender(disposable_database: str, migrate_to: MigrateTo) -> None:
     """A retried send is refused by `(sender_id, client_id)`; the other person
     may reuse the value, and imported messages carry none."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, message())
 
     with pytest.raises(Exception, match="uq_messages_sender_client"):
@@ -137,9 +135,9 @@ def test_a_client_id_lands_once_per_sender(
 
 
 def test_a_message_body_is_bounded_and_text_has_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     execute(disposable_database, message(f"repeat('x', {BODY_MAX_LENGTH})"))
     with pytest.raises(Exception, match="ck_messages_body_length"):
@@ -160,9 +158,9 @@ def test_a_message_body_is_bounded_and_text_has_one(
 
 
 def test_an_attachment_waits_unsent_and_a_message_holds_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, message(None, kind="attachment"))
     sent = scalar(disposable_database, "SELECT id FROM messages")
 
@@ -193,11 +191,11 @@ def test_an_attachment_waits_unsent_and_a_message_holds_one(
 
 
 def test_a_chat_takes_its_rows_with_it_and_people_cannot_be_deleted_out_from_under_it(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Every child of a chat cascades from it; a sender, a pair member and an
     uploader restrict."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(
         disposable_database,
         PARTICIPANT_ROW.format(CHAT, MENTOR),
@@ -235,11 +233,11 @@ def test_a_chat_takes_its_rows_with_it_and_people_cannot_be_deleted_out_from_und
 
 
 def test_the_constraints_name_the_bounds_the_code_reads(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The migration spells the bound and the pair out; this pins them to the
     constant the API reads and to the unordered pair ADR 0010 promises."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     body = scalar(
         disposable_database,
@@ -266,11 +264,9 @@ def test_the_constraints_name_the_bounds_the_code_reads(
     assert thread.endswith("(conversation_id, sent_at, id)")
 
 
-def test_updated_at_moves_on_every_table(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_updated_at_moves_on_every_table(disposable_database: str, migrate_to: MigrateTo) -> None:
     """Each table has the trigger, so an `UPDATE` drags `updated_at` forward."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(
         disposable_database,
         PARTICIPANT_ROW.format(CHAT, MENTEE),
@@ -294,10 +290,10 @@ def test_updated_at_moves_on_every_table(
 
 
 def test_the_downgrade_removes_the_tables_and_refuses_over_rows(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(RuntimeError, match="conversations is not empty"):
         command.downgrade(config, PREVIOUS)

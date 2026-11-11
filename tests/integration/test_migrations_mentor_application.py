@@ -10,7 +10,7 @@ import json
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -70,13 +70,13 @@ def _stamps(url: str) -> dict[str, list[bool | None]]:
 
 
 def test_existing_mentors_count_as_submitted_and_only_approved_ones_as_seen(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Every existing profile was an application under the old rule (creating it
     alerted admins), so it is submitted. Only an approved one has been seen: a
     pending one marked seen would never show the approved screen."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, _MENTOR.format(email="ok@example.test", status="approved"))
     execute(disposable_database, _MENTOR.format(email="wait@example.test", status="pending"))
     execute(disposable_database, _MENTOR.format(email="no@example.test", status="declined"))
@@ -91,12 +91,12 @@ def test_existing_mentors_count_as_submitted_and_only_approved_ones_as_seen(
 
 
 def test_the_backfill_and_the_renames_leave_updated_at_alone(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`updated_at` carries Bubble's Modified Date and the featured pick's
     freshness; a backfill that moved it would make every mentor look edited today."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, _MENTOR.format(email="ok@example.test", status="approved"))
     offerings_before = scalar(disposable_database, _OFFERINGS_UPDATED)
 
@@ -109,20 +109,20 @@ def test_the_backfill_and_the_renames_leave_updated_at_alone(
 
 
 def test_a_profile_created_after_the_migration_is_neither_submitted_nor_seen(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, _MENTOR.format(email="new@example.test", status="pending"))
 
     assert _stamps(disposable_database) == {"new@example.test": [None, None]}
 
 
 def test_the_help_areas_are_renamed_to_sentence_case_and_back(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """All six by slug: a typo in one slug would rename nothing and pass a count."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, _MENTOR.format(email="ok@example.test", status="approved"))
     assert _names(disposable_database) == TITLE_CASE
 
@@ -162,13 +162,13 @@ _MENTOR_AT = (
 
 
 def test_an_application_made_before_b2_or_that_alerted_admins_counts_as_submitted(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`c7d4a2e9f1b6`: until #492 merged, creating a profile was applying, alert
     or not (none went out when nobody could decide it). After it, only an alert
     from the old code still deploying proves one; a draft is left unsubmitted."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     before, after = "2026-10-18 20:00:00+00", "2026-10-18 20:30:00+00"
     rows = {
         "quiet-before@example.test": ("pending", before, False),

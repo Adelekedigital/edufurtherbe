@@ -8,7 +8,7 @@ insert.
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.notifications import Channel
 
@@ -29,18 +29,18 @@ DESTINATIONS = "SELECT string_agg(destination, ',' ORDER BY destination) FROM ou
 
 
 def test_a_row_naming_no_destination_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
 
     with pytest.raises(asyncpg.NotNullViolationError):
         execute(disposable_database, UNNAMED)
 
 
 def test_a_row_naming_its_destination_keeps_it(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
 
     execute(disposable_database, NAMED)
 
@@ -48,10 +48,10 @@ def test_a_row_naming_its_destination_keeps_it(
 
 
 def test_downgrade_restores_the_package_default(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, NAMED)
     command.downgrade(config, PREVIOUS)
 

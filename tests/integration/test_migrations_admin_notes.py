@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.admin_notes import NOTE_BODY_MAX_LENGTH
 
@@ -40,13 +40,10 @@ def note(body: str, mentor: str = MENTOR, author: str = ADMIN) -> str:
     return NOTE.format(mentor, author, body)
 
 
-def test_the_table_carries_its_invariants(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_the_table_carries_its_invariants(disposable_database: str, migrate_to: MigrateTo) -> None:
     """A generated id and time, a bounded non-empty body, an author who cannot
     be deleted out from under a note, and notes that go with their profile."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
 
     execute(disposable_database, note("x" * NOTE_BODY_MAX_LENGTH))
@@ -76,12 +73,11 @@ def test_the_table_carries_its_invariants(
 
 
 def test_the_constraint_names_the_bound_the_code_reads(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The migration spells the bound out; this pins it to the constant the API
     and the model read, so the two cannot drift."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     body = scalar(
         disposable_database,
@@ -100,10 +96,10 @@ def test_the_constraint_names_the_bound_the_code_reads(
 
 
 def test_the_downgrade_removes_the_table(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     command.downgrade(config, PREVIOUS)
 
@@ -117,12 +113,12 @@ LOG_INDEX = "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_credit_transa
 
 
 def test_the_credit_log_index_orders_the_whole_ledger_newest_first(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`4e8b2c6d1f93` (same PR): the admin credit log's keyset order, and a
     downgrade that removes it."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, INDEX_REVISION)
+    migrate_to(disposable_database, INDEX_REVISION)
 
     index = scalar(disposable_database, LOG_INDEX)
     assert index.endswith("ON public.credit_transactions USING btree (created_at DESC, id DESC)")

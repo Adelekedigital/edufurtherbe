@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -21,10 +21,10 @@ _GOAL = (
 
 
 def test_a_goal_holds_a_field_of_study_of_one_to_a_hundred_characters(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """`e4710b359d1b` adds `mentee_goals.field_of_study` (Onboarding v5 B1)."""
-    command.upgrade(make_alembic_config(disposable_database), "e4710b359d1b")
+    migrate_to(disposable_database, "e4710b359d1b")
     execute(disposable_database, _GOAL.format(email="none@example.test", field="NULL"))
     execute(disposable_database, _GOAL.format(email="cs@example.test", field="'Computer Science'"))
     execute(disposable_database, _GOAL.format(email="long@example.test", field="repeat('y', 100)"))
@@ -34,21 +34,21 @@ def test_a_goal_holds_a_field_of_study_of_one_to_a_hundred_characters(
 
 @pytest.mark.parametrize("value", ["''", "repeat('y', 101)"], ids=["blank", "too-long"])
 def test_a_blank_or_overlong_field_of_study_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory, value: str
+    disposable_database: str, migrate_to: MigrateTo, value: str
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), "e4710b359d1b")
+    migrate_to(disposable_database, "e4710b359d1b")
 
     with pytest.raises(asyncpg.CheckViolationError):
         execute(disposable_database, _GOAL.format(email="bad@example.test", field=value))
 
 
 def test_the_field_of_study_downgrade_refuses_while_a_goal_holds_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Dropping the column would delete what mentees typed, so a downgrade over
     values stops and says so; without values it drops the column and comes back."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "e4710b359d1b")
+    migrate_to(disposable_database, "e4710b359d1b")
     execute(disposable_database, _GOAL.format(email="cs@example.test", field="'Law'"))
 
     with pytest.raises(RuntimeError, match="field of study"):

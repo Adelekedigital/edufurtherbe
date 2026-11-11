@@ -7,7 +7,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.email_lines import LINE_HARD_MAX, LINE_KEY_MAX_LENGTH
 from app.domain.enums import EmailEditAction, EmailLine
@@ -61,15 +61,15 @@ def edit(
     return EDIT.format(email_key, variant, line, before, after, default, action, EDITOR)
 
 
-def upgraded(url: str, config_factory: ConfigFactory) -> None:
-    command.upgrade(config_factory(url), REVISION)
+def upgraded(url: str, migrate_to: MigrateTo) -> None:
+    migrate_to(url, REVISION)
     execute(url, SEED)
 
 
 def test_one_override_per_line_starting_at_version_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     execute(disposable_database, override())
     assert scalar(
@@ -103,19 +103,17 @@ def test_one_override_per_line_starting_at_version_one(
     ],
 )
 def test_the_database_refuses_an_override_out_of_bounds(
-    disposable_database: str, make_alembic_config: ConfigFactory, bad: dict[str, str]
+    disposable_database: str, migrate_to: MigrateTo, bad: dict[str, str]
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(asyncpg.CheckViolationError):
         execute(disposable_database, override(**bad))
     assert scalar(disposable_database, OVERRIDES) == 0
 
 
-def test_a_version_below_one_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    upgraded(disposable_database, make_alembic_config)
+def test_a_version_below_one_is_refused(disposable_database: str, migrate_to: MigrateTo) -> None:
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, override())
 
     with pytest.raises(asyncpg.CheckViolationError):
@@ -123,9 +121,9 @@ def test_a_version_below_one_is_refused(
 
 
 def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     for line in EmailLine:
         most = "x" * LINE_HARD_MAX[line]
@@ -141,9 +139,9 @@ def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
 
 @pytest.mark.parametrize("action", list(EmailEditAction))
 def test_every_history_action_is_stored(
-    disposable_database: str, make_alembic_config: ConfigFactory, action: str
+    disposable_database: str, migrate_to: MigrateTo, action: str
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, edit(action=action))
     assert scalar(disposable_database, EDITS) == 1
 
@@ -165,9 +163,9 @@ def test_every_history_action_is_stored(
     ],
 )
 def test_the_database_refuses_a_history_row_out_of_bounds(
-    disposable_database: str, make_alembic_config: ConfigFactory, bad: dict[str, str]
+    disposable_database: str, migrate_to: MigrateTo, bad: dict[str, str]
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(asyncpg.CheckViolationError):
         execute(disposable_database, edit(**bad))
@@ -175,9 +173,9 @@ def test_the_database_refuses_a_history_row_out_of_bounds(
 
 
 def test_an_editor_with_wording_or_history_cannot_be_deleted(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, override())
     execute(disposable_database, edit())
 
@@ -189,10 +187,8 @@ def test_an_editor_with_wording_or_history_cannot_be_deleted(
         execute(disposable_database, DELETE_USER.format(EDITOR))
 
 
-def test_an_update_moves_updated_at(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    upgraded(disposable_database, make_alembic_config)
+def test_an_update_moves_updated_at(disposable_database: str, migrate_to: MigrateTo) -> None:
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, override())
     execute(
         disposable_database,
@@ -206,9 +202,9 @@ def test_an_update_moves_updated_at(
 
 
 def test_the_downgrade_drops_both_tables(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, override())
     execute(disposable_database, edit())
 
