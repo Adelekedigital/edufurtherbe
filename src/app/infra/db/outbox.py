@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
-from app.domain.analytics_events import AnalyticsEvent, analytics_event
+from app.domain.analytics_events import MENTOR_COUNTERPARTS, AnalyticsEvent, analytics_event
 from app.domain.email_lines import OWNED_BY
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
@@ -67,6 +67,7 @@ __all__ = [
     "enqueue",
     "enqueue_analytics",
     "enqueue_analytics_each",
+    "enqueue_session_analytics",
     "forget_unsent_analytics",
     "stop_collecting",
 ]
@@ -223,6 +224,26 @@ async def enqueue_analytics_each(
                     rows.c.payload,
                 ).where(counted_user(rows.c.user_id)),
             )
+        )
+
+
+async def enqueue_session_analytics(
+    session: AsyncSession,
+    event: AnalyticsEvent,
+    facts: Sequence[tuple[UUID, UUID, Mapping[str, object]]],
+    *,
+    at: dt.datetime,
+) -> None:
+    """``event`` about each ``(mentee_id, mentor_id, properties)``'s mentee and,
+    when it has one (`MENTOR_COUNTERPARTS`, decision 337), its counterpart about
+    the mentor with the same properties. Each side is skipped on its own when
+    that person is internal. Does not commit."""
+    await enqueue_analytics_each(
+        session, event, [(mentee, properties) for mentee, _, properties in facts], at=at
+    )
+    if (counterpart := MENTOR_COUNTERPARTS.get(event)) is not None:
+        await enqueue_analytics_each(
+            session, counterpart, [(mentor, properties) for _, mentor, properties in facts], at=at
         )
 
 

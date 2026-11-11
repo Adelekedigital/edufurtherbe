@@ -99,6 +99,9 @@ ONBOARDING_COMPLETED = "onboarding_completed"
 BOOKING_REQUESTED = AnalyticsEvent.BOOKING_REQUESTED.value
 SESSION_COMPLETED = AnalyticsEvent.SESSION_COMPLETED.value
 MENTOR_LISTED = AnalyticsEvent.MENTOR_LISTED.value
+#: The mentor's side of a request and a completion (decision 337).
+BOOKING_RECEIVED = AnalyticsEvent.BOOKING_RECEIVED.value
+SESSION_DELIVERED = AnalyticsEvent.SESSION_DELIVERED.value
 SEARCH = "mentor_search_performed"
 PROFILE_VIEWED = "mentor_profile_viewed"
 BOOKING_STARTED = "booking_started"

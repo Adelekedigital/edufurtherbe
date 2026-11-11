@@ -47,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.config import Settings, analytics_gaps, env_key
 from app.domain.analytics_events import (
+    MENTOR_COUNTERPARTS,
     AnalyticsEvent,
     cancelled_properties,
     granted_properties,
@@ -75,7 +76,8 @@ __all__ = [
     "target_fingerprint",
 ]
 
-#: Events per request.
+#: Events per request. A fact's events (three at most) are never split, so
+#: the cursor always points at a fact sent whole.
 BATCH = 100
 
 #: How many built events a dry run shows.
@@ -92,9 +94,13 @@ class BackfillRefusedError(RuntimeError):
 def _session_events(row: RowMapping) -> list[Event]:
     """What a `session_events` row reports, after the legacy confirmation its
     ending carries (``confirmed_at``, `facts.session_event_facts`): that one is
-    dated by the request and keyed by this row, the only fact it has."""
+    dated by the request and keyed by this row, the only fact it has.
+
+    Each event is about the mentee, followed by its mentor's counterpart
+    (`MENTOR_COUNTERPARTS`, decision 337) when it has one; each side only when
+    that person is counted, as the live writers skip them."""
     built = []
-    if row["confirmed_at"] is not None:
+    if row["confirmed_at"] is not None and row["mentee_counted"]:
         confirmed = session_properties(row["session_id"], row["entry_point"])
         built.append(
             _event(AnalyticsEvent.SESSION_CONFIRMED, row, confirmed, at=row["confirmed_at"])
@@ -112,7 +118,11 @@ def _session_events(row: RowMapping) -> list[Event]:
             )
         else:
             properties = session_properties(row["session_id"], row["entry_point"])
-        built.append(_event(name, row, properties))
+        if row["mentee_counted"]:
+            built.append(_event(name, row, properties))
+        counterpart = MENTOR_COUNTERPARTS.get(name)
+        if counterpart is not None and row["mentor_counted"]:
+            built.append(_event(counterpart, row, properties, user_id=row["mentor_id"]))
     return built
 
 
@@ -146,10 +156,16 @@ def _event(
     properties: dict[str, object],
     *,
     at: dt.datetime | None = None,
+    user_id: UUID | None = None,
 ) -> Event:
-    """``row``'s event, at the row's own time unless ``at`` says otherwise."""
+    """``row``'s event, at the row's own time and about the row's person unless
+    ``at`` or ``user_id`` says otherwise."""
     return historical_event(
-        name, fact_id=row["id"], user_id=row["user_id"], at=at or row["at"], properties=properties
+        name,
+        fact_id=row["id"],
+        user_id=row["user_id"] if user_id is None else user_id,
+        at=at or row["at"],
+        properties=properties,
     )
 
 

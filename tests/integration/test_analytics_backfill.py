@@ -199,6 +199,15 @@ async def status(conn: AsyncConnection, mentor: UUID, status_type: str, when: dt
     ).scalar_one()
 
 
+def received(
+    fact: Any, mentor: Any, when: dt.datetime, session_id: Any, session_type: Any
+) -> dict[str, Any]:
+    """The mentor's side of a request (decision 337)."""
+    return expected(
+        "booking_received", fact, mentor, when, session_id=session_id, session_type_id=session_type
+    )
+
+
 @dataclass
 class History:
     expected: list[dict[str, Any]]
@@ -236,12 +245,14 @@ async def a_history(engine: AsyncEngine) -> History:
                 session_type_id=session_type,
             )
         )
+        want.append(received(made, mentor, at(1), s1, session_type))
         accepted = await session_event(
             conn, s1, "pending_mentor_approval", "confirmed", at(2), actor=mentor
         )
         want.append(ev("session_confirmed", accepted, mentee, at(2), session_id=s1))
         held = await session_event(conn, s1, "confirmed", "completed", at(3))
         want.append(ev("session_completed", held, mentee, at(3), session_id=s1))
+        want.append(ev("session_delivered", held, mentor, at(3), session_id=s1))
 
         # Booked outright, paid for, then cancelled by the mentee.
         s2 = await session_row(conn, mentor, mentee, session_type, "cancelled", day=2)
@@ -256,6 +267,7 @@ async def a_history(engine: AsyncEngine) -> History:
                 session_type_id=session_type,
             )
         )
+        want.append(received(made, mentor, at(4), s2, session_type))
         want.append(ev("session_confirmed", made, mentee, at(4), session_id=s2))
         cancelled = await session_event(
             conn, s2, "confirmed", "cancelled", at(5), actor=mentee, reason_code="other"
@@ -285,6 +297,7 @@ async def a_history(engine: AsyncEngine) -> History:
                 session_type_id=session_type,
             )
         )
+        want.append(received(made, mentor, at(6), s3, session_type))
         want.append(ev("session_confirmed", made, mentee, at(6), session_id=s3))
         await session_event(
             conn, s3, "confirmed", "cancelled", at(7), actor=mentee, reason_code="rescheduled"
@@ -307,6 +320,7 @@ async def a_history(engine: AsyncEngine) -> History:
                 session_type_id=session_type,
             )
         )
+        want.append(received(made, mentor, at(9), s5, session_type))
         await session_event(
             conn,
             s5,
@@ -390,9 +404,9 @@ async def a_history(engine: AsyncEngine) -> History:
 
 
 ORDER = [
-    "booking_requested", "session_confirmed", "session_cancelled", "session_completed",
-    "session_no_show", "credit_granted", "credit_spent", "mentor_listed",
-    "review_submitted", "referral_unlocked",
+    "booking_requested", "booking_received", "session_confirmed", "session_cancelled",
+    "session_completed", "session_delivered", "session_no_show", "credit_granted",
+    "credit_spent", "mentor_listed", "review_submitted", "referral_unlocked",
 ]  # fmt: skip
 
 
@@ -401,7 +415,9 @@ def in_kind_order(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unlocks; each in time order."""
     kind = {
         name: index
-        for index, names in enumerate([ORDER[:5], ORDER[5:7], ORDER[7:8], ORDER[8:9], ORDER[9:]])
+        for index, names in enumerate(
+            [ORDER[:7], ORDER[7:9], ORDER[9:10], ORDER[10:11], ORDER[11:]]
+        )
         for name in names
     }
     return sorted(events, key=lambda e: (kind[e["event"]], e["timestamp"]))
@@ -445,14 +461,16 @@ async def test_a_dry_run_counts_and_sends_nothing(db_engine: AsyncEngine, tmp_pa
 
 
 async def test_batches_hold_at_most_the_batch_size(db_engine: AsyncEngine, tmp_path: Path) -> None:
+    """Three, the most one fact reports (a request booked outright: requested,
+    received, confirmed), since a fact's events are never split."""
     history = await a_history(db_engine)
     sink = FakeSink()
 
     await backfill_analytics(
-        db_engine, sink=sink, cursor=tmp_path / "c.json", batch=2, until=CUTOFF, target=TARGET
+        db_engine, sink=sink, cursor=tmp_path / "c.json", batch=3, until=CUTOFF, target=TARGET
     )
 
-    assert all(1 <= len(batch) <= 2 for batch in sink.batches)
+    assert all(1 <= len(batch) <= 3 for batch in sink.batches)
     assert sink.events == in_kind_order(history.expected)
 
 
@@ -527,7 +545,13 @@ async def test_an_earlier_until_sends_only_what_is_before_it(
     assert report.cutoff == at(4)
     early = [e for e in history.expected if dt.datetime.fromisoformat(e["timestamp"]) < at(4)]
     assert sink.events == in_kind_order(early)
-    assert len(early) == 3
+    assert [e["event"] for e in early] == [
+        "booking_requested",
+        "booking_received",
+        "session_confirmed",
+        "session_completed",
+        "session_delivered",
+    ]
 
 
 async def test_a_fact_at_until_is_not_sent_and_one_just_before_is(
@@ -583,6 +607,52 @@ async def test_a_legacy_confirmation_is_sent_at_the_requests_time(
         expected("session_confirmed", held, mentee, at(1), session_id=legacy),
         expected("session_completed", held, mentee, at(5), session_id=legacy),
     ]
+
+
+@pytest.mark.parametrize("left_out", ["mentee", "mentor"])
+async def test_a_session_is_sent_for_each_side_whose_person_is_counted(
+    db_engine: AsyncEngine, tmp_path: Path, left_out: str
+) -> None:
+    """A deleted mentee's session still was the mentor's, and an internal
+    mentor's still the mentee's: each side goes only for its own person."""
+    mentor = await make_public_mentor(db_engine, f"bf-{uuid4()}", listed=False)
+    session_type = await add_session_type(db_engine, mentor)
+    mentee = await a_user(db_engine, deleted=left_out == "mentee")
+    if left_out == "mentor":
+        async with db_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE users SET email = :e WHERE id = :u"),
+                {"e": f"bf-{uuid4()}@{DEMO_DOMAIN}", "u": mentor},
+            )
+    async with db_engine.begin() as conn:
+        s1 = await session_row(conn, mentor, mentee, session_type, "completed", day=8)
+        made = await session_event(conn, s1, None, "confirmed", at(1), actor=mentee)
+        held = await session_event(conn, s1, "confirmed", "completed", at(2))
+    sink = FakeSink()
+
+    await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "c.json", until=CUTOFF, target=TARGET
+    )
+
+    sent = [e for e in sink.events if e["distinct_id"] in (str(mentor), str(mentee))]
+    if left_out == "mentee":
+        assert sent == [
+            received(made, mentor, at(1), s1, session_type),
+            expected("session_delivered", held, mentor, at(2), session_id=s1),
+        ]
+    else:
+        assert sent == [
+            expected(
+                "booking_requested",
+                made,
+                mentee,
+                at(1),
+                session_id=s1,
+                session_type_id=session_type,
+            ),
+            expected("session_confirmed", made, mentee, at(1), session_id=s1),
+            expected("session_completed", held, mentee, at(2), session_id=s1),
+        ]
 
 
 async def test_the_cursor_records_its_cutoff_and_target(
