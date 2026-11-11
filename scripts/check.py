@@ -236,7 +236,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.record_durations:
         durations = durations_from_junit(args.record_durations)
-        DURATIONS_FILE.write_text(json.dumps(durations, indent=1) + "\n", encoding="utf-8")
+        DURATIONS_FILE.write_text(
+            json.dumps(durations, indent=1) + "\n", encoding="utf-8", newline="\n"
+        )
         print(f"Recorded {len(durations)} files to {DURATIONS_FILE.name}.")
         return 0
 

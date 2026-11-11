@@ -143,11 +143,14 @@ jobs:
           - 5432:5432
         # Without a health check the first test races the database's startup and
         # fails on connection refused, intermittently and only on busy runners.
+        # The data directory on tmpfs: every database here is thrown away when
+        # the job ends, so the disk buys nothing but waits.
         options: >-
           --health-cmd "pg_isready -U edufurther -d edufurther"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+          --tmpfs /var/lib/postgresql/data
 
     steps:
       - uses: actions/checkout@v7
@@ -159,6 +162,20 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
+
+      # CI only, for the same reason as the tmpfs: no durability is wanted from
+      # a database that dies with the runner. All three reload without a
+      # restart. Never copy these into docker-compose.yml or anything real.
+      - name: Turn off Postgres durability
+        env:
+          PG: ${{ job.services.postgres.id }}
+        run: |
+          for setting in "fsync = off" "synchronous_commit = off" "full_page_writes = off"; do
+            docker exec "$PG" psql -U edufurther -d edufurther -qc "ALTER SYSTEM SET $setting"
+          done
+          docker exec "$PG" psql -U edufurther -d edufurther -qc "SELECT pg_reload_conf()"
+          docker exec "$PG" psql -U edufurther -d edufurther -Atc \
+            "SELECT name || '=' || setting FROM pg_settings WHERE name IN ('fsync', 'synchronous_commit', 'full_page_writes')"
 
       # PYTEST_ADDOPTS carries the reporting flag that only CI needs, so the
       # test command itself stays defined in scripts/check.py. A shard that
