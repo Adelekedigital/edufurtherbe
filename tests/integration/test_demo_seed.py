@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import replace
+from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -21,14 +23,21 @@ from tests.integration.factories import add_session, make_bookable_mentor
 from app.infra.db.calendar_store import NullFreeBusy
 from app.infra.db.demo_seed import (
     DEMO_DOMAIN,
+    E2E_ACCOUNTS,
+    E2E_EMAIL_LIKE,
     DemoMentor,
     DemoQuestion,
     DemoSessionType,
+    E2ERunError,
     RealHistoryError,
     apply_demo_session_types,
     create_demo_mentor,
     demo_mentor_offerings,
+    e2e_account_seeded,
+    e2e_email,
+    link_e2e_account,
     remove_demo,
+    seed_e2e_accounts,
 )
 from app.infra.db.next_available_store import refresh_next_available
 from conftest import PLATFORM_WINDOW
@@ -481,3 +490,90 @@ async def test_the_legacy_type_has_its_offering_set_too(db_engine: AsyncEngine) 
     (legacy,) = (await session_types_of(db_engine, user)).values()
 
     assert await offering_set(db_engine, legacy["id"]) == [legacy["offering"]]
+
+
+# --------------------------------------------------------------------------
+# E2E accounts (docs/e2e): one set per run tag, never removed with the demo set.
+# --------------------------------------------------------------------------
+
+
+async def seed_e2e(engine: AsyncEngine, run: str = "r1") -> int:
+    async with AsyncSession(engine) as session:
+        created = await seed_e2e_accounts(session, ["test-preparation"], run=run, now=NOW)
+        await session.commit()
+    return created
+
+
+async def e2e_rows(engine: AsyncEngine) -> dict[str, Any]:
+    async with engine.begin() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT u.email, u.auth_id, u.is_internal, a.admin_role FROM users u "
+                    "LEFT JOIN admin_users a ON a.user_id = u.id AND a.revoked_at IS NULL "
+                    "WHERE u.email LIKE :like"
+                ),
+                {"like": E2E_EMAIL_LIKE},
+            )
+        ).all()
+    return {row.email: row for row in rows}
+
+
+async def test_an_e2e_run_seeds_its_roster_once(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    seeded = [ref for ref, account in E2E_ACCOUNTS.items() if account.seeded]
+    assert await seed_e2e(db_engine) == len(seeded)
+    with pytest.raises(E2ERunError):
+        await seed_e2e(db_engine)
+
+    rows = await e2e_rows(db_engine)
+    assert set(rows) == {e2e_email(ref, "r1") for ref in seeded}
+    assert all(row.auth_id is None and row.is_internal for row in rows.values())
+    assert rows[e2e_email("admin_super", "r1")].admin_role == "super_admin"
+    assert rows[e2e_email("admin_viewer", "r1")].admin_role == "limited_access"
+    cards = (await api_client.get("/api/v1/mentors")).json()["data"]
+    assert [c["last_name"] for c in cards if c["first_name"] == "Eve"] == ["Tester r1"]
+
+    assert await seed_e2e(db_engine, "r2") == len(seeded)
+    assert len(await e2e_rows(db_engine)) == 2 * len(seeded)
+
+
+async def test_demo_removal_keeps_the_e2e_accounts(db_engine: AsyncEngine) -> None:
+    await seed(db_engine, OPEN)
+    await seed_e2e(db_engine)
+    async with AsyncSession(db_engine) as session:
+        await remove_demo(session)
+        await session.commit()
+    assert len(await e2e_rows(db_engine)) == sum(a.seeded for a in E2E_ACCOUNTS.values())
+    async with db_engine.begin() as conn:
+        left = await conn.execute(
+            text("SELECT count(*) FROM users WHERE email LIKE :s AND email NOT LIKE :e"),
+            {"s": f"%@{DEMO_DOMAIN}", "e": E2E_EMAIL_LIKE},
+        )
+        assert left.scalar_one() == 0
+
+
+async def test_e2e_link_points_only_an_e2e_row_at_an_identity(db_engine: AsyncEngine) -> None:
+    await seed(db_engine, OPEN)
+    await seed_e2e(db_engine)
+    identity = uuid4()
+    async with AsyncSession(db_engine) as session:
+        assert await link_e2e_account(session, e2e_email("mentee_with_credits", "r1"), identity)
+        assert not await link_e2e_account(session, f"demo-open@{DEMO_DOMAIN}", uuid4())
+        await session.commit()
+    async with db_engine.begin() as conn:
+        linked = (
+            await conn.execute(text("SELECT email FROM users WHERE auth_id = :a"), {"a": identity})
+        ).scalar_one()
+    assert linked == e2e_email("mentee_with_credits", "r1")
+
+
+async def test_whether_an_e2e_account_is_seeded(db_engine: AsyncEngine) -> None:
+    await seed(db_engine, OPEN)
+    await seed_e2e(db_engine)
+    async with AsyncSession(db_engine) as session:
+        assert await e2e_account_seeded(session, e2e_email("mentee_with_credits", "r1"))
+        assert not await e2e_account_seeded(session, e2e_email("mentee_with_credits", "r9"))
+        assert not await e2e_account_seeded(session, e2e_email("mentee_new", "r1"))
+        assert not await e2e_account_seeded(session, f"demo-open@{DEMO_DOMAIN}")

@@ -1,0 +1,913 @@
+# Launch E2E scenarios. Shape: scenario.schema.json; plan: README.md.
+#
+# Conventions the runners share:
+# - `viewer` is a seed account ref (signed in with scripts/e2e_session.py),
+#   `anonymous`, or `each` under `for_each`.
+# - `${<ref>.id}` is that account's `id` from `GET /api/v1/me` as it.
+#   `${<name>}` is a value an earlier step put in `save`.
+# - Matchers in `expect.json`: `<any>`, `<present>`, `<absent>`, `<uuid>`,
+#   `<int>`, `<nonempty>`, `<url>`. `"${a}+2"` is arithmetic on a saved number.
+#   Anything else is compared exactly.
+# - `params` fill the path's `{name}`s; the rest are the query string.
+#   `<today+N>` is the date N days from today in the mentor's zone.
+# - `<new>` is a fresh UUID (Idempotency-Key, client_id); `<same as X>` reuses
+#   step X's value, or its whole body.
+# - Errors are RFC 9457 problem+json: assert `/type`, never a `code` (only the
+#   preview refusal carries one).
+# - POSTs marked `Idempotency-Key: <new>` need a fresh UUID per run.
+# - Booking needs 24 hours' notice, so join and settle steps run in a second
+#   sitting, after the booked start (`after` names the step they wait for).
+# - E2E accounts are internal (`users.is_internal`, the demo domain), so no
+#   analytics outbox row is written for them (decision 329). Checks of
+#   analytics rows assert their absence; see TODO(question) in BOOK-001.
+version: 1
+
+seed:
+  domain: demo.edufurther.test   # `DEMO_EMAIL_LIKE`; addresses are e2e-<run>-<ref>@ it
+  run: "Each run is seeded under a new tag: seed_demo_mentors.py --e2e <run>."
+  accounts:
+    mentee_new: {role: mentee, state: "No account until its first sign-in (decision 178)."}
+    mentee_with_credits: {role: mentee, state: "Bare mentee; SETUP-001 onboards it (1 credit, level 1)."}
+    mentee_canceller: {role: mentee, state: "Bare mentee; SETUP-001 onboards it. Cancels, is declined, moves."}
+    mentee_late_cancel: {role: mentee, state: "Bare mentee; SETUP-001 onboards it. Cancels inside the refund window."}
+    mentee_no_show: {role: mentee, state: "Bare mentee; SETUP-001 onboards it. Misses a session."}
+    mentee_to_delete: {role: mentee, state: "Bare mentee, deleted by ACCT-001."}
+    mentor_listed: {role: mentor, state: "Approved, listed, weekday hours 09:00-17:00 Europe/London, one session type."}
+    mentor_pending: {role: mentor, state: "Bare account; MENTOR-001 builds and submits its application."}
+    admin_super: {role: admin, state: "super_admin grant."}
+    admin_viewer: {role: admin, state: "limited_access grant (reads, credit grants, analytics)."}
+
+scenarios:
+  # ------------------------------------------------------------------ setup
+  - id: SETUP-001
+    title: Onboard the booking mentees and make the mentor ask for confirmation
+    journey: setup
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      Booking is only for an onboarded mentee (decision 272), and onboarding pays
+      the level-1 credit (decision 308). The mentor's type must require
+      confirmation so the accept and decline paths exist.
+    smoke_prod: false
+    for_each: [mentee_with_credits, mentee_canceller, mentee_late_cancel, mentee_no_show]
+    preconditions: ["seed_demo_mentors.py --e2e <run> has run"]
+    steps:
+      - {kind: api, id: country, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: countries, q: Nigeria}, expect: {status: 200, json: {/data/0/id: "<uuid>"}},
+         save: {country_id: /data/0/id}, human: "Look up a country for the profile."}
+      - {kind: api, id: degree, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: degree-levels}, expect: {status: 200, json: {/data/0/id: "<uuid>"}},
+         save: {degree_id: /data/0/id}, human: "Look up a degree level."}
+      - {kind: api, id: need, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: service-offerings}, expect: {status: 200, json: {/data/0/id: "<uuid>"}},
+         save: {need_id: /data/0/id}, human: "Look up a kind of help."}
+      - {kind: api, id: profile, viewer: each, method: PATCH, path: "/api/v1/users/{user_id}/profile",
+         params: {user_id: "${each.id}"}, body: {origin_country_id: "${country_id}"},
+         expect: {status: 204}, human: "Say where you are from."}
+      - {kind: api, id: goal, viewer: each, method: PUT, path: "/api/v1/users/{user_id}/goal",
+         params: {user_id: "${each.id}"},
+         body: {degree_goal_id: "${degree_id}", field_of_study: Public Policy, need_ids: ["${need_id}"]},
+         expect: {status: 200}, human: "Say what you want to study and what help you need."}
+      - {kind: api, id: step, viewer: each, method: PUT, path: /api/v1/me/onboarding,
+         body: {last_step: plans}, expect: {status: 200}, human: "Reach the last onboarding step."}
+      - {kind: api, id: complete, viewer: each, method: POST, path: /api/v1/me/onboarding/completion,
+         expect: {status: 201, json: {/completed_at: "<present>"}}, human: "Finish onboarding."}
+      - {kind: api, id: balance, viewer: each, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/onboarding/complete: true, /credits/balance: 1, /credits/monthly/level: 1}},
+         human: "You have one credit, at level 1."}
+      - {kind: api, id: mentor_types, viewer: mentor_listed, method: GET, path: /api/v1/me/session-types,
+         expect: {status: 200, json: {/data/0/id: "<uuid>"}}, save: {type_id: /data/0/id},
+         human: "The mentor opens their session types."}
+      - {kind: api, id: confirm_on, viewer: mentor_listed, method: PATCH,
+         path: "/api/v1/me/session-types/{session_type_id}", params: {session_type_id: "${type_id}"},
+         body: {requires_booking_confirmation: true},
+         expect: {status: 200, json: {/requires_booking_confirmation: true}},
+         human: "The mentor asks to confirm each booking."}
+    cleanup: ["None: the next run uses a new tag."]
+
+  # ------------------------------------------------------------------ auth
+  - id: AUTH-001
+    title: A first sign-in creates the account
+    journey: sign-in and first provisioning
+    priority: P0
+    roles: [mentee]
+    why: >-
+      A new person's first authenticated request creates their account from the
+      token, and never links to an existing account by email (decision 178).
+    smoke_prod: false
+    preconditions: ["A new run tag, so mentee_new has no users row"]
+    steps:
+      - {kind: ui, id: sign_in, viewer: mentee_new, viewport: [390, 1440], route: /, actions: TODO(frontend),
+         expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Open the magic link from e2e_session.py --link; you land signed in."}
+      - {kind: api, id: anonymous_me, viewer: anonymous, method: GET, path: /api/v1/me,
+         expect: {status: 401}, human: "Without signing in, your account is not shown."}
+      - {kind: api, id: first_me, viewer: mentee_new, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/id: "<uuid>", /primary_role: mentee, /email_verified_at: "<present>",
+                                      /onboarding/complete: false, /credits/balance: 0, /analytics_consent: null}},
+         human: "Signed in for the first time, you have a new mentee account with no credits yet."}
+      - {kind: api, id: second_me, viewer: mentee_new, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/id: "<present>"}}, human: "Signing in again finds the same account."}
+    assertions:
+      - {id: one_row, check: db, after: second_me,
+         query: "SELECT count(*) AS n, bool_and(is_internal) AS internal FROM users WHERE email = (SELECT email FROM users WHERE id = :u)",
+         binds: {u: "${mentee_new.id}"}, expect: {first: {n: 1, internal: true}},
+         human: "Exactly one account exists, marked internal."}
+
+  # ------------------------------------------------------------------ onboarding
+  - id: ONB-001
+    title: A new mentee completes onboarding and gets their first credit
+    journey: mentee onboarding
+    priority: P0
+    roles: [mentee]
+    why: >-
+      Completion needs a profile with an origin, a goal with a degree and field,
+      and at least one need; it pays the level-1 credit once (decision 308) and
+      unlocks booking (decision 272).
+    smoke_prod: false
+    preconditions: ["AUTH-001 passed (mentee_new exists)"]
+    steps:
+      - {kind: ui, id: onboarding_ui, viewer: mentee_new, viewport: [390, 1440], route: /onboarding,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Answer the onboarding questions."}
+      - {kind: api, id: not_started, viewer: mentee_new, method: GET, path: /api/v1/me/onboarding,
+         expect: {status: 404}, human: "Before you start, there is no onboarding record."}
+      - {kind: api, id: too_early, viewer: mentee_new, method: POST, path: /api/v1/me/onboarding/completion,
+         expect: {status: 409, json: {/type: /problems/onboarding-incomplete, /missing: "<nonempty>"}},
+         human: "Finishing before answering is refused and says what is missing."}
+      - {kind: api, id: book_too_early, viewer: mentee_new, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"},
+         body: {session_type_id: "00000000-0000-7000-8000-000000000000", starts_at: "2030-01-01T09:00:00Z"},
+         expect: {status: 409, json: {/type: /problems/booking-needs-onboarding}},
+         human: "Booking before onboarding is refused."}
+      - {kind: api, id: country, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: countries, q: Ghana}, expect: {status: 200}, save: {country_id: /data/0/id},
+         human: "Look up a country."}
+      - {kind: api, id: degree, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: degree-levels}, expect: {status: 200}, save: {degree_id: /data/0/id},
+         human: "Look up a degree level."}
+      - {kind: api, id: need, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: service-offerings}, expect: {status: 200}, save: {need_id: /data/0/id},
+         human: "Look up a kind of help."}
+      - {kind: api, id: profile, viewer: mentee_new, method: PATCH, path: "/api/v1/users/{user_id}/profile",
+         params: {user_id: "${mentee_new.id}"}, body: {first_name: E2E, origin_country_id: "${country_id}"},
+         expect: {status: 204}, human: "Give your name and where you are from."}
+      - {kind: api, id: goal, viewer: mentee_new, method: PUT, path: "/api/v1/users/{user_id}/goal",
+         params: {user_id: "${mentee_new.id}"},
+         body: {degree_goal_id: "${degree_id}", field_of_study: Economics, need_ids: ["${need_id}"]},
+         expect: {status: 200}, human: "Say what you want to study and the help you need."}
+      - {kind: api, id: step, viewer: mentee_new, method: PUT, path: /api/v1/me/onboarding,
+         body: {last_step: plans}, expect: {status: 200, json: {/last_step: plans, /completed_at: null}},
+         human: "Your progress is saved."}
+      - {kind: api, id: complete, viewer: mentee_new, method: POST, path: /api/v1/me/onboarding/completion,
+         expect: {status: 201, json: {/completed_at: "<present>"}}, human: "Finish onboarding."}
+      - {kind: api, id: complete_again, viewer: mentee_new, method: POST, path: /api/v1/me/onboarding/completion,
+         expect: {status: 200}, human: "Finishing twice pays nothing more."}
+      - {kind: api, id: me_after, viewer: mentee_new, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/onboarding/complete: true, /credits/balance: 1, /credits/monthly/level: 1}},
+         human: "You now have one credit."}
+    assertions:
+      - {id: one_grant, check: db, after: complete_again,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE user_id = :u AND reason = 'grant'",
+         binds: {u: "${mentee_new.id}"}, expect: {first: {n: 1}},
+         human: "Exactly one credit grant was recorded."}
+      - {id: email_queued, check: db, after: complete,
+         query: "SELECT EXISTS (SELECT 1 FROM outbox_events WHERE event_type = 'credits_granted' AND payload->>'recipient_id' = :u) AS sent",
+         binds: {u: "${mentee_new.id}"}, expect: {first: {sent: true}},
+         human: "A 'credits granted' email was queued."}
+
+  # ------------------------------------------------------------------ mentor
+  - id: MENTOR-001
+    title: A mentor applies, an admin approves, and they become bookable
+    journey: mentor application and approval
+    priority: P0
+    roles: [mentor, admin]
+    why: >-
+      Submission needs a complete application; approval lists the mentor; a
+      listed mentor with a session type and weekly hours appears with slots
+      (no calendar needed). A limited_access admin cannot decide (404).
+    smoke_prod: false
+    steps:
+      - {kind: api, id: create_profile, viewer: mentor_pending, method: POST,
+         path: "/api/v1/users/{user_id}/mentor-profile", params: {user_id: "${mentor_pending.id}"},
+         body: {headline: E2E applicant, requires_booking_confirmation: false},
+         expect: {status: 201, json: {/id: "<uuid>"}}, human: "Start a mentor application."}
+      - {kind: api, id: submit_incomplete, viewer: mentor_pending, method: POST,
+         path: /api/v1/me/mentor-application/submit,
+         expect: {status: 409, json: {/type: /problems/mentor-application-incomplete, /missing: "<nonempty>"}},
+         human: "Submitting too early is refused and lists what is missing."}
+      - {kind: ui, id: complete_application, viewer: mentor_pending, viewport: [390, 1440], route: /onboarding,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Fill in everything the application asks for: offerings, education with dates, study country, photo, origin, LinkedIn, headline, weekly hours and a session type."}
+      - {kind: api, id: submit, viewer: mentor_pending, method: POST, path: /api/v1/me/mentor-application/submit,
+         after: complete_application,
+         expect: {status: 200, json: {/submitted_at: "<present>", /approval_status: pending}},
+         human: "Submit the application."}
+      - {kind: api, id: queue, viewer: admin_viewer, method: GET, path: /api/v1/admin/mentors/pending,
+         expect: {status: 200, json: {/data: "<nonempty>"}}, human: "Any admin sees the application waiting."}
+      - {kind: api, id: viewer_cannot_decide, viewer: admin_viewer, method: POST,
+         path: "/api/v1/admin/mentors/{user_id}/decision", params: {user_id: "${mentor_pending.id}", approve: true},
+         body: {}, expect: {status: 404}, human: "A limited admin cannot approve."}
+      - {kind: api, id: approve, viewer: admin_super, method: POST,
+         path: "/api/v1/admin/mentors/{user_id}/decision", params: {user_id: "${mentor_pending.id}", approve: true},
+         body: {}, expect: {status: 200, json: {/decided: true}}, human: "A super admin approves."}
+      - {kind: api, id: me_approved, viewer: mentor_pending, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/mentor_profile/approval_status: approved, /mentor_profile/listing_status: listed}},
+         human: "The mentor sees they are approved and listed."}
+      - {kind: api, id: seen, viewer: mentor_pending, method: POST, path: /api/v1/me/mentor-application/approved-seen,
+         expect: {status: 200, json: {/approved_seen_at: "<present>"}}, human: "The mentor dismisses the approval notice."}
+      - {kind: api, id: public_profile, viewer: anonymous, method: GET, path: "/api/v1/mentors/{handle}",
+         params: {handle: "${mentor_pending.id}"}, expect: {status: 200, json: {/session_types: "<nonempty>"}},
+         save: {type_id: /session_types/0/id}, human: "Anyone can open the mentor's profile."}
+      - {kind: api, id: slots, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_pending.id}", session_type_id: "${type_id}"},
+         expect: {status: 200, json: {/data/0/start: "<present>"}}, human: "The mentor has times to book."}
+    assertions:
+      - {id: admins_told, check: db, after: submit,
+         query: "SELECT EXISTS (SELECT 1 FROM outbox_events WHERE event_type = 'mentor_application_received' AND payload->>'recipient_id' = :a) AS sent",
+         binds: {a: "${admin_super.id}"}, expect: {first: {sent: true}}, human: "Admins were told about the application."}
+      - {id: mentor_told, check: db, after: approve,
+         query: "SELECT EXISTS (SELECT 1 FROM outbox_events WHERE event_type = 'mentor_approved' AND payload->>'recipient_id' = :m) AS sent",
+         binds: {m: "${mentor_pending.id}"}, expect: {first: {sent: true}}, human: "The mentor was told they are approved."}
+
+  # ------------------------------------------------------------------ booking
+  - id: BOOK-001
+    title: Find a mentor, book, get accepted, join and complete
+    journey: explore, book, accept, join, settle
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      Booking spends one credit and stores the entry point (decision 329); an
+      accepted request is confirmed; both parties join in the window (10 minutes
+      before to 15 after); settlement marks it completed and the credit stays
+      spent (decision 229).
+    smoke_prod: false
+    preconditions: ["SETUP-001 passed", "mentee_with_credits has no live session with mentor_listed"]
+    steps:
+      - {kind: ui, id: explore_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /explore,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Search Explore for the E2E mentor and open their profile."}
+      - {kind: api, id: explore, viewer: mentee_with_credits, method: GET, path: /api/v1/mentors,
+         params: {q: Eve}, expect: {status: 200, json: {/data: "<nonempty>"}},
+         human: "Explore finds the E2E mentor (Eve Tester <run>)."}
+      - {kind: api, id: profile, viewer: mentee_with_credits, method: GET, path: "/api/v1/mentors/{handle}",
+         params: {handle: "${mentor_listed.id}"}, expect: {status: 200}, human: "Open the mentor's profile."}
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"},
+         expect: {status: 200, json: {/data/0/requires_booking_confirmation: true}},
+         save: {type_id: /data/0/id}, human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_with_credits, method: GET,
+         path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+2>", end: "<today+9>"},
+         expect: {status: 200, json: {/data/0/start: "<present>"}}, save: {starts_at: /data/0/start},
+         human: "Pick the first free time at least two days away."}
+      - {kind: ui, id: book_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: "/mentors/${mentor_listed.id}",
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Book that time from the profile, answering the intake question."}
+      - {kind: api, id: book, viewer: mentee_with_credits, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"},
+         body: {session_type_id: "${type_id}", starts_at: "${starts_at}", topic: E2E booking,
+                entry_point: mentor_profile, answers: "TODO(frontend): one per required question"},
+         expect: {status: 201, json: {/status: pending_mentor_approval, /respond_by: "<present>", /refund_until: null}},
+         save: {session_id: /id}, human: "Send the request; it waits for the mentor."}
+      - {kind: api, id: replay, viewer: mentee_with_credits, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<same as book>"},
+         body: "<same as book>", expect: {status: 201, json: {/id: "${session_id}"}},
+         human: "Sending the same request twice books once."}
+      - {kind: api, id: spent, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 0}}, human: "Your credit is spent."}
+      - {kind: api, id: accept, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/accept",
+         params: {session_id: "${session_id}"}, expect: {status: 200, json: {/accepted: true}},
+         human: "The mentor accepts."}
+      - {kind: api, id: confirmed, viewer: mentee_with_credits, method: GET, path: "/api/v1/sessions/{session_id}",
+         params: {session_id: "${session_id}"},
+         expect: {status: 200, json: {/status: confirmed, /refund_until: "<present>", /join_opens_at: "<present>"}},
+         human: "The session is confirmed."}
+      - {kind: api, id: join_too_early, viewer: mentee_with_credits, method: POST,
+         path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
+         expect: {status: 409}, human: "You cannot join days early."}
+      - {kind: api, id: mentee_joins, viewer: mentee_with_credits, method: POST, after: confirmed,
+         path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
+         expect: {status: 200, json: {/joined: true, /meeting_url: "<any>"}},
+         human: "Second sitting, at the start time: the mentee joins."}
+      - {kind: api, id: mentor_joins, viewer: mentor_listed, method: POST,
+         path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
+         expect: {status: 200, json: {/joined: true}}, human: "The mentor joins."}
+      - {kind: ui, id: join_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: "/sessions/${session_id}",
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Both open the join button and reach the meeting."}
+      - {kind: job, id: settle, script: scripts/settle_sessions.py, after: mentor_joins, expect: {exit: 0},
+         human: "After the join window closes, run settlement."}
+      - {kind: api, id: completed, viewer: mentee_with_credits, method: GET, path: "/api/v1/sessions/{session_id}",
+         params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: completed}},
+         human: "The session is completed. TODO(question): with a Daily venue, attendance comes from Daily's webhook, not /join; which venue does the E2E mentor use on staging?"}
+      - {kind: api, id: still_spent, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 0, /mentee_completed_sessions: 1}},
+         human: "The credit stays spent."}
+    assertions:
+      - {id: one_debit, check: db, after: replay,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE session_id = :s AND reason = 'session_booked' AND delta = -1",
+         binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "One credit was spent, once."}
+      - {id: entry_point, check: db, after: book,
+         query: "SELECT entry_point FROM sessions WHERE id = :s", binds: {s: "${session_id}"},
+         expect: {first: {entry_point: mentor_profile}}, human: "Where the booking came from is stored."}
+      - {id: request_email, check: db, after: book,
+         query: "SELECT count(*) AS n FROM outbox_events WHERE entity_id = :s AND destination = 'email' AND event_type = 'session_requested'",
+         binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "The mentor was emailed the request."}
+      - {id: booking_requested_row, check: db, after: book,
+         query: "SELECT count(*) AS n FROM outbox_events o JOIN users u ON u.id = o.entity_id WHERE o.destination = 'analytics' AND o.event_type = 'booking_requested' AND o.payload->'properties'->>'session_id' = :s",
+         binds: {s: "${session_id}"}, expect: {first: {n: 0}},
+         human: "No analytics row, because E2E accounts are internal. TODO(question): the brief asks to see a booking_requested row; that needs a non-internal test account, which the demo domain cannot be. Accept the absence, or add one non-demo staging account?"}
+      - {id: accepted_email, check: db, after: accept,
+         query: "SELECT count(*) AS n FROM outbox_events WHERE entity_id = :s AND event_type = 'request_accepted'",
+         binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "The mentee was told it was accepted."}
+      - {id: no_refund, check: db, after: settle,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE session_id = :s AND delta > 0",
+         binds: {s: "${session_id}"}, expect: {first: {n: 0}}, human: "No refund for a completed session."}
+
+  - id: BOOK-002
+    title: A mentee who does not show up loses the credit
+    journey: explore, book, accept, join, settle
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      At settlement a party still pending is a no-show. A mentee no-show forfeits
+      the credit; a mentor no-show refunds it (decision 229). The one who missed
+      may say why, once (decision 287).
+    smoke_prod: false
+    preconditions: ["SETUP-001 passed"]
+    steps:
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
+         human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_no_show, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+2>", end: "<today+9>"},
+         expect: {status: 200}, save: {starts_at: /data/1/start}, human: "Pick a free time."}
+      - {kind: api, id: book, viewer: mentee_no_show, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${starts_at}", entry_point: explore},
+         expect: {status: 201}, save: {session_id: /id}, human: "Book it."}
+      - {kind: api, id: accept, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/accept",
+         params: {session_id: "${session_id}"}, expect: {status: 200}, human: "The mentor accepts."}
+      - {kind: api, id: mentor_joins, viewer: mentor_listed, method: POST, after: accept,
+         path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
+         expect: {status: 200}, human: "Second sitting: only the mentor joins."}
+      - {kind: job, id: settle, script: scripts/settle_sessions.py, after: mentor_joins, expect: {exit: 0},
+         human: "After the join window closes, run settlement."}
+      - {kind: api, id: no_show, viewer: mentee_no_show, method: GET, path: "/api/v1/sessions/{session_id}",
+         params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: no_show}},
+         human: "The session reads as missed."}
+      - {kind: api, id: forfeited, viewer: mentee_no_show, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 0}}, human: "The credit is not returned."}
+      - {kind: api, id: mentor_cannot_explain, viewer: mentor_listed, method: POST,
+         path: "/api/v1/sessions/{session_id}/missed-reason", params: {session_id: "${session_id}"},
+         body: {reason: forgot}, expect: {status: 403, json: {/type: /problems/missed-reason-not-yours}},
+         human: "The mentor, who came, cannot give a missed reason."}
+      - {kind: api, id: explain, viewer: mentee_no_show, method: POST,
+         path: "/api/v1/sessions/{session_id}/missed-reason", params: {session_id: "${session_id}"},
+         body: {reason: wrong_time_zone, note: E2E}, expect: {status: 201, json: {/reason: wrong_time_zone}},
+         human: "The mentee says why they missed it."}
+      - {kind: api, id: explain_again, viewer: mentee_no_show, method: POST,
+         path: "/api/v1/sessions/{session_id}/missed-reason", params: {session_id: "${session_id}"},
+         body: {reason: other}, expect: {status: 409, json: {/type: /problems/missed-reason-already-sent}},
+         human: "Only once."}
+    assertions:
+      - {id: no_refund, check: db, after: settle,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE session_id = :s AND delta > 0",
+         binds: {s: "${session_id}"}, expect: {first: {n: 0}}, human: "No refund was written."}
+      - {id: event, check: db, after: settle,
+         query: "SELECT reason_code FROM session_events WHERE session_id = :s AND to_status = 'no_show'",
+         binds: {s: "${session_id}"}, expect: {first: {reason_code: mentee_no_show}},
+         human: "The record says the mentee did not come."}
+
+  # ------------------------------------------------------------------ cancel
+  - id: CANCEL-001
+    title: A mentee cancels with plenty of notice and gets the credit back
+    journey: mentee cancel
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      A mentee cancelling at least MENTEE_CANCEL_REFUND_HOURS (default 12) before
+      the start is refunded, the boundary included (decision 229).
+    smoke_prod: false
+    preconditions: ["SETUP-001 passed", "mentee_canceller has 1 credit and no live session"]
+    steps:
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
+         human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_canceller, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+3>", end: "<today+10>"},
+         expect: {status: 200}, save: {starts_at: /data/0/start}, human: "Pick a time days away."}
+      - {kind: api, id: book, viewer: mentee_canceller, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${starts_at}"},
+         expect: {status: 201}, save: {session_id: /id}, human: "Book it."}
+      - {kind: api, id: accept, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/accept",
+         params: {session_id: "${session_id}"}, expect: {status: 200}, human: "The mentor accepts."}
+      - {kind: api, id: no_reason, viewer: mentee_canceller, method: POST, path: "/api/v1/sessions/{session_id}/cancel",
+         params: {session_id: "${session_id}"}, body: {}, expect: {status: 422},
+         human: "Cancelling needs a reason (decision 237)."}
+      - {kind: api, id: cancel, viewer: mentee_canceller, method: POST, path: "/api/v1/sessions/{session_id}/cancel",
+         params: {session_id: "${session_id}"}, body: {reason_code: mentee_no_longer_needed},
+         expect: {status: 200, json: {/cancelled: true}}, human: "Cancel with days to go."}
+      - {kind: api, id: refunded, viewer: mentee_canceller, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 1}}, human: "The credit is back."}
+    assertions:
+      - {id: refund_row, check: db, after: cancel,
+         query: "SELECT reason, delta FROM credit_transactions WHERE session_id = :s AND delta > 0",
+         binds: {s: "${session_id}"}, expect: {rows: 1, first: {reason: session_cancelled_refund, delta: 1}},
+         human: "One refund was written."}
+      - {id: mentor_told, check: db, after: cancel,
+         query: "SELECT count(*) AS n FROM outbox_events WHERE entity_id = :s AND event_type = 'session_cancelled'",
+         binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "The mentor was told."}
+
+  - id: CANCEL-002
+    title: A mentee cancels late and the credit is used
+    journey: mentee cancel
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      Inside the refund window (less than MENTEE_CANCEL_REFUND_HOURS, default 12,
+      before the start) a mentee's cancel keeps the credit spent (decision 229);
+      inside 10 minutes cancelling is refused outright.
+    smoke_prod: false
+    preconditions:
+      - "SETUP-001 passed"
+      - "TODO(question): bookings need 24h notice, so reaching the 12h window means booking one day and cancelling the next. Is that acceptable, or may staging set MENTEE_CANCEL_REFUND_HOURS above 24 for the run (which changes CANCEL-001's boundary too)?"
+    steps:
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
+         human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_late_cancel, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+1>", end: "<today+3>"},
+         expect: {status: 200}, save: {starts_at: /data/0/start}, human: "Pick the first time after the 24h notice."}
+      - {kind: api, id: book, viewer: mentee_late_cancel, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${starts_at}"},
+         expect: {status: 201}, save: {session_id: /id}, human: "Book it."}
+      - {kind: api, id: accept, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/accept",
+         params: {session_id: "${session_id}"}, expect: {status: 200}, human: "The mentor accepts."}
+      - {kind: api, id: cancel_late, viewer: mentee_late_cancel, method: POST, after: accept,
+         path: "/api/v1/sessions/{session_id}/cancel", params: {session_id: "${session_id}"},
+         body: {reason_code: scheduling_conflict}, expect: {status: 200, json: {/cancelled: true}},
+         human: "Second sitting, under 12 hours (and over 10 minutes) before the start: cancel."}
+      - {kind: api, id: not_refunded, viewer: mentee_late_cancel, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 0}}, human: "The credit is not returned."}
+    assertions:
+      - {id: no_refund, check: db, after: cancel_late,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE session_id = :s AND delta > 0",
+         binds: {s: "${session_id}"}, expect: {first: {n: 0}}, human: "No refund was written."}
+
+  - id: DECLINE-001
+    title: A mentor declines a request and the mentee gets the credit back
+    journey: mentor decline
+    priority: P0
+    roles: [mentee, mentor]
+    why: A declined request is always refunded, as request_unfulfilled (decision 229).
+    smoke_prod: false
+    preconditions: ["CANCEL-001 passed (mentee_canceller has 1 credit, no live session)"]
+    steps:
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
+         human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_canceller, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+3>", end: "<today+10>"},
+         expect: {status: 200}, save: {starts_at: /data/0/start}, human: "Pick a time."}
+      - {kind: api, id: book, viewer: mentee_canceller, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${starts_at}"},
+         expect: {status: 201}, save: {session_id: /id}, human: "Send a request."}
+      - {kind: api, id: mentee_cannot_decline, viewer: mentee_canceller, method: POST,
+         path: "/api/v1/sessions/{session_id}/decline", params: {session_id: "${session_id}"},
+         body: {reason_code: other}, expect: {status: 404}, human: "Only the mentor may decline."}
+      - {kind: ui, id: decline_ui, viewer: mentor_listed, viewport: [390, 1440], route: /sessions,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "The mentor opens the request and declines it with a reason."}
+      - {kind: api, id: decline, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/decline",
+         params: {session_id: "${session_id}"}, body: {reason_code: mentor_unavailable},
+         expect: {status: 200, json: {/declined: true}}, human: "The mentor declines."}
+      - {kind: api, id: refunded, viewer: mentee_canceller, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 1}}, human: "The credit is back."}
+    assertions:
+      - {id: refund_row, check: db, after: decline,
+         query: "SELECT reason FROM credit_transactions WHERE session_id = :s AND delta > 0",
+         binds: {s: "${session_id}"}, expect: {rows: 1, first: {reason: request_unfulfilled}},
+         human: "One refund, as an unfulfilled request."}
+      - {id: mentee_told, check: db, after: decline,
+         query: "SELECT count(*) AS n FROM outbox_events WHERE entity_id = :s AND event_type = 'request_declined'",
+         binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "The mentee was told."}
+
+  - id: MOVE-001
+    title: A mentee moves a confirmed session to another time
+    journey: reschedule
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      A move ends the old session (cancelled, reason rescheduled) and books the
+      new time in one call, spending no credit and keeping the entry point;
+      a confirmed session past its refund deadline cannot move (decision 300).
+    smoke_prod: false
+    preconditions: ["DECLINE-001 passed (mentee_canceller has 1 credit, no live session)"]
+    steps:
+      - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
+         params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
+         human: "See what the mentor offers."}
+      - {kind: api, id: slots, viewer: mentee_canceller, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+3>", end: "<today+10>"},
+         expect: {status: 200}, save: {first: /data/0/start, second: /data/3/start}, human: "Pick two times."}
+      - {kind: api, id: book, viewer: mentee_canceller, method: POST, path: /api/v1/sessions,
+         headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${first}", entry_point: home},
+         expect: {status: 201}, save: {session_id: /id}, human: "Book the first time."}
+      - {kind: api, id: accept, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/accept",
+         params: {session_id: "${session_id}"}, expect: {status: 200}, human: "The mentor accepts."}
+      - {kind: api, id: mentor_cannot_move, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/move",
+         params: {session_id: "${session_id}"}, headers: {Idempotency-Key: "<new>"}, body: {starts_at: "${second}"},
+         expect: {status: 404}, human: "Only the mentee moves a session."}
+      - {kind: ui, id: move_ui, viewer: mentee_canceller, viewport: [390, 1440], route: "/sessions/${session_id}",
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "The mentee chooses Reschedule and picks the second time."}
+      - {kind: api, id: move, viewer: mentee_canceller, method: POST, path: "/api/v1/sessions/{session_id}/move",
+         params: {session_id: "${session_id}"}, headers: {Idempotency-Key: "<new>"},
+         body: {starts_at: "${second}", message: E2E move},
+         expect: {status: 201, json: {/status: pending_mentor_approval, /starts_at: "${second}"}},
+         save: {new_id: /id}, human: "Move it; the new time waits for the mentor."}
+      - {kind: api, id: old_ended, viewer: mentee_canceller, method: GET, path: "/api/v1/sessions/{session_id}",
+         params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: cancelled}},
+         human: "The old time is cancelled."}
+      - {kind: api, id: balance, viewer: mentee_canceller, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 0}}, human: "Still one credit spent, not two."}
+    assertions:
+      - {id: moved_row, check: db, after: move,
+         query: "SELECT rescheduled_from_session_id::text AS source, entry_point FROM sessions WHERE id = :n",
+         binds: {n: "${new_id}"}, expect: {first: {source: "${session_id}", entry_point: home}},
+         human: "The new session points at the old one and keeps where it came from."}
+      - {id: no_new_debit, check: db, after: move,
+         query: "SELECT count(*) AS n FROM credit_transactions WHERE session_id IN (:o, :n)",
+         binds: {o: "${session_id}", n: "${new_id}"}, expect: {first: {n: 1}},
+         human: "Only the original booking moved a credit."}
+      - {id: old_reason, check: db, after: move,
+         query: "SELECT reason_code FROM session_events WHERE session_id = :o AND to_status = 'cancelled'",
+         binds: {o: "${session_id}"}, expect: {first: {reason_code: rescheduled}}, human: "The old one ended as rescheduled."}
+    cleanup: ["mentor_listed declines ${new_id} so mentee_canceller has no live session."]
+
+  # ------------------------------------------------------------------ review
+  - id: REVIEW-001
+    title: A mentee reviews a completed session once
+    journey: review
+    priority: P0
+    roles: [mentee]
+    why: >-
+      Only a completed session's mentee may review it, once, and not the same
+      session type again within 30 days; edits are open for 10 minutes.
+    smoke_prod: false
+    preconditions: ["BOOK-001 passed (a completed session)"]
+    steps:
+      - {kind: api, id: reviewable, viewer: mentee_with_credits, method: GET, path: /api/v1/me/reviewable-sessions,
+         expect: {status: 200, json: {/data/0/session_id: "<uuid>"}}, save: {session_id: /data/0/session_id},
+         human: "The completed session asks for a review."}
+      - {kind: ui, id: review_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /reviews,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Rate the session and write a public review."}
+      - {kind: api, id: review, viewer: mentee_with_credits, method: POST, path: /api/v1/reviews,
+         body: {session_id: "${session_id}", overall_rating: 5, communication_rating: great, knowledge_rating: great,
+                practicality_rating: okay, support_rating: great, valuable_rating: 5, nps_recommend_score: 9,
+                public_review: Clear and useful E2E session.},
+         expect: {status: 201, json: {/id: "<uuid>", /editable_until: "<present>", /private_review: "<absent>"}},
+         save: {review_id: /id}, human: "Submit the review."}
+      - {kind: api, id: twice, viewer: mentee_with_credits, method: POST, path: /api/v1/reviews,
+         body: {session_id: "${session_id}", overall_rating: 4, communication_rating: okay, knowledge_rating: okay,
+                practicality_rating: okay, support_rating: okay, valuable_rating: 4, nps_recommend_score: 8,
+                public_review: Again.},
+         expect: {status: 409, json: {/type: /problems/review-already-exists}}, human: "A second review is refused."}
+      - {kind: api, id: public, viewer: anonymous, method: GET, path: "/api/v1/mentors/{handle}/reviews",
+         params: {handle: "${mentor_listed.id}"}, expect: {status: 200}, human: "The review shows on the mentor's profile."}
+    assertions:
+      - {id: mentor_told, check: db, after: review,
+         query: "SELECT EXISTS (SELECT 1 FROM outbox_events WHERE event_type = 'review_received' AND payload->>'recipient_id' = :m AND created_at > now() - interval '1 hour') AS sent",
+         binds: {m: "${mentor_listed.id}"}, expect: {first: {sent: true}}, human: "The mentor was told about the review."}
+
+  # ------------------------------------------------------------------ credits
+  - id: CREDIT-001
+    title: The monthly credit job pays each mentee their level
+    journey: monthly credits and level-up
+    priority: P0
+    roles: [mentee]
+    why: >-
+      Credits are levels: 0 not onboarded, 1 onboarded, 2 with a qualified
+      invite, 3 unlocked; the monthly job resets each balance to the level
+      (decision 308).
+    smoke_prod: false
+    preconditions:
+      - "ONB-001 passed (level 0 to 1 is tested there)"
+      - "TODO(question): the job pays once per month, so a mid-month run on staging is a no-op. Is --dry-run enough before launch, or should a run be scheduled for the 1st?"
+      - "TODO(question): levels 2 and 3 need a qualified invite and an attended session (decisions 295, 308); which invite flow should the E2E use to reach them?"
+    steps:
+      - {kind: api, id: before, viewer: mentee_new, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/monthly/level: 1, /credits/next_reset_at: "<present>"}},
+         human: "An onboarded mentee is at level 1."}
+      - {kind: job, id: monthly_dry_run, script: scripts/grant_monthly_credits.py, args: [--dry-run], expect: {exit: 0},
+         human: "Run the monthly credit job as a dry run and read what it would grant."}
+      - {kind: api, id: rules, viewer: admin_viewer, method: GET, path: /api/v1/admin/credit-rules,
+         expect: {status: 200, json: {/starter: "<int>", /invited: "<int>", /monthly: "<int>"}},
+         human: "Admins can see the credit for each level."}
+    assertions:
+      - {id: unchanged, check: api, after: monthly_dry_run, viewer: mentee_new, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: 1}}, human: "A dry run changed nothing."}
+
+  - id: CREDIT-002
+    title: An admin grants bonus credits
+    journey: admin credit grant
+    priority: P0
+    roles: [admin, mentee]
+    why: >-
+      Any admin grant may give credits (limited_access included), at most
+      CREDIT_MONTHLY_ALLOWANCE at a time, idempotently; the grant is a bonus lot
+      expiring at month end.
+    smoke_prod: false
+    preconditions: ["SETUP-001 passed"]
+    steps:
+      - {kind: api, id: before, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: "<int>"}}, save: {before: /credits/balance},
+         human: "Note the mentee's balance."}
+      - {kind: api, id: too_many, viewer: admin_viewer, method: POST, path: /api/v1/admin/credits,
+         headers: {Idempotency-Key: "<new>"}, body: {user_ids: ["${mentee_with_credits.id}"], quantity: 99},
+         expect: {status: 422}, human: "More than a month's allowance is refused."}
+      - {kind: api, id: grant, viewer: admin_viewer, method: POST, path: /api/v1/admin/credits,
+         headers: {Idempotency-Key: "<new>"}, body: {user_ids: ["${mentee_with_credits.id}"], quantity: 2, note: E2E grant},
+         expect: {status: 200, json: {/granted/0: "<present>", /unresolved: [], /quantity: 2}},
+         human: "A limited admin grants two credits."}
+      - {kind: api, id: replay, viewer: admin_viewer, method: POST, path: /api/v1/admin/credits,
+         headers: {Idempotency-Key: "<same as grant>"}, body: {user_ids: ["${mentee_with_credits.id}"], quantity: 2, note: E2E grant},
+         expect: {status: 200}, human: "Sending it twice grants once."}
+      - {kind: api, id: after, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/credits/balance: "${before}+2", /credits/bonus/balance: "<int>"}},
+         human: "The mentee has two more credits, as a bonus."}
+      - {kind: api, id: history, viewer: admin_super, method: GET, path: /api/v1/admin/credits,
+         expect: {status: 200, json: {/data: "<nonempty>"}}, human: "The grant is in the admin history."}
+      - {kind: api, id: mentee_cannot, viewer: mentee_with_credits, method: POST, path: /api/v1/admin/credits,
+         headers: {Idempotency-Key: "<new>"}, body: {user_ids: ["${mentee_with_credits.id}"], quantity: 1},
+         expect: {status: 404}, human: "A mentee cannot grant credits."}
+    assertions:
+      - {id: one_lot, check: db, after: replay,
+         query: "SELECT count(*) AS n FROM admin_credit_grants g WHERE g.user_id = :u AND g.note = 'E2E grant' AND g.created_at > now() - interval '1 hour'",
+         binds: {u: "${mentee_with_credits.id}"}, expect: {first: {n: 1}}, human: "One grant was recorded."}
+
+  # ------------------------------------------------------------------ messages
+  - id: MSG-001
+    title: A booked pair can message each other, and strangers cannot
+    journey: messages
+    priority: P0
+    roles: [mentee, mentor]
+    why: >-
+      Two people may message once they share a booked session (confirmed,
+      completed, no-show or cancelled); anyone else is refused (decision 301).
+    smoke_prod: false
+    preconditions: ["BOOK-001 passed"]
+    steps:
+      - {kind: api, id: stranger, viewer: mentee_new, method: POST, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentor_listed.id}"}, body: {client_id: "<new>", body: Hello},
+         expect: {status: 403, json: {/type: /problems/not-connected}}, human: "Someone with no booking cannot message."}
+      - {kind: ui, id: message_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /messages,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Open messages and write to the mentor."}
+      - {kind: api, id: send, viewer: mentee_with_credits, method: POST, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentor_listed.id}"}, body: {client_id: "<new>", body: Hello from E2E},
+         expect: {status: 201, json: {/mine: true, /body: Hello from E2E}}, save: {message_id: /id},
+         human: "The mentee sends a message."}
+      - {kind: api, id: resend, viewer: mentee_with_credits, method: POST, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentor_listed.id}"}, body: {client_id: "<same as send>", body: Hello from E2E},
+         expect: {status: 200, json: {/id: "${message_id}"}}, human: "A retry does not send it twice."}
+      - {kind: api, id: unread, viewer: mentor_listed, method: GET, path: /api/v1/me/messages/unread,
+         expect: {status: 200, json: {/total: "<int>"}}, human: "The mentor has an unread message."}
+      - {kind: api, id: thread, viewer: mentor_listed, method: GET, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentee_with_credits.id}"}, expect: {status: 200, json: {/items: "<nonempty>"}},
+         human: "The mentor reads it."}
+      - {kind: api, id: read, viewer: mentor_listed, method: POST, path: "/api/v1/me/messages/{user_id}/read",
+         params: {user_id: "${mentee_with_credits.id}"}, body: {up_to: "${message_id}"},
+         expect: {status: 204}, human: "It is marked read."}
+      - {kind: api, id: reply, viewer: mentor_listed, method: POST, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentee_with_credits.id}"}, body: {client_id: "<new>", body: Reply from E2E},
+         expect: {status: 201}, human: "The mentor replies."}
+
+  # ------------------------------------------------------------------ account
+  - id: ACCT-001
+    title: A mentee deletes their account; it can be restored for 30 days, then is purged
+    journey: account deletion and purge
+    priority: P0
+    roles: [mentee, admin]
+    why: >-
+      Deleting needs the word DELETE, signs out everywhere and schedules a purge
+      30 days later (decision 277); a super admin may restore before then.
+    smoke_prod: false
+    preconditions: ["mentee_to_delete is seeded and has signed in once"]
+    steps:
+      - {kind: api, id: me, viewer: mentee_to_delete, method: GET, path: /api/v1/me,
+         expect: {status: 200}, human: "The account exists."}
+      - {kind: api, id: no_confirm, viewer: mentee_to_delete, method: DELETE, path: /api/v1/me,
+         body: {confirm: delete}, expect: {status: 422}, human: "Deleting without typing DELETE is refused."}
+      - {kind: ui, id: delete_ui, viewer: mentee_to_delete, viewport: [390, 1440], route: /settings,
+         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Open Settings, choose Delete account and type DELETE."}
+      - {kind: api, id: delete, viewer: mentee_to_delete, method: DELETE, path: /api/v1/me,
+         body: {confirm: DELETE}, expect: {status: 204}, human: "Delete the account."}
+      - {kind: api, id: gone, viewer: mentee_to_delete, method: GET, path: /api/v1/me,
+         expect: {status: 404}, human: "The account is gone for that sign-in."}
+      - {kind: job, id: purge_dry_run, script: scripts/purge_deleted_users.py, args: [--dry-run], expect: {exit: 0},
+         human: "A purge dry run does not count this account yet: it is not due for 30 days."}
+      - {kind: api, id: viewer_cannot_restore, viewer: admin_viewer, method: POST,
+         path: "/api/v1/admin/users/{user_id}/restore", params: {user_id: "${mentee_to_delete.id}"},
+         expect: {status: 404}, human: "A limited admin cannot restore."}
+      - {kind: api, id: restore, viewer: admin_super, method: POST, path: "/api/v1/admin/users/{user_id}/restore",
+         params: {user_id: "${mentee_to_delete.id}"}, expect: {status: 204}, human: "A super admin restores it."}
+    assertions:
+      - {id: scheduled, check: db, after: delete,
+         query: "SELECT (deletion_purge_at - deleted_at) = interval '30 days' AS thirty FROM users WHERE id = :u",
+         binds: {u: "${mentee_to_delete.id}"}, expect: {first: {thirty: true}}, human: "The purge is due in 30 days."}
+      - {id: restored, check: db, after: restore,
+         query: "SELECT deleted_at IS NULL AS live FROM users WHERE id = :u",
+         binds: {u: "${mentee_to_delete.id}"}, expect: {first: {live: true}}, human: "The account is live again."}
+    cleanup: ["TODO(question): the actual purge cannot run inside 30 days on staging; confirm it is covered by its integration tests and the daily job's logs instead."]
+
+  # ------------------------------------------------------------------ preview
+  - id: PREVIEW-001
+    title: An admin previews the app as a mentee, read only
+    journey: preview as user
+    priority: P0
+    roles: [admin, mentee]
+    why: >-
+      With X-EF-Preview an admin's request is answered as the user, and any
+      write is refused with 403 read-only-view-as (decisions 309, 313); messages
+      stay hidden until revealed (decision 314).
+    smoke_prod: false
+    flags: [PREVIEW_AS_USER_ENABLED]
+    preconditions: ["MSG-001 passed (mentee_with_credits has messages)"]
+    steps:
+      - {kind: api, id: can_preview, viewer: admin_viewer, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/can_preview_as_user: true}}, human: "The admin may preview."}
+      - {kind: api, id: start, viewer: admin_viewer, method: POST, path: /api/v1/admin/preview-sessions,
+         body: {user_id: "${mentee_with_credits.id}"},
+         expect: {status: 201, json: {/id: "<uuid>", /user/role: mentee, /revealed: false}}, save: {preview_id: /id},
+         human: "Start a preview as the mentee."}
+      - {kind: api, id: read_as, viewer: admin_viewer, method: GET, path: /api/v1/me,
+         headers: {X-EF-Preview: "${preview_id}"}, expect: {status: 200, json: {/id: "${mentee_with_credits.id}"}},
+         human: "The app shows the mentee's account."}
+      - {kind: api, id: write_refused, viewer: admin_viewer, method: PUT, path: /api/v1/me/consents/analytics,
+         headers: {X-EF-Preview: "${preview_id}"}, body: {granted: true, version: e2e},
+         expect: {status: 403, json: {/type: /problems/read-only-view-as, /code: read_only_view_as}},
+         human: "Changing anything is refused."}
+      - {kind: api, id: hidden, viewer: admin_viewer, method: GET, path: "/api/v1/me/messages/{user_id}",
+         params: {user_id: "${mentor_listed.id}"}, headers: {X-EF-Preview: "${preview_id}"},
+         expect: {status: 200, json: {/items/0/hidden_in_preview: true}}, human: "Message contents are hidden."}
+      - {kind: ui, id: banner_ui, viewer: admin_viewer, viewport: [1440], route: /admin, actions: TODO(frontend),
+         expect: TODO(frontend), screenshot: true, a11y: true, human: "The preview banner shows whose view this is."}
+      - {kind: api, id: end, viewer: admin_viewer, method: POST, path: "/api/v1/admin/preview-sessions/{preview_id}/end",
+         params: {preview_id: "${preview_id}"}, body: {reason: exit}, expect: {status: 204}, human: "End the preview."}
+      - {kind: api, id: ended, viewer: admin_viewer, method: GET, path: /api/v1/me,
+         headers: {X-EF-Preview: "${preview_id}"}, expect: {status: 401, json: {/type: /problems/preview-ended}},
+         human: "The ended preview no longer works."}
+    assertions:
+      - {id: blocked_logged, check: db, after: write_refused,
+         query: "SELECT count(*) AS n FROM preview_events WHERE session_id = :p AND kind = 'blocked_write'",
+         binds: {p: "${preview_id}"}, expect: {first: {n: 1}}, human: "The refused write was logged."}
+      - {id: consent_unchanged, check: api, after: write_refused, viewer: mentee_with_credits, method: GET,
+         path: /api/v1/me, expect: {status: 200, json: {/analytics_consent: null}}, human: "The mentee's data did not change."}
+
+  # ------------------------------------------------------------------ analytics
+  - id: ANALYTICS-001
+    title: Admin analytics are behind their flag and open to every admin
+    journey: admin analytics
+    priority: P0
+    roles: [admin]
+    why: >-
+      Off, every /admin/analytics route is 404 before the token is read; on, any
+      admin grant reads them; funnels and behaviour answer 503 analytics-upstream
+      when PostHog is not configured (decisions 324, 331).
+    smoke_prod: true
+    flags: [ADMIN_ANALYTICS_ENABLED]
+    steps:
+      - {kind: api, id: flag_off, viewer: anonymous, method: GET, path: /api/v1/admin/analytics/overview,
+         expect: {status: 404}, human: "With the flag off (or for an anonymous caller), the page does not exist."}
+      - {kind: api, id: mentee, viewer: mentee_with_credits, method: GET, path: /api/v1/admin/analytics/overview,
+         expect: {status: 404}, human: "A mentee cannot see it."}
+      - {kind: api, id: overview, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/overview,
+         params: {window: 30d}, expect: {status: 200, json: {/window: "<present>", /north_star: "<present>"}},
+         human: "With the flag on, a limited admin reads the overview."}
+      - {kind: api, id: credits, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/credits,
+         expect: {status: 200}, human: "The credits tab loads."}
+      - {kind: api, id: sessions, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/sessions,
+         expect: {status: 200}, human: "The sessions tab loads."}
+      - {kind: api, id: growth, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/growth,
+         expect: {status: 200}, human: "The growth tab loads."}
+      - {kind: api, id: supply, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/supply,
+         expect: {status: 200}, human: "The supply tab loads."}
+      - {kind: api, id: bad_window, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/overview,
+         params: {window: 5d}, expect: {status: 422, json: {/type: /problems/analytics-window}},
+         human: "An unknown window is refused."}
+      - {kind: api, id: funnel, viewer: admin_viewer, method: GET, path: "/api/v1/admin/analytics/funnels/{name}",
+         params: {name: booking}, expect: {status: 200},
+         human: "With PostHog configured, the booking funnel loads. Without it: 503, type /problems/analytics-upstream, Retry-After 60."}
+      - {kind: api, id: behaviour, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/behaviour,
+         expect: {status: 200}, human: "The behaviour tab loads (503 analytics-upstream when PostHog is unconfigured)."}
+      - {kind: api, id: unknown_funnel, viewer: admin_viewer, method: GET, path: "/api/v1/admin/analytics/funnels/{name}",
+         params: {name: nope}, expect: {status: 404}, human: "An unknown funnel does not exist."}
+      - {kind: ui, id: tabs_ui, viewer: admin_viewer, viewport: [1440], flags: [ADMIN_ANALYTICS_ENABLED],
+         route: /admin/analytics, actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
+         human: "Open each analytics tab."}
+
+  - id: CONSENT-001
+    title: A user answers the analytics consent and can change it
+    journey: analytics consent
+    priority: P0
+    roles: [mentee]
+    why: >-
+      The answer is stored per user and replaced by a later one; /me shows it,
+      null until answered (decision 329).
+    smoke_prod: false
+    steps:
+      - {kind: api, id: unanswered, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/analytics_consent: null}}, human: "Nothing answered yet."}
+      - {kind: api, id: bad, viewer: mentee_with_credits, method: PUT, path: /api/v1/me/consents/analytics,
+         body: {granted: true}, expect: {status: 422}, human: "An answer needs the consent version."}
+      - {kind: api, id: grant, viewer: mentee_with_credits, method: PUT, path: /api/v1/me/consents/analytics,
+         body: {granted: true, version: "2026-11"},
+         expect: {status: 200, json: {/granted: true, /version: "2026-11", /answered_at: "<present>"}},
+         human: "Accept analytics."}
+      - {kind: api, id: withdraw, viewer: mentee_with_credits, method: PUT, path: /api/v1/me/consents/analytics,
+         body: {granted: false, version: "2026-11"}, expect: {status: 200, json: {/granted: false}},
+         human: "Withdraw it."}
+      - {kind: api, id: shown, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
+         expect: {status: 200, json: {/analytics_consent/granted: false}}, human: "The latest answer is shown."}
+    assertions:
+      - {id: one_row, check: db, after: withdraw,
+         query: "SELECT count(*) AS n FROM analytics_consents WHERE user_id = :u",
+         binds: {u: "${mentee_with_credits.id}"}, expect: {first: {n: 1}}, human: "One answer per person, replaced."}
+
+  - id: ACQ-001
+    title: How someone found us is recorded once
+    journey: acquisition
+    priority: P0
+    roles: [mentee]
+    why: >-
+      The first answer is stored and later ones change nothing; unknown values
+      become direct / other rather than being refused (decision 329).
+    smoke_prod: false
+    preconditions: ["AUTH-001 passed (mentee_new is new and has no acquisition)"]
+    steps:
+      - {kind: api, id: first, viewer: mentee_new, method: POST, path: /api/v1/me/acquisition,
+         body: {source: not-a-source, channel: not-a-channel},
+         expect: {status: 201, json: {/source: direct, /channel: other}}, human: "The first answer is stored."}
+      - {kind: api, id: second, viewer: mentee_new, method: POST, path: /api/v1/me/acquisition,
+         body: {source: invite, channel: whatsapp},
+         expect: {status: 200, json: {/source: direct, /channel: other}}, human: "A later answer changes nothing."}
+    assertions:
+      - {id: stored, check: db, after: second,
+         query: "SELECT signup_source, signup_channel, acquired_at IS NOT NULL AS acquired FROM users WHERE id = :u",
+         binds: {u: "${mentee_new.id}"}, expect: {first: {signup_source: direct, signup_channel: other, acquired: true}},
+         human: "The first answer is what is kept."}
+
+  # ------------------------------------------------------------------ smoke
+  - id: SMOKE-001
+    title: Production answers its public reads
+    journey: production smoke
+    priority: P0
+    roles: [visitor]
+    why: After promotion, the API is up and the public pages it serves load. GET only.
+    smoke_prod: true
+    steps:
+      - {kind: api, id: health, viewer: anonymous, method: GET, path: /health, expect: {status: 200}, human: "The API is up."}
+      - {kind: api, id: ready, viewer: anonymous, method: GET, path: /ready, expect: {status: 200}, human: "The API reaches its database."}
+      - {kind: api, id: mentors, viewer: anonymous, method: GET, path: /api/v1/mentors, expect: {status: 200, json: {/data: "<nonempty>"}},
+         human: "Explore lists mentors."}
+      - {kind: api, id: featured, viewer: anonymous, method: GET, path: /api/v1/featured-mentor, expect: {status: 200},
+         human: "The featured mentor loads."}
+      - {kind: api, id: countries, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
+         params: {catalogue: countries}, expect: {status: 200}, human: "The country list loads."}
+
+  # ------------------------------------------------------------------ P1 / P2 stubs
+  - {id: GUEST-001, title: A guest picks a time before signing up, journey: guest booking, priority: P1,
+     roles: [visitor, mentee], why: "The onboarding_guest entry point carries a chosen time through sign-up.", smoke_prod: false, steps: []}
+  - {id: INVITE-001, title: An invite link lands and is claimed, journey: invites, priority: P1,
+     roles: [visitor, mentee], why: "GET /invites/{code} shows the landing; a qualified invite counts toward a level (decision 308).", smoke_prod: false, steps: []}
+  - {id: LINK-001, title: Email and push deep links return to the page after sign-in, journey: deep links, priority: P1,
+     roles: [mentee, mentor], why: "A link from an email or push opens the right page, through sign-in if needed.", smoke_prod: false, steps: []}
+  - {id: OAUTH-001, title: A mentor connects their calendar and video provider, journey: integrations, priority: P1,
+     roles: [mentor], why: "GET /me/calendar/connect and its callback link a Google calendar; conferencing is set.", smoke_prod: false, steps: []}
+  - {id: PWA-001, title: "The app installs, updates its service worker and shows offline state", journey: PWA, priority: P2,
+     roles: [mentee], why: "Installed users get updates and a clear offline state.", smoke_prod: false, steps: []}
+  - {id: PUSH-001, title: The push permission prompt and subscription, journey: push, priority: P1,
+     roles: [mentee], why: "Opting in stores a subscription (POST /me/push-subscriptions).", smoke_prod: false, steps: []}
+  - {id: TZ-001, title: Times show in the viewer's time zone, journey: time zones, priority: P1,
+     roles: [mentee, mentor], why: "Slots are UTC instants; each side sees their own zone.", smoke_prod: false, steps: []}
+  - {id: LANDING-001, title: A mentor landing redirects to the right place, journey: mentor landing, priority: P2,
+     roles: [mentor], why: "Mentors land on their dashboard, not the mentee home.", smoke_prod: false, steps: []}
+  - {id: FILE-001, title: Private files upload and open only for the right people, journey: private files, priority: P1,
+     roles: [mentee, mentor], why: "Intake and message files are private to the pair.", smoke_prod: false, steps: []}
+  - {id: ERROR-001, title: Offline and server errors show a retry, journey: error states, priority: P1,
+     roles: [mentee], why: "A 5xx or lost connection is recoverable, not a blank page.", smoke_prod: false, steps: []}
+  - {id: CONSENT-002, title: The consent banner and its withdraw toggle, journey: analytics consent, priority: P1,
+     roles: [visitor, mentee], why: "The banner asks once; Settings can withdraw (decision 329).", smoke_prod: false, steps: []}
+  - {id: KEYBOARD-001, title: Booking with the keyboard only, journey: accessibility, priority: P1,
+     roles: [mentee], why: "The BOOK-001 path works without a mouse.", smoke_prod: false, steps: []}
+  - {id: LAYOUT-001, title: P0 screens at 390px, journey: layout, priority: P2,
+     roles: [mentee, mentor, admin], why: "Every P0 screen works on a phone, with no horizontal scroll.", smoke_prod: false, steps: []}
+  - {id: HUMAN-001, title: A migrated user signs in for the first time, journey: sign-in, priority: P1,
+     roles: [mentee, mentor], why: "Migrated accounts are pre-linked to Supabase; their first sign-in must find them (decision 40).",
+     smoke_prod: false, human_only: true, steps: []}
+  - {id: HUMAN-002, title: Google sign-in, journey: sign-in, priority: P1, roles: [mentee],
+     why: "Google sign-in reaches the same account rules as email (decision 178).", smoke_prod: false, human_only: true, steps: []}

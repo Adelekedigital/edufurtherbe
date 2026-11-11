@@ -46,7 +46,9 @@ ADMIN_USERS = "/auth/v1/admin/users"
 # admin `signOut(jwt, scope)` is this call. The key only routes it (`apikey`).
 LOGOUT = "/auth/v1/logout"
 
-# Never called. Named so a test can assert the absence rather than trust it.
+# Never called by this client. Named so a test can assert the absence rather
+# than trust it. `generate_link` is called only by `e2e_sessions.E2ESessionClient`,
+# for seeded `.test` accounts, never on the provisioning path.
 INVITE_ENDPOINTS = ("/auth/v1/invite", "/auth/v1/admin/generate_link")
 
 # Supabase returns 422 with this code when the address already has an account.

@@ -109,6 +109,8 @@ dev = [
     "pre-commit>=4.6.1",
     "pytest-xdist>=3.8.0",
     "types-defusedxml>=0.7.0.20260504",
+    # Reads docs/e2e/scenarios.yaml in its unit test. Floor = the version locked.
+    "pyyaml>=6.0.3",
 ]
 
 [tool.uv]
