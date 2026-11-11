@@ -15,6 +15,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from pydantic import ValidationError as PydanticValidationError
+from tests.posthog_fakes import recording_client
 
 from app.core.config import Settings, analytics_gaps, env_key
 from app.core.errors import ConfigurationError, UpstreamError
@@ -60,7 +61,7 @@ ON = {"analytics_enabled": True, "analytics_host": HOST, "analytics_project_toke
 # --------------------------------------------------------------------------
 
 
-def test_the_server_sends_exactly_the_ten_outcome_events() -> None:
+def test_the_server_sends_exactly_the_twelve_outcome_events() -> None:
     assert {event.value for event in AnalyticsEvent} == {
         "booking_requested",
         "session_confirmed",
@@ -72,6 +73,8 @@ def test_the_server_sends_exactly_the_ten_outcome_events() -> None:
         "mentor_listed",
         "review_submitted",
         "referral_unlocked",
+        "booking_received",
+        "session_delivered",
     }
     assert Channel.ANALYTICS == "analytics"
 
@@ -312,15 +315,6 @@ def test_the_null_sink_takes_everything_and_sends_nothing() -> None:
 # --------------------------------------------------------------------------
 
 
-def recording(status: int = 200, seen: list[httpx.Request] | None = None) -> httpx.Client:
-    def answer(request: httpx.Request) -> httpx.Response:
-        if seen is not None:
-            seen.append(request)
-        return httpx.Response(status, json={"status": "Ok" if status == 200 else "no"})
-
-    return httpx.Client(transport=httpx.MockTransport(answer))
-
-
 EVENTS = [
     analytics_event(AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=AT, properties={"amount": 1})
 ]
@@ -333,7 +327,7 @@ def test_capture_posts_one_batch_with_the_project_token(historical: bool) -> Non
         host=HOST + "/",
         project_token=TOKEN,
         historical_migration=historical,
-        client=recording(seen=seen),
+        client=recording_client(seen),
     )
 
     sink.capture(EVENTS)
@@ -351,14 +345,14 @@ def test_capture_posts_one_batch_with_the_project_token(historical: bool) -> Non
 def test_nothing_to_capture_sends_nothing() -> None:
     seen: list[httpx.Request] = []
 
-    PostHogSink(host=HOST, project_token=TOKEN, client=recording(seen=seen)).capture([])
+    PostHogSink(host=HOST, project_token=TOKEN, client=recording_client(seen)).capture([])
 
     assert seen == []
 
 
 @pytest.mark.parametrize("status", [400, 401, 500, 503])
 def test_a_refusal_is_an_upstream_error(status: int) -> None:
-    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording(status))
+    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording_client(status=status))
 
     with pytest.raises(UpstreamError, match=str(status)):
         sink.capture(EVENTS)

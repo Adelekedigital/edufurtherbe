@@ -33,9 +33,12 @@ BASE = "/api/v1/admin/analytics"
 class PostHog:
     """A fake PostHog: answers each query by its kind and name, and counts."""
 
-    def __init__(self, *, login: tuple[int, int, int] = (100, 5, 0), down: bool = False) -> None:
+    def __init__(
+        self, *, login: tuple[int, int, int] = (100, 5, 0), down: bool = False, shared: int = 0
+    ) -> None:
         self.login = login
         self.down = down
+        self.shared = shared
         self.seen: list[dict[str, Any]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -56,6 +59,8 @@ class PostHog:
             return rows(["g", "searched", "led"], [1, 10, 4], [2, 8, 2])
         if name == "admin_analytics_explore_booked":
             return rows(["booked"], [2])
+        if name == "admin_analytics_profile_links":
+            return rows(["shared"], [self.shared])
         raise AssertionError(name)
 
     def asked(self, name: str) -> int:
@@ -114,20 +119,30 @@ async def test_a_funnel_returns_every_step_compared_and_refuses_what_it_has_not(
     body = answer.json()
     assert (body["name"], body["by"], body["window_days"]) == ("signup", "migrated", 30)
     assert body["note"].startswith("One sign-up funnel for both roles")
-    keys = "started code_verified onboarded first_booking_or_bookable first_completed"
-    assert [s["key"] for s in body["steps"]] == keys.split()
-    first = {"key": "started", "label": "Started sign-up", "value": 50, "previous": 50}
+    assert [s["key"] for s in body["steps"]] == ["started", "code_verified", "onboarded"]
+    first = {
+        "key": "started",
+        "label": "Started sign-up",
+        "value": 50,
+        "previous": 50,
+        "layer": "primary",
+    }
     assert body["steps"][0] == first
-    assert [s["value"] for s in body["steps"]] == [50, 40, 30, 20, 10]
+    assert [s["value"] for s in body["steps"]] == [50, 40, 30]
+    assert body["figures"] == []
     assert all(a["key"] != "login_code_failed" for a in body["alerts"])
     # This period and the previous: two funnel reads.
     assert posthog.asked("FunnelsQuery") == 2
     async with client_for(app_for(db_engine, api_storage, posthog)) as client:
-        untracked = await get(client, token, "/funnels/mentor_activation", compare="false")
+        alone = await get(client, token, "/funnels/mentee_activation", compare="false")
         assert (await get(client, token, "/funnels/sign_up")).status_code == 404
         refused = await get(client, token, "/funnels/booking", by="migrated")
-    steps = untracked.json()["steps"]
-    assert [s["value"] for s in steps] == [50, 40, 30, 20, None]
+    steps = alone.json()["steps"]
+    assert [(s["key"], s["value"], s["layer"]) for s in steps] == [
+        ("onboarded", 50, "primary"),
+        ("first_request", 40, "primary"),
+        ("first_session", 30, "secondary"),
+    ]
     assert all(s["previous"] is None for s in steps)
     assert posthog.asked("FunnelsQuery") == 3  # once without compare; none refused
     assert refused.status_code == 422

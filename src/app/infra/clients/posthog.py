@@ -127,14 +127,16 @@ class PostHogSink:
             raise UpstreamError(f"analytics person erase failed: {why(exc)}") from exc
 
 
-def analytics_sink_for(settings: Settings) -> AnalyticsSink:
+def analytics_sink_for(settings: Settings, *, client: httpx.Client | None = None) -> AnalyticsSink:
     """PostHog when analytics is on and `analytics_gaps` names nothing, else
-    the null sink: the startup check's rule, so the two cannot disagree."""
+    the null sink: the startup check's rule, so the two cannot disagree.
+    ``client`` overrides the shared one, for a caller that needs a shorter
+    timeout (the error reporter)."""
     host, token = settings.analytics_host, settings.analytics_project_token
     # `analytics_gaps` decides; the last test only narrows the types for mypy.
     if not settings.analytics_enabled or analytics_gaps(settings) or not (host and token):
         return NullAnalyticsSink()
-    return PostHogSink(host=host, project_token=token, eraser=_eraser_for(settings))
+    return PostHogSink(host=host, project_token=token, client=client, eraser=_eraser_for(settings))
 
 
 def _eraser_for(settings: Settings) -> PersonEraser | None:

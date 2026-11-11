@@ -11,6 +11,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from tests.posthog_fakes import recording_client
 
 from app.core.config import Settings, analytics_gaps, env_key
 from app.core.errors import UpstreamError
@@ -42,17 +43,11 @@ def settings(**values: object) -> Settings:
     return Settings(_env_file=None, **values)  # type: ignore[arg-type]
 
 
-def recording(seen: list[httpx.Request], status: int = 202) -> httpx.Client:
-    def answer(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(status, json={"persons_queued_for_deletion": 1})
-
-    return httpx.Client(transport=httpx.MockTransport(answer))
-
-
 def test_delete_person_posts_a_bulk_delete_by_distinct_id_with_its_events() -> None:
     seen: list[httpx.Request] = []
-    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording(seen), eraser=ERASER)
+    sink = PostHogSink(
+        host=HOST, project_token=TOKEN, client=recording_client(seen, status=202), eraser=ERASER
+    )
 
     sink.delete_person(USER)
 
@@ -66,7 +61,7 @@ def test_delete_person_posts_a_bulk_delete_by_distinct_id_with_its_events() -> N
 @pytest.mark.parametrize("status", [400, 401, 403, 500])
 def test_a_refused_erase_is_an_upstream_error(status: int) -> None:
     sink = PostHogSink(
-        host=HOST, project_token=TOKEN, client=recording([], status=status), eraser=ERASER
+        host=HOST, project_token=TOKEN, client=recording_client([], status=status), eraser=ERASER
     )
 
     with pytest.raises(UpstreamError, match=str(status)):
@@ -76,7 +71,7 @@ def test_a_refused_erase_is_an_upstream_error(status: int) -> None:
 def test_without_the_erase_settings_nothing_is_sent_and_the_erase_is_refused() -> None:
     """Refused, so the purge defers the account rather than leave the person."""
     seen: list[httpx.Request] = []
-    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording(seen))
+    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording_client(seen, status=202))
 
     with pytest.raises(UpstreamError, match="ANALYTICS_PROJECT_ID"):
         sink.delete_person(USER)

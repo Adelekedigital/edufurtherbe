@@ -152,6 +152,9 @@ ADDED = {
     ),
     # The zone the analytics window was read in (decision 335).
     "WindowRead": ("tz",),
+    # Layered funnels and the figures beside them (decision 338).
+    "FunnelStepRead": ("layer",),
+    "AnalyticsFunnelRead": ("figures",),
 }
 
 
