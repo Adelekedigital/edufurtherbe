@@ -284,6 +284,13 @@ def test_the_explore_card_is_searchers_who_went_on_over_searchers() -> None:
     assert off.value is not None and off.value.previous is None
 
 
+def test_a_funnel_nobody_entered_is_zero_at_every_step() -> None:
+    # PostHog answers an empty list, not zeros, when no person matches the
+    # funnel or its breakdown (seen live on the dev project, 2026-11-11).
+    read, _ = posthog_reader(lambda _: httpx.Response(200, json={"results": []}))
+    assert read.funnel(FUNNELS["signup"], "mentee", WINDOW, INTERNAL) == [0, 0, 0]
+
+
 def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
     read, seen = posthog_reader(lambda _: funnel_answer(50, 40, 30))
     assert read.funnel(FUNNELS["signup"], "migrated", WINDOW, INTERNAL) == [50, 40, 30]
