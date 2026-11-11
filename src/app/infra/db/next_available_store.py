@@ -35,7 +35,7 @@ WHY THE SLOTS ARE `list_slots`
 ==============================
 The card's time is the first instant `list_slots` offers for any of the
 mentor's live offerings (an offering's own time: the first it offers for that
-one), from `mentor_today()` through the configured maximum window's last day
+one), from `local_date()` through the configured maximum window's last day
 (`BookingWindow.max_days`, #221) — the furthest any slot can be offered, with
 `list_slots`' instant cutoff dropping what falls past it.
 `bookable_until` is that slot's start less the offering's notice: past it
@@ -73,7 +73,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.availability import BookingWindow, UtcInterval
+from app.domain.availability import BookingWindow, UtcInterval, local_date
 from app.infra.db.models.availability import (
     MentorAvailabilityChange,
     MentorNextAvailability,
@@ -84,7 +84,7 @@ from app.infra.db.models.user import User
 from app.infra.db.next_available_state import unchanged
 from app.infra.db.public_visibility import bookable_mentors
 from app.infra.db.session_type_store import list_session_types
-from app.infra.db.slot_store import FreeBusyReader, list_slots, mentor_today
+from app.infra.db.slot_store import FreeBusyReader, list_slots
 
 __all__ = ["refresh_next_available"]
 
@@ -137,7 +137,7 @@ async def _free_by_offering(
     """Each live offering's earliest bookable instant, and until when."""
     offerings = await list_session_types(session, mentor, window=window) or []
     zone = (await session.execute(select(User.timezone).where(User.id == mentor))).scalar_one()
-    start = mentor_today(zone, now)
+    start = local_date(zone, now)
     # Through the window's last, partial day: the cutoff is the instant
     # `now + max_days`, which usually falls mid-day, so ending at that date's
     # start would skip slots that are legally bookable. `list_slots` drops the

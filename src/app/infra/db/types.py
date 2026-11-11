@@ -53,6 +53,8 @@ from app.domain.enums import (
     EmailLine,
     EntryPoint,
     FeaturedSource,
+    FunnelFigureUnit,
+    FunnelLayer,
     IntakeFileType,
     IntakeStatus,
     LanguageProficiency,
@@ -298,6 +300,9 @@ UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
     WritingAssistMode: "writing-assist mode is request-only; no column holds it",
     # A PostHog event property read back for the admin page; no column holds it.
     ProfileViewSource: "profile-view source is PostHog's; no column holds it",
+    # How the admin funnels are drawn (decision 338); response-only.
+    FunnelLayer: "a funnel step's layer is response-only; no column holds it",
+    FunnelFigureUnit: "a funnel figure's unit is response-only; no column holds it",
 }
 
 

@@ -42,11 +42,16 @@ router = APIRouter(
 #: Said once for every section: the window, compare, exclusions and alerts.
 _SECTION = (
     "**Window**: `window=7d|30d|90d` (ending today, default `30d`), or `from` and "
-    "`to` as UTC dates, both inclusive (one day sends the same date twice; `from` "
+    "`to` as dates, both inclusive (one day sends the same date twice; `from` "
     "no earlier than 2024-06-01, `to` no later than today). The previous period "
     "has the same number of days and ends the day before. `compare=false` makes "
-    "every `previous` null. A bad value is a `422` of type "
-    "`/problems/analytics-window`, with `errors` naming the parameter.\n\n"
+    "every `previous` null.\n\n"
+    "**`tz`**: an IANA time zone such as `Africa/Lagos`, default `UTC`. Today, "
+    "the dates, each day's midnight (a daylight-saving day is 23 or 25 hours) and "
+    "the series and sparkline points are read in it, and `window.tz` echoes it. "
+    "The alerts' yesterday and Growth's `months` stay UTC.\n\n"
+    "A bad value, `tz` included, is a `422` of type `/problems/analytics-window`, "
+    "with `errors` naming the parameter.\n\n"
     "**Left out of every number**: admins and demo accounts. Preview sessions "
     "write nothing, so nothing of theirs is counted.\n\n"
     "**`alerts`**: every alert firing now, newest first, whatever the window: no "
@@ -233,8 +238,20 @@ _POSTHOG_RESPONSES = _RESPONSES | {
         "People entering the funnel in the window who reached each step within "
         "`window_days` (untracked: null). `by` must be one the funnel offers, else `422`:\n\n"
         + _FUNNELS
-        + _POSTHOG
-        + _SECTION
+        + "Each step's `layer` is the row it is drawn in: `primary`, the path, or "
+        "`secondary`, the outcomes beside it. `figures` sit beside the funnel (see "
+        "the schema), `[]` for a funnel with none.\n\n"
+        "**`mentor_activation` is read from this database**, not PostHog, and is "
+        "never a `503`: mentors approved in the window, at their first approval in "
+        "it; of them, those whose weekly hours stood at or after approval; of "
+        "those, those with a published session type of their own (not the one "
+        "onboarding made) that did too. A setup step is reached once, even if the "
+        "hours or the type were switched off or deleted later. The outcomes count "
+        "from approval: a booking request to them within 30 days, then of those a "
+        "completed session as mentor within 30 days. `by` is their sign-up "
+        "source. Only its `profile_link_shared` figure reads PostHog, and is null "
+        "when PostHog does not answer.\n\n"
+        "Every other funnel: " + _POSTHOG + _SECTION
     ),
     responses=_POSTHOG_RESPONSES,
 )

@@ -64,7 +64,7 @@ async def supply_tab(session: AsyncSession, window: Window) -> SupplyTab:
     ``window``; the places as they stand now."""
     return SupplyTab(
         cohort=await _cohort(session, window),
-        median_review_days=days_of(await session.scalar(_median_review_seconds(window))),
+        median_review_days=await median_review_days(session, window),
         unlisted=int(await session.scalar(_unlistings(window)) or 0),
         by_country=neediest(await _places(session, _countries())),
         by_school=neediest(await _places(session, _schools())),
@@ -94,6 +94,12 @@ async def _cohort(session: AsyncSession, window: Window) -> SupplyCohort:
     ).one()
     applied, approved, listed, bookable = (int(n) for n in row)
     return SupplyCohort(applied=applied, approved=approved, listed=listed, bookable=bookable)
+
+
+async def median_review_days(session: AsyncSession, window: Window) -> float | None:
+    """``median_review_days`` for ``window``: the Supply tab's, and the figure
+    beside the mentor application funnel (decision 338)."""
+    return days_of(await session.scalar(_median_review_seconds(window)))
 
 
 def _median_review_seconds(window: Window) -> Any:

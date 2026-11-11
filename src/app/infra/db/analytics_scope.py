@@ -6,7 +6,8 @@ tabs cannot disagree about who is excluded. Left out: internal accounts,
 admin grant or a demo address (`DEMO_EMAIL_LIKE`). Preview sessions need
 nothing here: a preview writes nothing (decision 313).
 
-A deleted account is **counted**: what it did happened.
+A deleted account is **counted**: what it did happened. Nothing about one is
+*sent* to the analytics vendor, though (`sendable`).
 """
 
 from __future__ import annotations
@@ -15,20 +16,26 @@ from collections.abc import Callable, Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.mentor_stats import Window
 from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User
+from app.infra.db.predicates import live
+
+
+def _internal(user: Any) -> Any:
+    """``user`` (`User` or an alias) is an internal account. One flag, so a
+    revoked grant and a new demo account are right without a second rule
+    here; the union of grants and demo addresses it replaced is the
+    database's `internal_account()` now."""
+    return user.is_internal
 
 
 def _excluded_users() -> Any:
-    """The ids no analytics figure counts: the internal accounts. One flag,
-    so a revoked grant and a new demo account are right without a second
-    rule here; the union of grants and demo addresses it replaced is the
-    database's `internal_account()` now."""
-    return select(User.id).where(User.is_internal)
+    """The ids no analytics figure counts: the internal accounts."""
+    return select(User.id).where(_internal(User))
 
 
 async def internal_ids(session: AsyncSession) -> list[UUID]:
@@ -41,6 +48,14 @@ def counted_user(user_id: Any) -> Any:
     """``user_id`` is somebody the analytics count. `users.id` is never null,
     so `NOT IN` is safe here."""
     return user_id.not_in(_excluded_users())
+
+
+def sendable(user: Any) -> Any:
+    """An event may be sent about ``user`` (`User` or an alias, joined on the
+    person): counted, and not deleted, since nothing about a person who asked
+    to go leaves for a vendor (PRD 30 section 8). The live outbox insert and
+    the backfill both read this, so they cannot disagree."""
+    return and_(live(user), ~_internal(user))
 
 
 def counted_session() -> Any:

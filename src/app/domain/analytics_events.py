@@ -24,6 +24,7 @@ from app.domain.enums import SessionStatus
 
 __all__ = [
     "HISTORY_NAMESPACE",
+    "MENTOR_COUNTERPARTS",
     "PERSONAL_KEYS",
     "PERSONAL_WORDS",
     "SETTLED_EVENTS",
@@ -55,6 +56,17 @@ class AnalyticsEvent(StrEnum):
     MENTOR_LISTED = "mentor_listed"
     REVIEW_SUBMITTED = "review_submitted"
     REFERRAL_UNLOCKED = "referral_unlocked"
+    BOOKING_RECEIVED = "booking_received"
+    SESSION_DELIVERED = "session_delivered"
+
+
+#: The mentor's side of a mentee's event (decision 337): queued with it, about
+#: the session's mentor, with the same properties. Every writer, live and the
+#: backfill, reads this one mapping.
+MENTOR_COUNTERPARTS = {
+    AnalyticsEvent.BOOKING_REQUESTED: AnalyticsEvent.BOOKING_RECEIVED,
+    AnalyticsEvent.SESSION_COMPLETED: AnalyticsEvent.SESSION_DELIVERED,
+}
 
 
 #: A key containing one of these, in any case, would carry a person's identity
@@ -131,12 +143,13 @@ def _entered(properties: dict[str, object], entry_point: object) -> dict[str, ob
 def requested_properties(
     session_id: UUID, session_type_id: UUID | None, entry_point: object
 ) -> dict[str, object]:
-    """`booking_requested`."""
+    """`booking_requested` and its mentor's `booking_received`."""
     return _entered({"session_id": session_id, "session_type_id": session_type_id}, entry_point)
 
 
 def session_properties(session_id: UUID, entry_point: object) -> dict[str, object]:
-    """`session_confirmed`, `session_completed` and `session_no_show`."""
+    """`session_confirmed`, `session_completed` (and its mentor's
+    `session_delivered`) and `session_no_show`."""
     return _entered({"session_id": session_id}, entry_point)
 
 

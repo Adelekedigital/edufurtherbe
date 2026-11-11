@@ -1,5 +1,6 @@
-"""A fake PostHog Query API for the Behaviour tests (decision 331): answers and
-a reader over an `httpx.MockTransport`, so nothing reaches a network."""
+"""A fake PostHog over an `httpx.MockTransport`, so nothing reaches a network:
+the Query API for the Behaviour tests (decision 331), and the one recording
+client every PostHog test sends through."""
 
 from __future__ import annotations
 
@@ -33,13 +34,22 @@ def funnel_answer(*counts: int) -> httpx.Response:
     return httpx.Response(200, json={"results": list(reversed(results))})
 
 
+def recording_client(
+    seen: list[httpx.Request] | None = None, *, status: int = 200, handler: Handler | None = None
+) -> httpx.Client:
+    """A client that appends each request to ``seen`` and answers it with
+    ``handler``, or with an empty JSON body and ``status``."""
+
+    def record(request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(request)
+        return handler(request) if handler else httpx.Response(status, json={})
+
+    return httpx.Client(transport=httpx.MockTransport(record))
+
+
 def posthog_reader(handler: Handler, project: str = "42") -> tuple[PostHogReader, list[Any]]:
     """A reader over ``handler``, and the requests it was sent."""
     seen: list[httpx.Request] = []
-
-    def record(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return handler(request)
-
-    client = httpx.Client(transport=httpx.MockTransport(record))
+    client = recording_client(seen, handler=handler)
     return PostHogReader(api_host=HOST + "/", project_id=project, api_key=KEY, client=client), seen

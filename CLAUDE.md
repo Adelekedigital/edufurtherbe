@@ -165,6 +165,17 @@ on 2026-10-08, when code review moved to Codex after the push.
    existing pattern implies, state the assumption in the PR body, and keep
    building. When something genuinely does qualify, **batch it**: hold it until
    the tier's natural pause and ask everything at once, in the #50 shape.
+
+   **Narrowed again (owner, 2026-11-11): decide it by the build principles.**
+   Even a question that qualifies is decided, not held, by four tests: **build
+   for now, build to scale, build securely, follow the industry pattern or
+   standard**. Record the choice, the options weighed and why in the PR body
+   and the decision row, and report it in the session summary. Only what
+   **critically needs the owner** still waits: money or billing, legal or
+   consent, a product direction with no recorded answer, anything
+   irreversible or customer-facing in production, access or secrets (the same
+   list the frontend repo keeps). The gates are unchanged: rule 9, and no merge without a
+   completed review and CI green on the exact head.
 9. **Unchanged by 7 and 8**, because these are what make the speed safe: watch
    every test fail before it passes; no threshold lowered to go green;
    object-level authorization scoped in the query on every read and write path;
@@ -177,10 +188,12 @@ on 2026-10-08, when code review moved to Codex after the push.
     (format, lint, types, layers, bandit), **the test files the change
     touches**, the mutation batch, `/security-review`, and `/code-review` at
     **medium** effort (**low** for Tier 3). **Then GitHub reviews too**
-    (owner, 2026-10-12): after the push the builder comments `/code-reviewer`
-    on every PR that changes code (Claude, falling back to Kimi, paid from the
-    Max API credit). Both gate: every finding from either is fixed or answered
-    before merging. The full suite runs in CI, and work is done only when **CI
+    (owner, 2026-10-12): the builder comments `/code-reviewer` on every PR
+    that changes code, **once per round and only after CI is green on that
+    head** (owner, 2026-11-11, to cut review spend). Both gate: every finding
+    from either is fixed or answered before merging, and **no merge without a
+    completed review**, however long a reviewer outage lasts. Reviewer and
+    cost rules: `project-conventions` → *GitHub review loop*. The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.

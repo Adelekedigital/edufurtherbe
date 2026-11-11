@@ -36,27 +36,40 @@ from app.domain.analytics import (
     newest_first,
     resolve_compare,
     resolve_period,
+    resolve_tz,
     yesterday,
+)
+from app.domain.analytics_activation import (
+    Activation,
+    ApprovedMentor,
+    activation_figures,
+    activation_steps,
 )
 from app.domain.analytics_behaviour import (
     FUNNEL_NAMES,
     BehaviourFigures,
+    Funnel,
+    FunnelFigure,
+    FunnelTab,
     LoginCodes,
     behaviour_tab,
     breakdown_for,
     explore_feature,
     explore_windows,
+    figure,
     funnel_named,
     funnel_tab,
     login_alert,
 )
+from app.domain.availability import local_date
 from app.domain.ports import AnalyticsReader
 from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_for
+from app.infra.db.analytics_activation import approvals, with_setup
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_growth import growth_tab
 from app.infra.db.analytics_scope import internal_ids
-from app.infra.db.analytics_supply import supply_tab
+from app.infra.db.analytics_supply import median_review_days, supply_tab
 from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
 
@@ -88,22 +101,32 @@ def analytics_ask(
         Query(
             alias="from",
             description=(
-                "First UTC day of a custom range, `YYYY-MM-DD`, no earlier than 2024-06-01. "
+                "First day (in `tz`) of a custom range, `YYYY-MM-DD`, no earlier than 2024-06-01. "
                 "Needs `to`; one day sends the same date for both."
             ),
         ),
     ] = None,
     to: Annotated[
         str | None,
-        Query(description="Last UTC day of a custom range, inclusive, no later than today."),
+        Query(description="Last day (in `tz`) of a custom range, inclusive, no later than today."),
     ] = None,
     compare: Annotated[
         str | None,
         Query(description="`true` (default) or `false`: whether `previous` figures are sent."),
     ] = None,
+    tz: Annotated[
+        str | None,
+        Query(
+            description=(
+                "The IANA time zone the days are read in, e.g. `Africa/Lagos`: "
+                "today, every day's midnight and the series buckets. Default `UTC`."
+            )
+        ),
+    ] = None,
 ) -> AnalyticsAsk:
     now = dt.datetime.now(dt.UTC)
-    period = resolve_period(now.date(), preset=window, first=from_, last=to)
+    zone = resolve_tz(tz)
+    period = resolve_period(local_date(zone, now), preset=window, first=from_, last=to, tz=zone)
     return AnalyticsAsk(now=now, period=period, compare=resolve_compare(compare))
 
 
@@ -133,9 +156,11 @@ async def _kept[T](
     compute: Callable[[], Awaitable[T]],
     *,
     optional: bool = False,
+    brief: Callable[[T], bool] | None = None,
 ) -> T:
     """Figures from this app's `TabCache`, or computed and kept. An ``optional``
-    read (one a database tab adds) also keeps a failure for `FAILED_FOR`."""
+    read (one a database tab adds) also keeps a failure for `FAILED_FOR`, as
+    it keeps figures ``brief`` says lack an optional part."""
     cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
     if cache is None:
         cache = request.app.state.analytics_cache = TabCache()
@@ -150,16 +175,22 @@ async def _kept[T](
         if optional:
             cache.put(key, _FAILED, now, keep_for=FAILED_FOR)
         raise
-    cache.put(key, value, now)
+    short = brief is not None and brief(value)
+    cache.put(key, value, now, **({"keep_for": FAILED_FOR} if short else {}))
     return value
 
 
 async def _cached[T](
-    request: Request, tab: str, ask: AnalyticsAsk, compute: Callable[[], Awaitable[T]]
+    request: Request,
+    tab: str,
+    ask: AnalyticsAsk,
+    compute: Callable[[], Awaitable[T]],
+    *,
+    brief: Callable[[T], bool] | None = None,
 ) -> T:
-    """A tab's figures, kept per tab, dates and compare."""
-    key = (tab, ask.period.first, ask.period.last, ask.compare)
-    return await _kept(request, key, ask.now, compute)
+    """A tab's figures, kept per tab, dates, zone and compare."""
+    key = (tab, ask.period.first, ask.period.last, ask.period.tz, ask.compare)
+    return await _kept(request, key, ask.now, compute, brief=brief)
 
 
 async def _login_alert(
@@ -240,7 +271,7 @@ async def _explore(
     try:
         figures = await _kept(
             request,
-            ("explore", ask.period.first, ask.period.last),
+            ("explore", ask.period.first, ask.period.last, ask.period.tz),
             ask.now,
             lambda: asyncio.to_thread(reader.explore, windows, internal),
             optional=True,
@@ -304,7 +335,21 @@ async def analytics_funnel(
 ) -> AnalyticsFunnelRead:
     funnel = funnel_named(name)
     chosen = breakdown_for(funnel, by)
+    if funnel.in_database:
+        tab = await _activation(request, ask, reader, session, funnel, chosen)
+    else:
+        tab = await _posthog_funnel(request, ask, reader, session, funnel, chosen)
+    return AnalyticsFunnelRead.of(ask.period, alerts, tab)
 
+
+async def _posthog_funnel(
+    request: Request,
+    ask: AnalyticsAsk,
+    reader: AnalyticsReader,
+    session: SessionDep,
+    funnel: Funnel,
+    chosen: str,
+) -> FunnelTab:
     async def compute() -> tuple[list[int], list[int] | None]:
         internal = await internal_ids(session)
         current = await asyncio.to_thread(
@@ -316,7 +361,83 @@ async def analytics_funnel(
         return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
 
     current, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
-    return AnalyticsFunnelRead.of(ask.period, alerts, funnel_tab(funnel, chosen, current, previous))
+    figures: list[FunnelFigure] = []
+    if funnel.name == "mentor_application":
+
+        async def review() -> tuple[float | None, float | None]:
+            now = await median_review_days(session, ask.period.window)
+            if not ask.compare:
+                return now, None
+            return now, await median_review_days(session, ask.period.previous().window)
+
+        now, before = await _cached(request, "funnel:review_days", ask, review)
+        figures.append(figure("median_review_days", now, before, ask.compare))
+    return funnel_tab(funnel, chosen, current, previous, figures)
+
+
+async def _activation(
+    request: Request,
+    ask: AnalyticsAsk,
+    reader: AnalyticsReader,
+    session: SessionDep,
+    funnel: Funnel,
+    chosen: str,
+) -> FunnelTab:
+    """The mentor activation funnel from the database. Its profile-link figure
+    is an optional PostHog read run beside the setup queries, null when
+    PostHog cannot answer; steps and figures are one snapshot, kept together."""
+    breakdown = funnel.by[chosen]
+    periods = [ask.period, *([ask.period.previous()] if ask.compare else [])]
+
+    async def compute() -> list[Activation]:
+        cohorts = [await approvals(session, p.window, breakdown) for p in periods]
+        # Read before the PostHog read starts, never alongside it on this session.
+        internal = await internal_ids(session)
+        read = asyncio.create_task(_profile_links(reader, cohorts, internal))
+        try:
+            mentors = [
+                await with_setup(session, p.window, breakdown, cohort)
+                for p, cohort in zip(periods, cohorts, strict=True)
+            ]
+        except BaseException:
+            read.cancel()
+            raise
+        shared = await read
+        return [
+            Activation(mentors=m, shared=None if shared is None else shared[i])
+            for i, m in enumerate(mentors)
+        ]
+
+    windows = await _cached(
+        request, f"funnel:{funnel.name}:{chosen}", ask, compute, brief=_without_posthog
+    )
+    steps = [[activation_steps(w.mentors)[s.key] for s in funnel.steps] for w in windows]
+    previous = windows[1] if ask.compare else None
+    return funnel_tab(
+        funnel,
+        chosen,
+        steps[0],
+        steps[1] if ask.compare else None,
+        activation_figures(windows[0], previous),
+    )
+
+
+def _without_posthog(windows: list[Activation]) -> bool:
+    """The figures came without PostHog's part: keep them only `FAILED_FOR`,
+    so the figure returns as soon as PostHog does."""
+    return any(w.shared is None for w in windows)
+
+
+async def _profile_links(
+    reader: AnalyticsReader, cohorts: list[list[ApprovedMentor]], internal: list[UUID]
+) -> list[int] | None:
+    """Per cohort, how many of its consenting mentors shared their profile
+    link, or ``None`` when PostHog cannot answer (one failure for all)."""
+    asked = [[(m.user_id, m.approved_at) for m in cohort if m.consented] for cohort in cohorts]
+    try:
+        return await asyncio.to_thread(reader.profile_links_shared, asked, internal)
+    except AnalyticsUpstreamError:
+        return None
 
 
 AnalyticsFunnelDep = Annotated[AnalyticsFunnelRead, Depends(analytics_funnel)]
