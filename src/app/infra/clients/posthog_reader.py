@@ -529,6 +529,10 @@ class PostHogReader:
 
         def parse(body: Any) -> list[int]:
             results = body["results"]
+            # PostHog answers an empty list, not a row of zeros, when no person
+            # entered the funnel (or its breakdown): nobody reached any step.
+            if results == []:
+                return [0] * steps
             if not isinstance(results, list) or len(results) != steps:
                 raise _MalformedError("not one result per step")
             ordered = sorted(results, key=lambda r: r.get("order", 0))
