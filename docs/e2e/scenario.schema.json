@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edufurther.test/e2e/scenario.schema.json",
+  "title": "E2E scenario",
+  "description": "One end-to-end scenario in docs/e2e/scenarios.yaml. The backend agent runs `kind: api` steps and `assertions`; the frontend agent runs `kind: ui` steps with Playwright; a human reads `title`, `why` and each step's `human`.",
+  "type": "object",
+  "required": ["id", "title", "journey", "priority", "roles", "why", "smoke_prod", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "pattern": "^[A-Z]+-\\d{3}$"},
+    "title": {"type": "string", "minLength": 1},
+    "journey": {"type": "string", "minLength": 1},
+    "priority": {"enum": ["P0", "P1", "P2"]},
+    "roles": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "why": {"type": "string", "minLength": 1},
+    "smoke_prod": {"type": "boolean"},
+    "human_only": {"type": "boolean"},
+    "flags": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "cleanup": {"type": "array", "items": {"type": "string"}},
+    "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}},
+    "assertions": {"type": "array", "items": {"$ref": "#/$defs/assertion"}},
+    "for_each": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"},
+      "description": "Run the whole scenario once per seed account; a step whose viewer is `each` runs as that account."
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"enum": ["api", "ui", "job"]}},
+      "oneOf": [
+        {"$ref": "#/$defs/api_step"},
+        {"$ref": "#/$defs/ui_step"},
+        {"$ref": "#/$defs/job_step"}
+      ]
+    },
+    "api_step": {
+      "type": "object",
+      "required": ["kind", "id", "viewer", "method", "path", "expect", "human"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "api"},
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "viewer": {
+          "type": "string",
+          "description": "A seed account ref, `anonymous`, or `each` under `for_each`."
+        },
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "As in the OpenAPI; `{name}` is filled from `params`."
+        },
+        "params": {
+          "type": "object",
+          "description": "Path and query values; `${step.pointer}` reads an earlier response."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Extra headers by name; values are refs, never secrets."
+        },
+        "body": {},
+        "after": {"type": "string"},
+        "expect": {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {"type": "integer", "minimum": 100, "maximum": 599},
+            "json": {
+              "type": "object",
+              "description": "JSON Pointer -> value, or a matcher string: `<any>`, `<present>`, `<absent>`, `<uuid>`, `<int>`, `<nonempty>`, `<url>`."
+            }
+          }
+        },
+        "save": {
+          "type": "object",
+          "description": "Name -> JSON Pointer into the response, read later as `${name}`."
+        },
+        "human": {"type": "string", "minLength": 1}
+      }
+    },
+    "ui_step": {
+      "type": "object",
+      "required": ["kind", "id", "viewer", "route", "actions", "expect", "human"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"const": "ui"},
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "viewer": {"type": "string"},
+        "viewport": {
+          "oneOf": [
+            {"enum": [390, 1440]},
+            {"type": "array", "minItems": 1, "items": {"enum": [390, 1440]}}
+          ]
+        },
+        "flags": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}},
+        "route": {"type": "string", "pattern": "^/"},
+        "actions": {
+          "oneOf": [
+            {"const": "TODO(frontend)"},
+            {"type": "array", "items": {"$ref": "#/$defs/ui_action"}}
+          ]
+        },
+        "expect": {
+          "oneOf": [
+            {"const": "TODO(frontend)"},
+            {"type": "array", "items": {"$ref": "#/$defs/ui_expect"}}
+          ]
+        },
+        "screenshot": {"type": "boolean"},
+        "a11y": {"type": "boolean"},
+        "after": {"type": "string"},
+        "human": {"type": "string", "minLength": 1}
+      }
+    },
+    "target": {
+      "description": "Accessible role and name, or a label (Testing Library style). Never a CSS selector.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["role", "name"],
+          "additionalProperties": false,
+          "properties": {"role": {"type": "string"}, "name": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "required": ["label"],
+          "additionalProperties": false,
+          "properties": {"label": {"type": "string"}}
+        }
+      ]
+    },
+    "ui_action": {
+      "type": "object",
+      "required": ["do"],
+      "additionalProperties": false,
+      "properties": {
+        "do": {"enum": ["click", "fill", "select", "press", "upload", "wait"]},
+        "target": {"$ref": "#/$defs/target"},
+        "value": {}
+      }
+    },
+    "ui_expect": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "visible": {"$ref": "#/$defs/target"},
+        "hidden": {"$ref": "#/$defs/target"},
+        "url": {"type": "string"},
+        "text": {"type": "string"},
+        "count": {"type": "integer", "minimum": 0},
+        "target": {"$ref": "#/$defs/target"},
+        "value": {}
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "required": ["id", "check", "human"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "check": {"enum": ["api", "db"]},
+        "after": {"type": "string"},
+        "viewer": {"type": "string"},
+        "method": {"enum": ["GET"]},
+        "path": {"type": "string", "pattern": "^/"},
+        "params": {"type": "object"},
+        "query": {
+          "type": "string",
+          "description": "check: db only. One read-only SELECT with :named binds."
+        },
+        "binds": {"type": "object"},
+        "expect": {
+          "type": "object",
+          "description": "For api: {status, json}. For db: {rows, first: {column: value or matcher}}."
+        },
+        "human": {"type": "string", "minLength": 1}
+      }
+    },
+    "job_step": {
+      "type": "object",
+      "required": ["kind", "id", "script", "human"],
+      "additionalProperties": false,
+      "description": "A scheduled job run by hand on the operator's machine (the HTTP job route needs a QStash signature).",
+      "properties": {
+        "kind": {"const": "job"},
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "script": {"type": "string", "pattern": "^scripts/[a-z_]+\\.py$"},
+        "args": {"type": "array", "items": {"type": "string"}},
+        "after": {"type": "string"},
+        "expect": {
+          "type": "object",
+          "properties": {"exit": {"type": "integer"}},
+          "additionalProperties": false
+        },
+        "human": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

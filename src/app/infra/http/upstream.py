@@ -29,8 +29,14 @@ import httpx
 LIMIT = 400
 
 
-def why(exc: Exception, response: httpx.Response | None = None) -> str:
+def why(
+    exc: Exception, response: httpx.Response | None = None, *, secret: str | None = None
+) -> str:
     """The failure, with the upstream's own explanation when it gave one.
+
+    ``secret`` (a credential the request carried) is cut out of the body
+    **before** it is shortened, so a secret straddling `LIMIT` cannot leave its
+    first half behind: a service can echo the key it refused.
 
     Safe for any exception: an ``httpx.RequestError`` carries no response at all,
     and a decode error carries one whose body is the thing that failed to parse.
@@ -55,6 +61,8 @@ def why(exc: Exception, response: httpx.Response | None = None) -> str:
         body = response.text.strip()
     except httpx.StreamError:
         return f"{exc}"
+    if secret:
+        body = body.replace(secret, "[secret]")
     return f"{exc}; upstream said: {body[:LIMIT]}" if body else f"{exc}"
 
 

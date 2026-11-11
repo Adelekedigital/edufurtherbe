@@ -124,6 +124,7 @@ def test_the_button_link_is_never_the_admins() -> None:
     assert built["buttonLabel"] == "Answer now"
     assert built["buttonUrl"].endswith(
         "/bookings?tab=pending&booking=00000000-0000-7000-8000-0000000000aa"
+        "&utm_source=email&utm_medium=notification&utm_campaign=session_requested"
     )
 
 

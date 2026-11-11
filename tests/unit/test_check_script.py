@@ -11,6 +11,7 @@ gate in CI while the job still reported success.
 
 import importlib.util
 import re
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -66,12 +67,154 @@ def test_the_full_gate_parallelises_tests_but_the_fast_gate_does_not() -> None:
 
 def test_every_step_name_used_by_a_workflow_exists() -> None:
     check = load_check()
-    known = {name for name, _ in check.STEPS}
+    known = {name for name, _ in check.SELECTABLE}
 
     referenced: set[str] = set()
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
-        for match in re.findall(r"--only\s+([\w,]+)", workflow.read_text(encoding="utf-8")):
+        for match in re.findall(r"--only\s+([\w,-]+)", workflow.read_text(encoding="utf-8")):
             referenced.update(match.split(","))
 
     assert referenced, "no workflow selects any step — the gate is not wired to CI"
     assert referenced <= known, f"workflows select unknown steps: {sorted(referenced - known)}"
+
+
+def test_the_coverage_floor_has_one_definition() -> None:
+    check = load_check()
+
+    full_tests = next(command for name, command in check.STEPS if name == "tests")
+    report = next(command for name, command in check.COMBINE if name == "coverage-report")
+
+    assert f"--cov-fail-under={check.COVERAGE_FAIL_UNDER}" in full_tests
+    assert f"--fail-under={check.COVERAGE_FAIL_UNDER}" in report
+    assert check.COVERAGE_FAIL_UNDER == 85
+    # Everything else calls check.py for it; a literal anywhere else is a second floor.
+    for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        assert "fail-under" not in workflow.read_text(encoding="utf-8"), workflow.name
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    coverage = pyproject["tool"]["coverage"]
+    assert "fail_under" not in coverage.get("report", {})
+    assert "fail_under" not in coverage.get("run", {})
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert not re.search(r"fail[-_]under", makefile)
+
+
+def test_unit_tests_alone_are_selectable_but_not_in_the_full_gate() -> None:
+    check = load_check()
+
+    selected = check.select(["tests-unit"])
+
+    assert selected == [step for step in check.FAST if step[0] == "tests-unit"]
+    assert "tests-unit" not in {name for name, _ in check.select([])}
+
+
+def test_test_files_follow_pytest_configuration() -> None:
+    check = load_check()
+
+    files = check.test_files()
+
+    assert check.pytest_ini()["testpaths"] == ["tests"]
+    assert "tests/unit/test_check_script.py" in files
+    assert all(path.startswith("tests/") for path in files)
+    assert "tests/conftest.py" not in files
+
+
+def test_collected_files_are_read_from_node_ids() -> None:
+    check = load_check()
+    output = (
+        "tests/unit/test_a.py::test_one\n"
+        "tests/unit/test_a.py::TestX::test_two[1-2]\n"
+        "tests/integration/test_b.py::test_three\n"
+        "\n"
+        "3 tests collected in 0.12s\n"
+    )
+
+    assert check.collected_files(output) == {"tests/unit/test_a.py", "tests/integration/test_b.py"}
+    # `-qq` (pyproject's -q plus another) prints a count per file instead.
+    counts = "tests/unit/test_a.py: 2\ntests/integration/test_b.py: 1\n"
+    assert check.collected_files(counts) == {"tests/unit/test_a.py", "tests/integration/test_b.py"}
+
+
+def test_a_shard_file_list_that_disagrees_with_pytest_is_reported() -> None:
+    check = load_check()
+
+    problems = check.shard_file_problems(
+        collected={"tests/a.py", "tests/b.py"}, listed={"tests/b.py", "tests/c.py"}
+    )
+
+    assert problems == [
+        "collected by pytest but in no shard: tests/a.py",
+        "in a shard but collected nothing: tests/c.py",
+    ]
+    assert check.shard_file_problems(collected={"tests/a.py"}, listed={"tests/a.py"}) == []
+
+
+def test_shards_cover_every_test_file_exactly_once() -> None:
+    check = load_check()
+    files = check.test_files()
+
+    shards = check.split(files, check.load_durations(), 3)
+
+    assert len(shards) == 3
+    assert all(shards), "a shard with no files would run the whole suite"
+    flat = [path for shard in shards for path in shard]
+    assert sorted(flat) == sorted(files)
+    assert len(flat) == len(set(flat))
+    assert "tests/unit/test_check_script.py" in files
+
+
+def test_the_split_is_deterministic_and_balanced_by_duration() -> None:
+    check = load_check()
+    files = ["a", "b", "c", "d", "e"]
+    durations = {"a": 10.0, "b": 6.0, "c": 5.0, "d": 4.0}
+
+    first = check.split(files, durations, 2)
+
+    assert first == check.split(list(reversed(files)), durations, 2)
+    # Longest first onto the lightest shard; "e" is unknown, so it weighs the median (5.5).
+    assert first == [["a", "c"], ["b", "d", "e"]]
+
+
+def test_a_shard_runs_its_files_without_the_floor() -> None:
+    check = load_check()
+
+    name, command = check.shard_step("2/3")
+    files = check.split(check.test_files(), check.load_durations(), 3)[1]
+
+    assert name == "tests-shard-2"
+    assert command[: len(files) * -1] == [*check.TEST_RUN, "--cov-report="]
+    assert command[-len(files) :] == files
+    assert not any("fail-under" in part for part in command)
+
+
+@pytest.mark.parametrize("spec", ["0/3", "4/3", "3", "a/b", "1/0"])
+def test_a_malformed_shard_is_rejected(spec: str) -> None:
+    check = load_check()
+
+    with pytest.raises(SystemExit) as excinfo:
+        check.shard_step(spec)
+
+    assert excinfo.value.code != 0
+
+
+def test_an_empty_shard_fails_rather_than_running_everything() -> None:
+    check = load_check()
+
+    with pytest.raises(SystemExit, match="no test files"):
+        check.shard_step("3/3", files=["tests/unit/test_a.py", "tests/unit/test_b.py"])
+
+
+def test_durations_are_summed_per_file_from_junit(tmp_path: Path) -> None:
+    check = load_check()
+    junit = tmp_path / "junit.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="pytest">'
+        '<testcase classname="tests.unit.test_check_script" name="t1" time="1.5"/>'
+        '<testcase classname="tests.unit.test_check_script" name="t2" time="2.0"/>'
+        '<testcase classname="tests.integration.test_nope.TestX" name="t3" time="9"/>'
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    durations = check.durations_from_junit([junit])
+
+    assert durations == {"tests/unit/test_check_script.py": 3.5}

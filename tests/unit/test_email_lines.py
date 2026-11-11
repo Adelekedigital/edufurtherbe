@@ -114,7 +114,10 @@ def test_a_session_booked_reads_from_each_side() -> None:
 
 def test_the_button_opens_the_emails_own_link() -> None:
     built = build_variables(["buttonUrl"], a_context(N.SESSION_REQUESTED))
-    assert built["buttonUrl"] == "https://app.example.test/bookings?tab=pending&booking=s-1"
+    assert built["buttonUrl"] == (
+        "https://app.example.test/bookings?tab=pending&booking=s-1"
+        "&utm_source=email&utm_medium=notification&utm_campaign=session_requested"
+    )
 
 
 def test_which_email_and_which_side_travel_as_values() -> None:

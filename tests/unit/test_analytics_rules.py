@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import datetime as dt
 import itertools
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.core.errors import AnalyticsWindowError
 from app.domain import analytics as a
 from app.domain.enums import CreditSource
+from app.domain.mentor_stats import Window
 
 TODAY = dt.date(2026, 11, 9)
 NOW = dt.datetime(2026, 11, 9, 15, 0, tzinfo=dt.UTC)
@@ -176,3 +178,122 @@ def test_the_cache_drops_its_oldest_entry_past_its_size() -> None:
     assert cache.get(("t", 0), NOW) is None
     assert cache.get(("t", 1), NOW) == 1
     assert cache.get(("t", a.CACHE_SIZE), NOW) == a.CACHE_SIZE
+
+
+# --- The viewer's zone (decision 335) ----------------------------------------
+
+
+def zoned(tz: str, first: str, last: str) -> a.Period:
+    return a.resolve_period(TODAY, preset=None, first=first, last=last, tz=a.resolve_tz(tz))
+
+
+def hours(window: Window) -> float:
+    return (window.until - window.since) / dt.timedelta(hours=1)
+
+
+def test_no_zone_asked_is_utc_and_reads_as_before() -> None:
+    assert a.resolve_tz(None) == "UTC"
+    got = period(**{"from": "2026-11-03", "to": "2026-11-03"})
+    assert got.tz == "UTC"
+    assert got.window == zoned("UTC", "2026-11-03", "2026-11-03").window
+
+
+@pytest.mark.parametrize(
+    ("tz", "since", "until"),
+    [
+        # UTC+1 all year: the day starts an hour before UTC's.
+        ("Africa/Lagos", dt.datetime(2026, 11, 2, 23), dt.datetime(2026, 11, 3, 23)),
+        # UTC-5 in November: five hours after.
+        ("America/New_York", dt.datetime(2026, 11, 3, 5), dt.datetime(2026, 11, 4, 5)),
+    ],
+)
+def test_a_day_runs_from_local_midnight_to_local_midnight(
+    tz: str, since: dt.datetime, until: dt.datetime
+) -> None:
+    got = zoned(tz, "2026-11-03", "2026-11-03")
+    assert got.tz == tz
+    assert got.window == Window(
+        since=since.replace(tzinfo=dt.UTC), until=until.replace(tzinfo=dt.UTC)
+    )
+
+
+@pytest.mark.parametrize(("day", "length"), [("2026-03-29", 23), ("2026-10-25", 25)])
+def test_a_daylight_saving_day_is_23_or_25_hours(day: str, length: int) -> None:
+    window = zoned("Europe/London", day, day).window
+    assert hours(window) == length
+    assert window.since.astimezone(ZoneInfo("Europe/London")).time() == dt.time(0)
+    assert window.until.astimezone(ZoneInfo("Europe/London")).time() == dt.time(0)
+
+
+def test_daily_buckets_across_a_clock_change_start_at_each_local_midnight() -> None:
+    got = zoned("Europe/London", "2026-03-27", "2026-03-31")
+    buckets = a.series_buckets(got)
+    assert [hours(b) for b in buckets] == [24, 24, 23, 24, 24]
+    assert [got.day_of(b.since) for b in buckets] == [
+        dt.date(2026, 3, 27) + dt.timedelta(days=i) for i in range(5)
+    ]
+    assert buckets[0].since == got.window.since
+    assert buckets[-1].until == got.window.until
+
+
+def test_weekly_buckets_and_the_previous_period_keep_the_zone() -> None:
+    got = zoned("Europe/London", "2026-10-20", "2026-11-03")
+    weeks = a.series_buckets(got)
+    # The first week holds the 25-hour day; each edge is a London midnight.
+    assert [hours(w) for w in weeks] == [7 * 24 + 1, 7 * 24, 24]
+    assert [got.day_of(w.since) for w in weeks] == [
+        dt.date(2026, 10, 20),
+        dt.date(2026, 10, 27),
+        dt.date(2026, 11, 3),
+    ]
+    before = got.previous()
+    assert before.tz == "Europe/London"
+    assert before.window.until == got.window.since
+    assert len(a.series_buckets(before)) == len(weeks)
+
+
+def test_today_is_the_date_in_the_zone() -> None:
+    late = dt.datetime(2026, 11, 10, 23, 30, tzinfo=dt.UTC)
+    assert a.Period(first=TODAY, last=TODAY, tz="Africa/Lagos").day_of(late) == dt.date(
+        2026, 11, 11
+    )
+    assert a.Period(first=TODAY, last=TODAY).day_of(late) == dt.date(2026, 11, 10)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "Mars/Olympus",
+        "utc+1",
+        "../etc/passwd",
+        "Africa/",
+        # The filesystem's own refusals (too long a name, a wildcard), which once
+        # escaped as an OSError and a 500 (security review, 2026-11-11).
+        "a" * 300,
+        "Africa/" + "a" * 300,
+        "a*b",
+        "<script>",
+        r"Africa\Lagos",
+        # Accepted on a case-insensitive filesystem, refused on Linux: refused everywhere.
+        "utc",
+        "africa/lagos",
+    ],
+)
+def test_a_zone_that_is_not_iana_is_refused_on_tz(bad: str) -> None:
+    with pytest.raises(AnalyticsWindowError) as refused:
+        a.resolve_tz(bad)
+    assert refused.value.field_errors == (
+        ("/query/tz", "must be an IANA time zone, e.g. Africa/Lagos"),
+    )
+
+
+@pytest.mark.parametrize(
+    "good", ["UTC", "Africa/Lagos", "America/Argentina/Buenos_Aires", "Etc/GMT+5", "EST5EDT"]
+)
+def test_every_iana_shape_is_accepted(good: str) -> None:
+    assert a.resolve_tz(good) == good
+
+
+def test_a_zone_is_trimmed() -> None:
+    assert a.resolve_tz(" Africa/Lagos ") == "Africa/Lagos"
