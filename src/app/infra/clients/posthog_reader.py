@@ -49,7 +49,7 @@ from app.domain.analytics_behaviour import (
 from app.domain.mentor_stats import Window
 from app.domain.ports import AnalyticsReader
 from app.infra.http.client import shared
-from app.infra.http.upstream import trim_origin
+from app.infra.http.upstream import trim_origin, why
 
 __all__ = ["NullAnalyticsReader", "PostHogReader", "analytics_reader_for", "replay_url_for"]
 
@@ -60,8 +60,6 @@ TAB_TIMEOUT = httpx.Timeout(12.0, connect=2.0)
 #: What a database tab adds for PostHog (the log-in alert, the Explore card):
 #: about two seconds, then the tab answers without it.
 OPTIONAL_TIMEOUT = httpx.Timeout(2.0, connect=1.0)
-#: How much of PostHog's reason for a refused query a log line keeps.
-_REASON_CHARS = 300
 
 #: The one exclusion every read applies: the internal accounts' `users.id`s,
 #: read from the database (`analytics_scope.internal_ids`), which are the
@@ -453,9 +451,9 @@ class PostHogReader:
         self._client = client or shared(TAB_TIMEOUT)
 
     def _ask(self, query: dict[str, Any], timeout: httpx.Timeout) -> Any:
-        """The answer's body, or `AnalyticsUpstreamError` for any failure. The status
-        and failure kind are logged, and on a 4xx PostHog's `code` and `detail`
-        with the key cut out: an error body can echo it."""
+        """The answer's body, or `AnalyticsUpstreamError` for any failure. The status,
+        the failure kind and what PostHog said are logged, the key cut out of
+        the last: an error body can echo it."""
         response: httpx.Response | None = None
         try:
             response = self._client.post(
@@ -473,28 +471,10 @@ class PostHogReader:
                     "query_kind": query.get("kind"),
                     "failure": type(exc).__name__,
                     "status": None if response is None else response.status_code,
-                    **self._reason(response),
+                    "reason": why(exc, response, secret=self._key),
                 },
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc
-
-    def _reason(self, response: httpx.Response | None) -> dict[str, str]:
-        """PostHog's ``code`` and ``detail`` for a refused query (4xx), each cut to
-        a log line and stripped of the key; nothing for any other failure."""
-        if response is None or not response.is_client_error:
-            return {}
-        try:
-            body = response.json()
-        except ValueError:
-            return {}
-        if not isinstance(body, dict):
-            return {}
-        said = {"posthog_code": body.get("code"), "posthog_detail": body.get("detail")}
-        return {
-            key: value.replace(self._key, "[key]")[:_REASON_CHARS]
-            for key, value in said.items()
-            if isinstance(value, str)
-        }
 
     def _read[T](
         self,

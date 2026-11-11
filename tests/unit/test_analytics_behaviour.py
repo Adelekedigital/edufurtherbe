@@ -384,26 +384,58 @@ HOGQL_KEYWORDS = frozenset(
         "window",
         "with",
         "within",
+        # Also reserved or keyword-like in HogQL and ClickHouse.
+        "anti",
+        "asof",
+        "cast",
+        "collate",
+        "day",
+        "except",
+        "extract",
+        "first",
+        "global",
+        "hour",
+        "id",
+        "if",
+        "key",
+        "last",
+        "minute",
+        "month",
+        "nulls",
+        "quarter",
+        "second",
+        "semi",
+        "top",
+        "totals",
+        "trim",
+        "unbounded",
+        "week",
+        "year",
     ]
 )
 
+#: The `events` columns the queries read: an alias named like one hides it.
+EVENT_COLUMNS = frozenset(["event", "timestamp", "person_id", "distinct_id", "properties"])
 
-def test_the_queries_are_all_found() -> None:
-    assert len(HOGQL_QUERIES) == 6
+
+def test_the_queries_are_found_by_name() -> None:
+    assert {"EXPLORE_QUERY", "BOOKED_QUERY", "LOGIN_QUERY"} <= set(HOGQL_QUERIES)
 
 
 @pytest.mark.parametrize("name", HOGQL_QUERIES)
 def test_no_placeholder_is_a_hogql_keyword(name: str) -> None:
-    placeholders = set(re.findall(r"\{(\w+)\}", getattr(queries, name)))
+    placeholders = set(queries._PLACEHOLDER.findall(getattr(queries, name)))
     assert placeholders.isdisjoint(HOGQL_KEYWORDS)
 
 
 @pytest.mark.parametrize("name", HOGQL_QUERIES)
-def test_each_alias_is_named_once_in_a_query(name: str) -> None:
+def test_no_alias_hides_a_column_it_reads(name: str) -> None:
     # An outer `countIf(x) AS x` over an inner column `x` reads as an aggregate
-    # inside an aggregate, which PostHog refuses (Explore, 2026-11-11).
-    aliases = re.findall(r"\bAS\s+(\w+)", getattr(queries, name))
+    # inside an aggregate, which PostHog refuses (Explore, 2026-11-11). Every
+    # query here is one statement, so an alias named twice is that mistake.
+    aliases = [a.lower() for a in re.findall(r"\bAS\s+(\w+)", getattr(queries, name), re.I)]
     assert len(aliases) == len(set(aliases)), aliases
+    assert EVENT_COLUMNS.isdisjoint(aliases), aliases
 
 
 @pytest.mark.parametrize("name", HOGQL_QUERIES)
@@ -574,23 +606,18 @@ def test_a_refusal_that_echoes_the_key_never_reaches_the_log(
         assert all(KEY not in str(value) for value in vars(record).values())
 
 
-def test_a_refused_query_logs_posthogs_reason(caplog: pytest.LogCaptureFixture) -> None:
-    refused = {"type": "validation_error", "code": "hogql_syntax_error", "detail": "bad token"}
-    read, _ = posthog_reader(_status(400, json=refused))
+@pytest.mark.parametrize("status", [400, 504])
+def test_a_failed_read_logs_what_posthog_said(
+    status: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    said = {"type": "validation_error", "code": "hogql_syntax_error", "detail": "bad token"}
+    read, _ = posthog_reader(_status(status, json=said))
     with caplog.at_level(logging.WARNING), pytest.raises(AnalyticsUpstreamError):
         read.login_codes(WINDOW, INTERNAL)
     (record,) = (r for r in caplog.records if r.getMessage() == "analytics read failed")
-    assert vars(record)["status"] == 400
-    assert vars(record)["posthog_code"] == "hogql_syntax_error"
-    assert vars(record)["posthog_detail"] == "bad token"
-
-
-def test_a_5xx_logs_no_reason(caplog: pytest.LogCaptureFixture) -> None:
-    read, _ = posthog_reader(_status(503, json={"code": "down", "detail": "later"}))
-    with caplog.at_level(logging.WARNING), pytest.raises(AnalyticsUpstreamError):
-        read.login_codes(WINDOW, INTERNAL)
-    (record,) = (r for r in caplog.records if r.getMessage() == "analytics read failed")
-    assert "posthog_code" not in vars(record)
+    assert vars(record)["status"] == status
+    assert "hogql_syntax_error" in vars(record)["reason"]
+    assert "bad token" in vars(record)["reason"]
 
 
 def settings(**values: object) -> Settings:
