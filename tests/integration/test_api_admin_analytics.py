@@ -152,6 +152,7 @@ async def test_the_window_is_published_with_its_previous_period(
         "to": "2026-11-07",
         "previous_from": "2026-10-29",
         "previous_to": "2026-11-02",
+        "tz": "UTC",
     }
 
 

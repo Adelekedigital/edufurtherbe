@@ -15,6 +15,7 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError, NotFoundError
 from app.domain.analytics import (
+    PLATFORM_TZ,
     Alert,
     AlertLink,
     Feature,
@@ -26,6 +27,7 @@ from app.domain.analytics import (
     spark_buckets,
 )
 from app.domain.analytics_events import AnalyticsEvent
+from app.domain.availability import local_day_start
 from app.domain.enums import EntryPoint, PrimaryRole, ProfileViewSource, SignupSource
 from app.domain.mentor_stats import Window
 
@@ -99,6 +101,9 @@ ONBOARDING_COMPLETED = "onboarding_completed"
 BOOKING_REQUESTED = AnalyticsEvent.BOOKING_REQUESTED.value
 SESSION_COMPLETED = AnalyticsEvent.SESSION_COMPLETED.value
 MENTOR_LISTED = AnalyticsEvent.MENTOR_LISTED.value
+#: The mentor's side of a request and a completion (decision 337).
+BOOKING_RECEIVED = AnalyticsEvent.BOOKING_RECEIVED.value
+SESSION_DELIVERED = AnalyticsEvent.SESSION_DELIVERED.value
 SEARCH = "mentor_search_performed"
 PROFILE_VIEWED = "mentor_profile_viewed"
 BOOKING_STARTED = "booking_started"
@@ -210,8 +215,9 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                     "Video connected (bookable)",
                     (CONFERENCING_CONNECTED,),
                 ),
-                # `session_completed` is the mentee's event: nothing tells
-                # analytics a mentor delivered one yet.
+                # Untracked for now: `session_completed` is the mentee's event.
+                # `SESSION_DELIVERED` is the mentor's (decision 337), and the
+                # funnel is restructured around it in the next PR (decision 338).
                 Step("first_session", "First session (30 days)", ()),
             ),
             window_days=30,
@@ -478,5 +484,5 @@ def login_alert(codes: LoginCodes, today: dt.date) -> Alert | None:
         title="Log-in codes failing",
         body=body,
         link=AlertLink(tab="funnels", funnel="signup", by=SignupSource.MIGRATED.value),
-        raised_at=dt.datetime(today.year, today.month, today.day, tzinfo=dt.UTC),
+        raised_at=local_day_start(today, PLATFORM_TZ),
     )

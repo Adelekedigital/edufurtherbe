@@ -165,6 +165,7 @@ async def test_the_backfill_carries_it_from_the_same_builders(
     mine = [e for e in sink.events if e["properties"].get("session_id") == str(sid)]
     assert {e["event"] for e in mine} == {
         "booking_requested",
+        "booking_received",
         "session_confirmed",
         "session_cancelled",
     }

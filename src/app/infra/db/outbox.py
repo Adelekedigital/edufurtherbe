@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
-from app.domain.analytics_events import AnalyticsEvent, analytics_event
+from app.domain.analytics_events import MENTOR_COUNTERPARTS, AnalyticsEvent, analytics_event
 from app.domain.email_lines import OWNED_BY
 from app.domain.message_emails import MESSAGE_EMAILS
 from app.domain.messages import DELETED_PARTY_LABELS, MessageContext
@@ -40,7 +40,7 @@ from app.domain.notifications import Channel, Notification
 from app.domain.ports import AnalyticsSink
 from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
-from app.infra.db.analytics_scope import counted_user
+from app.infra.db.analytics_scope import sendable
 from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
 from app.infra.db.email_lines import LineOverrides, load_line_overrides
@@ -67,6 +67,7 @@ __all__ = [
     "enqueue",
     "enqueue_analytics",
     "enqueue_analytics_each",
+    "enqueue_session_analytics",
     "forget_unsent_analytics",
     "stop_collecting",
 ]
@@ -199,9 +200,9 @@ async def enqueue_analytics_each(
     when the fact it reports does. The payload is the event as the vendor's
     batch takes it (`analytics_event`), so the drain sends it as stored.
 
-    **An internal account's event is never written** (PRD 30): the admin
-    Analytics rule (`analytics_scope.counted_user`) filters the insert itself,
-    so the two can never disagree about who is left out. A statement per chunk,
+    **An internal or deleted account's event is never written** (PRD 30):
+    `analytics_scope.sendable` filters the insert itself, the rule the
+    backfill reads too, so the two can never disagree about who is left out. A statement per chunk,
     not per event, so the 1st's grant to every mentee stays a few round trips.
     """
     for start in range(0, len(facts), ANALYTICS_CHUNK):
@@ -221,8 +222,30 @@ async def enqueue_analytics_each(
                     rows.c.user_id,
                     literal(Channel.ANALYTICS.value),
                     rows.c.payload,
-                ).where(counted_user(rows.c.user_id)),
+                )
+                .join(User, User.id == rows.c.user_id)
+                .where(sendable(User)),
             )
+        )
+
+
+async def enqueue_session_analytics(
+    session: AsyncSession,
+    event: AnalyticsEvent,
+    facts: Sequence[tuple[UUID, UUID, Mapping[str, object]]],
+    *,
+    at: dt.datetime,
+) -> None:
+    """``event`` about each ``(mentee_id, mentor_id, properties)``'s mentee and,
+    when it has one (`MENTOR_COUNTERPARTS`, decision 337), its counterpart about
+    the mentor with the same properties. Each side is skipped on its own when
+    that person is internal. Does not commit."""
+    await enqueue_analytics_each(
+        session, event, [(mentee, properties) for mentee, _, properties in facts], at=at
+    )
+    if (counterpart := MENTOR_COUNTERPARTS.get(event)) is not None:
+        await enqueue_analytics_each(
+            session, counterpart, [(mentor, properties) for _, mentor, properties in facts], at=at
         )
 
 

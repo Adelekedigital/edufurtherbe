@@ -61,7 +61,7 @@ ON = {"analytics_enabled": True, "analytics_host": HOST, "analytics_project_toke
 # --------------------------------------------------------------------------
 
 
-def test_the_server_sends_exactly_the_ten_outcome_events() -> None:
+def test_the_server_sends_exactly_the_twelve_outcome_events() -> None:
     assert {event.value for event in AnalyticsEvent} == {
         "booking_requested",
         "session_confirmed",
@@ -73,6 +73,8 @@ def test_the_server_sends_exactly_the_ten_outcome_events() -> None:
         "mentor_listed",
         "review_submitted",
         "referral_unlocked",
+        "booking_received",
+        "session_delivered",
     }
     assert Channel.ANALYTICS == "analytics"
 
