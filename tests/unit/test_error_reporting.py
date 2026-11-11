@@ -24,7 +24,12 @@ from app.api.deps import core as deps
 from app.api.deps.core import analytics_consent_of
 from app.api.errors import UNMATCHED_ROUTE
 from app.core.config import Settings
-from app.core.errors import AppError, ConfigurationError, NotFoundError
+from app.core.errors import (
+    AppError,
+    ConfigurationError,
+    NotFoundError,
+    WritingAssistUnavailableError,
+)
 from app.core.reporting import ErrorContext, member_on, remember_member
 from app.infra.clients.posthog import PostHogSink
 from app.infra.clients.posthog_errors import (
@@ -32,12 +37,15 @@ from app.infra.clients.posthog_errors import (
     MAX_CHAIN,
     MAX_FRAMES,
     MAX_IN_FLIGHT,
+    SEND_BOUND,
+    SHUTDOWN_DEADLINE,
     PostHogErrorReporter,
     error_reporter_for,
     exception_event,
 )
 from app.infra.observability import (
     REDACTED,
+    _before_send,
     configure_sentry,
     reportable_message,
     without_statement,
@@ -251,6 +259,7 @@ async def test_the_event_is_anonymous_without_a_member() -> None:
         "lang": "python",
         "function": "raised",
         "filename": "test_error_reporting.py",
+        "module": "test_error_reporting",
         "lineno": frame["lineno"],
         "in_app": False,
     }
@@ -527,12 +536,22 @@ async def test_a_sentry_event_keeps_only_its_allowlist(
         "tags",
         "transaction",
         "user",
+        "contexts",
     }
     assert "request" not in event
+    assert set(event["contexts"]) == {"trace"}
+    assert "trace_id" in event["contexts"]["trace"]
+    assert set(event["contexts"]["trace"]) <= {
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "op",
+    }
+    assert "module" in event["exception"]["values"][-1]
     assert event["user"] == {"id": str(MEMBER)}
     assert set(event["tags"]) == {"request_id", "route"}
     frame = event["exception"]["values"][-1]["stacktrace"]["frames"][-1]
-    assert set(frame) == {"filename", "function", "lineno", "in_app"}
+    assert set(frame) == {"filename", "function", "module", "lineno", "in_app"}
 
 
 async def test_the_posthog_event_keeps_only_its_allowlist() -> None:
@@ -709,3 +728,221 @@ async def test_me_reads_the_consent_from_the_callers_row() -> None:
         "2026-11-11T09:00:00Z",
     )
     assert analytics_consent_of(unanswered) is None
+
+
+# --------------------------------------------------------------------------
+# From the focused review of the fixes (decision 339)
+
+
+async def test_a_deliberate_503_is_reported_to_neither(
+    recording: list[dict[str, Any]],
+) -> None:
+    with_sentry()
+    reported = Reported()
+    app = an_app(reported)
+
+    @app.get("/assist")
+    async def assist() -> None:
+        raise WritingAssistUnavailableError("the writing assistant is off")
+
+    response = await get(app, "/assist")
+    sentry_sdk.flush()
+
+    assert response.status_code == 503
+    assert reported.calls == []
+    assert recording == []
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("postgresql://admin:pa/ss@db.host:5432/x failed", "postgresql://db.host failed"),
+        (
+            "GET https://user@api.example.test:8443/v1/a?b=1 refused",
+            "GET https://api.example.test refused",
+        ),
+        (
+            "row 0190a000-0000-7000-8000-00000000ABCD not found",
+            "row [id] not found",
+        ),
+        (
+            "duplicate key value violates unique constraint 'uq_users_email' "
+            "(asyncpg.exceptions.UniqueViolationError)",
+            "duplicate key value violates unique constraint 'uq_users_email' "
+            "(asyncpg.exceptions.UniqueViolationError)",
+        ),
+        (
+            "<class 'sqlalchemy.exc.IntegrityError'>: 'IntegrityError' on 'uq_users_email'",
+            "<class 'sqlalchemy.exc.IntegrityError'>: 'IntegrityError' on 'uq_users_email'",
+        ),
+        (
+            "'NoneType' object has no attribute 'mentor_id'",
+            "'NoneType' object has no attribute 'mentor_id'",
+        ),
+        ("'mentor_id'", "'mentor_id'"),
+        ("argument $2: 'Jane Smith'", "argument $2: '[value]'"),
+        ("no mentor called 'Jane'", "no mentor called '[value]'"),
+        ('key "Jane" and "a@b"', "key '[value]' and '[value]'"),
+        ("can't find the user's row", "can't find the user's row"),
+    ],
+)
+async def test_reportable_message_masks_data_and_keeps_code(message: str, expected: str) -> None:
+    assert reportable_message(message) == expected
+
+
+async def test_a_key_error_keeps_its_key() -> None:
+    assert reportable_message(str(KeyError("mentor_id"))) == "'mentor_id'"
+
+
+async def test_a_transaction_keeps_only_its_allowlist() -> None:
+    transaction = {
+        "type": "transaction",
+        "event_id": "e1",
+        "timestamp": 2.0,
+        "start_timestamp": 1.0,
+        "transaction": f"/things/{THING}",
+        "transaction_info": {"source": "url"},
+        "release": "abc123",
+        "environment": "staging",
+        "contexts": {"trace": {"trace_id": "t1", "span_id": "s1", "op": "http", "data": "x"}},
+        "request": {"url": f"http://test/things/{THING}?t=secret1"},
+        "user": {"id": "u1"},
+        "extra": {"leak": "leaks-if-kept"},
+        "server_name": "host-1",
+        "spans": [
+            {
+                "op": "http.client",
+                "description": "GET https://api.example.test/v1/users/42?key=abc",
+                "status": "ok",
+                "span_id": "s2",
+                "parent_span_id": "s1",
+                "trace_id": "t1",
+                "start_timestamp": 1.1,
+                "timestamp": 1.9,
+                "data": {"url": "https://api.example.test/v1/users/42?key=abc"},
+            }
+        ],
+    }
+
+    kept = _before_send(transaction, None)
+
+    sent = json.dumps(kept)
+    for leak in (THING, "secret1", "/v1/users", "leaks-if-kept", "host-1", "u1"):
+        assert leak not in sent
+    assert kept["transaction"] == "/(other)"
+    assert kept["contexts"] == {"trace": {"trace_id": "t1", "span_id": "s1", "op": "http"}}
+    (span,) = kept["spans"]
+    assert span["description"] == "GET https://api.example.test"
+    assert "data" not in span
+    assert set(kept) <= {
+        "type",
+        "event_id",
+        "platform",
+        "timestamp",
+        "start_timestamp",
+        "environment",
+        "release",
+        "transaction",
+        "transaction_info",
+        "tags",
+        "contexts",
+        "spans",
+    }
+
+
+async def test_a_routed_transaction_keeps_its_template() -> None:
+    transaction = {
+        "type": "transaction",
+        "transaction": "/things/{thing_id}",
+        "transaction_info": {"source": "route"},
+    }
+
+    assert _before_send(transaction, None)["transaction"] == "/things/{thing_id}"
+
+
+async def test_shutdown_waits_a_whole_send_and_counts_what_it_drops(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert SHUTDOWN_DEADLINE >= SEND_BOUND
+
+    class Stuck:
+        def capture(self, events: list[dict[str, Any]]) -> None:
+            del events
+            time.sleep(0.5)
+
+        def delete_person(self, user_id: UUID) -> None:
+            del user_id
+
+    reporter = PostHogErrorReporter(Stuck(), release=None, environment="ci")
+    context = ErrorContext(request_id="req-drop-1234", route="/x", member_id=None)
+    reporter.report(raised(), context)
+    reporter.report(raised(), context)
+
+    with caplog.at_level("WARNING"):
+        dropped = await reporter.drain(0.05)
+
+    assert dropped == 2
+    (line,) = [r for r in caplog.records if r.getMessage() == "error reports dropped at shutdown"]
+    assert line.dropped == 2  # type: ignore[attr-defined]
+    assert reporter._pending == set()
+
+
+async def test_in_app_follows_the_module_not_the_path() -> None:
+    ours: dict[str, Any] = {"__name__": "app.vendored"}
+    theirs: dict[str, Any] = {"__name__": "somelib.core"}
+    raise_here = "def fail():\n    raise RuntimeError('x')\n"
+    exec(compile(raise_here, "/venv/lib/site-packages/app/vendored.py", "exec"), ours)  # noqa: S102
+    exec(compile(raise_here, "/srv/src/app/looks_ours.py", "exec"), theirs)  # noqa: S102
+    context = ErrorContext(request_id="req-inapp-123", route="/x", member_id=None)
+
+    for scope, expected in ((ours, True), (theirs, False)):
+        try:
+            scope["fail"]()
+        except RuntimeError as exc:
+            event = exception_event(exc, context, release=None, environment="ci")
+        (exception,) = event["properties"]["$exception_list"]
+        frame = exception["stacktrace"]["frames"][-1]
+        assert frame["in_app"] is expected
+        assert frame["module"] == scope["__name__"]
+
+
+async def test_sentrys_own_in_app_is_kept() -> None:
+    event = {
+        "level": "error",
+        "exception": {
+            "values": [
+                {
+                    "type": "RuntimeError",
+                    "value": "x",
+                    "stacktrace": {
+                        "frames": [
+                            {
+                                "filename": "/venv/lib/site-packages/app/vendored.py",
+                                "module": "app.vendored",
+                                "function": "fail",
+                                "lineno": 2,
+                                "in_app": True,
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+
+    (frame,) = _before_send(event, None)["exception"]["values"][0]["stacktrace"]["frames"]
+
+    assert frame == {
+        "filename": "app/vendored.py",
+        "function": "fail",
+        "module": "app.vendored",
+        "lineno": 2,
+        "in_app": True,
+    }
+
+
+async def test_the_sendable_predicate_compiles_to_plain_sql_with_nothing_bound() -> None:
+    assert deps._SENDABLE.params == {}
+    assert "(u.deleted_at IS NULL AND NOT u.is_internal) AS analytics_sendable" in str(
+        deps.CURRENT_USER
+    )

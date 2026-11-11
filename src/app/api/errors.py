@@ -79,7 +79,7 @@ from app.core.errors import (
     WritingAssistUnavailableError,
 )
 from app.core.errors import ValidationError as DomainValidationError
-from app.core.reporting import ErrorContext, member_on, reporting
+from app.core.reporting import UNMATCHED_ROUTE, ErrorContext, member_on, reporting
 from app.domain.ports import ErrorReporter
 
 CONTENT_TYPE = "application/problem+json"
@@ -302,9 +302,11 @@ def _problem_type(exc: Exception) -> str:
 
 async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
     """Map a deliberate domain error to its response; **a 500 among them is
-    reported** like any unhandled error (`report_server_error`), a 4xx never."""
+    reported** like any unhandled error (`report_server_error`). A 4xx, and a
+    deliberate 502 or 503 (an upstream or a switched-off feature answering as
+    designed), never are."""
     response = _app_error_response(exc)
-    if response.status_code >= OPERATOR_ERROR:
+    if response.status_code == OPERATOR_ERROR:
         report_server_error(request, exc)
     return response
 
@@ -422,11 +424,6 @@ def report_server_error(request: Request, exc: Exception) -> ErrorContext:
     if reporter is not None:
         reporter.report(exc, context)
     return context
-
-
-#: The route an error is reported under when no route matched (a 404 path, a
-#: mount): never the raw path.
-UNMATCHED_ROUTE = "/(other)"
 
 
 def route_template(request: Request) -> str:

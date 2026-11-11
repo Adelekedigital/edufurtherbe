@@ -209,6 +209,9 @@ _SENDABLE = sendable(aliased(User, name="u")).compile(
     dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
     compile_kwargs={"literal_binds": True},
 )
+# What keeps the S608/B608 suppression below true: the predicate binds nothing.
+if _SENDABLE.params:
+    raise RuntimeError("analytics_scope.sendable must compile without bound values")
 # S608: the only interpolation is `_SENDABLE`, our own predicate compiled at
 # import with no bound values; nothing from a request reaches this text.
 CURRENT_USER = text(f"""

@@ -23,13 +23,14 @@ import re
 import sys
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 import sentry_sdk
 import structlog
 from sentry_sdk.transport import Transport
 
 from app.core.config import Settings
-from app.core.reporting import ErrorContext, current_error
+from app.core.reporting import UNMATCHED_ROUTE, ErrorContext, current_error
 
 REDACTED = "[REDACTED]"
 
@@ -98,17 +99,24 @@ def _is_sensitive(key: object) -> bool:
 #: which hold the row's values, follow it.
 SQL_MARKER = "[SQL:"
 
-
-#: A value an error message quotes: asyncpg's `'Jane Smith'`, pydantic's
-#: `input_value='...'`, a `"..."` name.
-_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
-#: A URL, kept to its scheme and host: the path and query can name a record or
-#: carry a credential, and userinfo is a credential.
-_URL = re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*)://(?:[^@/\s'\"]*@)?([^/\s?#'\"]+)[^\s'\"]*")
+#: A whole URL token: its scheme, then everything up to whitespace or a quote.
+#: Userinfo may itself hold a `/`, so the host is found after the last `@`.
+_URL_TOKEN = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"]+")
+#: A uuid in any case, the shape of every id this service hands out.
+_UUID = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+#: A quoted span whose opening quote does not follow a letter, so the
+#: apostrophes in "can't find the user's row" are prose, not a quote.
+_QUOTED = re.compile(r"(?<![A-Za-z])('[^'\n]*'|\"[^\"\n]*\")")
+#: What a code identifier may look like inside quotes.
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+_DIGIT_RUN = re.compile(r"\d{3,}")
 #: Six or more digits in a row: a phone number, an account or card number.
 _LONG_NUMBER = re.compile(r"\d{6,}")
 QUOTED_VALUE = "'[value]'"
 LONG_NUMBER = "[number]"
+ID_VALUE = "[id]"
 
 
 def without_statement(message: str) -> str:
@@ -121,66 +129,120 @@ def without_statement(message: str) -> str:
     return message.split(SQL_MARKER, 1)[0].partition("\n")[0].rstrip()
 
 
+def _host_only(match: re.Match[str]) -> str:
+    """``scheme://hostname`` of a URL: no userinfo, port, path or query."""
+    scheme, _, rest = match.group(0).partition("://")
+    try:
+        host = urlsplit(f"{scheme}://{rest.rsplit('@', 1)[-1]}").hostname
+    except ValueError:
+        host = None
+    return f"{scheme}://{host or '[host]'}"
+
+
+def _is_identifier(span: str) -> bool:
+    """A quoted span that names code, not data: a dotted or snake_case name
+    (`uq_users_email`, `asyncpg.exceptions.UniqueViolationError`) or a
+    CamelCase one with two capitals or more (`NoneType`). A single plain word
+    (`Jane`), a span with a space, an `@` or a run of digits is data."""
+    if not _IDENTIFIER.fullmatch(span) or _DIGIT_RUN.search(span):
+        return False
+    return "_" in span or "." in span or sum(c.isupper() for c in span) >= 2
+
+
+def _quoted(match: re.Match[str]) -> str:
+    literal = match.group(1)
+    return literal if _is_identifier(literal[1:-1]) else QUOTED_VALUE
+
+
 def reportable_message(message: str) -> str:
     """**The one rule for an exception's text leaving for Sentry or PostHog**
     (decision 339), applied before `scrub`: the SQL statement cut
-    (`without_statement`), every quoted literal masked as `'[value]'`, every
-    URL reduced to ``scheme://host`` and every run of six or more digits
-    masked. The exception's type is untouched and the message keeps its shape,
-    so the same fault still groups as one issue."""
-    cut = _URL.sub(r"\1://\2", without_statement(message))
-    return _LONG_NUMBER.sub(LONG_NUMBER, _QUOTED.sub(QUOTED_VALUE, cut))
+    (`without_statement`), every URL reduced to ``scheme://hostname``, every
+    uuid masked as `[id]` (an id must not ride past consent), every quoted
+    literal masked as `'[value]'` unless it names code (`_is_identifier`), and
+    every run of six or more digits masked. The type is untouched and the
+    message keeps its shape, so the same fault still groups as one issue."""
+    text = _URL_TOKEN.sub(_host_only, without_statement(message))
+    text = _QUOTED.sub(_quoted, _UUID.sub(ID_VALUE, text))
+    return _LONG_NUMBER.sub(LONG_NUMBER, text)
 
 
-def short_path(filename: str) -> tuple[str, bool]:
+def short_path(filename: str) -> str:
     """A frame's file from its package root, never the machine's own
-    directories, and whether it is ours (`app/...`) rather than a library's."""
+    directories."""
     path = filename.replace(chr(92), "/")
-    library = "site-packages/" in path
     for marker in ("site-packages/", "/src/"):
         if marker in path:
-            path = path.rsplit(marker, 1)[1]
-            break
-    else:
-        if path.startswith("/") or ":" in path:
-            path = path.rsplit("/", 1)[-1]
-    return path, not library and path.startswith("app/")
+            return path.rsplit(marker, 1)[1]
+    if path.startswith("/") or ":" in path:
+        return path.rsplit("/", 1)[-1]
+    return path
 
 
-#: What a Sentry error event keeps; everything else (request, contexts, extra,
+#: What a Sentry error event keeps; everything else (request, extra,
 #: breadcrumbs, server_name, modules, an integration's own fields) is dropped.
 _EVENT_KEPT = ("event_id", "timestamp", "platform", "level", "logger", "environment", "release")
-#: What a transaction drops: it needs its spans and trace context to be one.
-_TRANSACTION_DROPPED = ("request", "extra", "breadcrumbs", "server_name", "user", "modules")
+#: What a transaction keeps besides its name, tags, trace and spans.
+_TRANSACTION_KEPT = (
+    "event_id",
+    "type",
+    "platform",
+    "timestamp",
+    "start_timestamp",
+    "environment",
+    "release",
+)
+#: Of a trace context, only its ids and operation.
+_TRACE_KEPT = ("trace_id", "span_id", "parent_span_id", "op")
+_SPAN_KEPT = (
+    "op",
+    "status",
+    "start_timestamp",
+    "timestamp",
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+)
+#: Transaction names Sentry derived from a matched route, never the raw path.
+_ROUTE_SOURCES = ("route", "component")
 
 
 def _frames(stacktrace: Any) -> list[dict[str, Any]]:
-    frames = []
-    for frame in (stacktrace or {}).get("frames") or []:
-        path, in_app = short_path(str(frame.get("filename") or frame.get("abs_path") or ""))
-        frames.append(
-            {
-                "filename": path,
-                "function": frame.get("function"),
-                "lineno": frame.get("lineno"),
-                "in_app": in_app,
-            }
-        )
-    return frames
+    """Each frame as file, function, line and module, with Sentry's own
+    `in_app`."""
+    return [
+        {
+            "filename": short_path(str(frame.get("filename") or frame.get("abs_path") or "")),
+            "function": frame.get("function"),
+            "module": frame.get("module"),
+            "lineno": frame.get("lineno"),
+            "in_app": frame.get("in_app"),
+        }
+        for frame in (stacktrace or {}).get("frames") or []
+    ]
+
+
+def _trace(event: Any) -> dict[str, Any]:
+    trace = (event.get("contexts") or {}).get("trace") or {}
+    kept = {key: trace[key] for key in _TRACE_KEPT if key in trace}
+    return {"contexts": {"trace": kept}} if kept else {}
 
 
 def _allowed(event: Any, context: ErrorContext | None) -> dict[str, Any]:
     """**A Sentry error event built from an allowlist** (decision 339): the
-    exception's type and `reportable_message` value with its frames as file,
-    function and line; the log line's own text; the tags we set; the level,
-    release and environment; ``user.id`` only when the context carries one."""
+    exception's type, module and `reportable_message` value with its frames as
+    file, function, module and line; the log line's own text; the tags we set;
+    the trace ids; the level, release and environment; ``user.id`` only when
+    the context carries one."""
     kept: dict[str, Any] = {key: event[key] for key in _EVENT_KEPT if key in event}
+    kept |= _trace(event)
     values = (event.get("exception") or {}).get("values") or []
     if values:
         kept["exception"] = {
             "values": [
                 {
                     "type": value.get("type"),
+                    "module": value.get("module"),
                     "value": reportable_message(str(value.get("value") or "")),
                     "mechanism": {
                         "type": (value.get("mechanism") or {}).get("type", "generic"),
@@ -202,6 +264,32 @@ def _allowed(event: Any, context: ErrorContext | None) -> dict[str, Any]:
         if context.member_id:
             kept["user"] = {"id": str(context.member_id)}
     kept["tags"] = {key: value for key, value in tags.items() if value}
+    return kept
+
+
+def _allowed_transaction(event: Any) -> dict[str, Any]:
+    """**A transaction built from an allowlist too**: its ids and times, its
+    name only when Sentry took it from a matched route (else `/(other)`), the
+    tags we set, the trace ids, and each span's operation, status, times, ids
+    and `reportable_message` description. Span data, request, user, extra,
+    breadcrumbs, modules and server_name are dropped."""
+    kept: dict[str, Any] = {key: event[key] for key in _TRANSACTION_KEPT if key in event}
+    source = (event.get("transaction_info") or {}).get("source")
+    route = event.get("transaction") if source in _ROUTE_SOURCES else None
+    kept["transaction"] = route or UNMATCHED_ROUTE
+    kept["transaction_info"] = {"source": "route"}
+    tags = {"request_id": (event.get("tags") or {}).get("request_id"), "route": kept["transaction"]}
+    kept["tags"] = {key: value for key, value in tags.items() if value}
+    kept |= _trace(event)
+    kept["spans"] = [
+        {key: span[key] for key in _SPAN_KEPT if key in span}
+        | (
+            {"description": reportable_message(span["description"])}
+            if isinstance(span.get("description"), str)
+            else {}
+        )
+        for span in event.get("spans") or []
+    ]
     return kept
 
 
@@ -286,15 +374,13 @@ def _before_send(event: Any, _hint: Any) -> Any:
     An error event is rebuilt from an allowlist (`_allowed`): an unhandled
     request error carries its route template and, only with analytics consent
     from a sendable member, their id: the `ErrorContext` PostHog gets too
-    (decision 339). A transaction keeps its spans and loses its request.
+    (decision 339). A transaction is rebuilt from its own (`_allowed_transaction`).
     """
     request_id = structlog.contextvars.get_contextvars().get("request_id")
     if request_id:
         event.setdefault("tags", {})["request_id"] = request_id
     if event.get("type") == "transaction":
-        for key in _TRANSACTION_DROPPED:
-            event.pop(key, None)
-        return scrub(event)
+        return scrub(_allowed_transaction(event))
     return scrub(_allowed(event, current_error()))
 
 

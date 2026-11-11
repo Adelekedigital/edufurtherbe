@@ -1,8 +1,9 @@
 """What an unhandled request error is reported with, to Sentry and PostHog
 alike (decision 339).
 
-**Built once, by `api/errors.handle_unexpected_error`**, and read by both
-tools, so they cannot disagree on the request, the route or the member.
+**Built once per 500, by `api/errors.report_server_error`**, which both
+`handle_unexpected_error` and `handle_app_error` call, and read by both tools,
+so they cannot disagree on the request, the route or the member.
 
 **The member's id is there only with analytics consent**, and only for a
 member analytics may name (live, not internal). It is recorded on
@@ -22,7 +23,18 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
-__all__ = ["ErrorContext", "current_error", "member_on", "remember_member", "reporting"]
+__all__ = [
+    "UNMATCHED_ROUTE",
+    "ErrorContext",
+    "current_error",
+    "member_on",
+    "remember_member",
+    "reporting",
+]
+
+#: The route an error is reported under when no route matched (a 404 path, a
+#: mount), in both tools: never the raw path.
+UNMATCHED_ROUTE = "/(other)"
 
 #: The attribute on `request.state` holding the reportable member, or ``None``.
 _MEMBER = "reportable_member"

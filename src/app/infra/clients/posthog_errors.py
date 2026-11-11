@@ -37,6 +37,7 @@ import asyncio
 import datetime as dt
 import logging
 import traceback
+from types import FrameType
 from typing import Any
 from uuid import uuid4
 
@@ -55,6 +56,7 @@ __all__ = [
     "MAX_CHAIN",
     "MAX_FRAMES",
     "MAX_IN_FLIGHT",
+    "SEND_BOUND",
     "SHUTDOWN_DEADLINE",
     "PostHogErrorReporter",
     "error_reporter_for",
@@ -68,6 +70,17 @@ logger = logging.getLogger(__name__)
 #: a pooled connection, 1 s to connect, 0.5 s to write and 1 s to read the
 #: one small reply, 3 s in all.
 ERROR_TIMEOUT = httpx.Timeout(connect=1.0, read=1.0, write=0.5, pool=0.5)
+#: The longest one send can take: every phase at its limit.
+SEND_BOUND = sum(
+    phase
+    for phase in (
+        ERROR_TIMEOUT.connect,
+        ERROR_TIMEOUT.read,
+        ERROR_TIMEOUT.write,
+        ERROR_TIMEOUT.pool,
+    )
+    if phase is not None
+)
 #: A message longer than this is cut: a driver error can quote a whole statement.
 MAX_MESSAGE = 1000
 #: Sends in flight at once; past it a report is dropped. Each holds a worker
@@ -78,19 +91,26 @@ MAX_IN_FLIGHT = 4
 #: innermost, nearest the raise).
 MAX_CHAIN = 3
 MAX_FRAMES = 50
-#: How long shutdown waits for sends still in flight.
-SHUTDOWN_DEADLINE = 2.0
+#: How long shutdown waits for sends still in flight: one whole send and a
+#: second to spare, so a send that started is not cut off; what is still
+#: pending then is cancelled and counted.
+SHUTDOWN_DEADLINE = SEND_BOUND + 1.0
 
 
-def _frame(frame: traceback.FrameSummary) -> dict[str, Any]:
-    path, in_app = short_path(frame.filename)
+def _frame(frame: FrameType, lineno: int) -> dict[str, Any]:
+    """A frame as file, function, line and module. **Ours (`in_app`) by its
+    module, `app.*`**, not by its path, which a vendored or installed copy can
+    make look like a library's. Only the module's name is read from the frame,
+    never its locals or source."""
+    module = frame.f_globals.get("__name__")
     return {
         "platform": "custom",
         "lang": "python",
-        "function": frame.name,
-        "filename": path,
-        "lineno": frame.lineno,
-        "in_app": in_app,
+        "function": frame.f_code.co_name,
+        "filename": short_path(frame.f_code.co_filename),
+        "module": module,
+        "lineno": lineno,
+        "in_app": isinstance(module, str) and (module == "app" or module.startswith("app.")),
     }
 
 
@@ -110,15 +130,14 @@ def _chain(exc: BaseException) -> list[BaseException]:
 
 
 def _exception(exc: BaseException) -> dict[str, Any]:
-    # No source lines read: `lookup_lines=False` keeps this cheap on the loop.
-    frames = traceback.StackSummary.extract(
-        traceback.walk_tb(exc.__traceback__), lookup_lines=False
-    )
+    # No source read and no locals: cheap enough for the event loop.
+    frames = list(traceback.walk_tb(exc.__traceback__))[-MAX_FRAMES:]
     return {
         "type": type(exc).__name__,
+        "module": type(exc).__module__,
         "value": reportable_message(str(exc))[:MAX_MESSAGE],
         "mechanism": {"handled": False, "synthetic": False},
-        "stacktrace": {"type": "raw", "frames": [_frame(f) for f in frames[-MAX_FRAMES:]]},
+        "stacktrace": {"type": "raw", "frames": [_frame(f, line) for f, line in frames]},
     }
 
 
@@ -185,11 +204,20 @@ class PostHogErrorReporter:
             # A warning, not an error: an error line would itself go to Sentry.
             logger.warning("error report not sent to analytics")
 
-    async def drain(self, timeout: float | None = None) -> None:
-        """Wait for every send in flight, at most ``timeout`` seconds in all:
-        the app's shutdown (`SHUTDOWN_DEADLINE`) and the tests."""
-        if self._pending:
-            await asyncio.wait(set(self._pending), timeout=timeout)
+    async def drain(self, timeout: float | None = None) -> int:
+        """Wait for every send in flight, at most ``timeout`` seconds in all
+        (the app's shutdown, `SHUTDOWN_DEADLINE`), then cancel what is still
+        pending. Returns how many were dropped, and logs the count only."""
+        if not self._pending:
+            return 0
+        _, pending = await asyncio.wait(set(self._pending), timeout=timeout)
+        for task in pending:
+            task.cancel()
+        # Each cancel lands at once: the thread it waited on is abandoned.
+        await asyncio.gather(*pending, return_exceptions=True)
+        if pending:
+            logger.warning("error reports dropped at shutdown", extra={"dropped": len(pending)})
+        return len(pending)
 
 
 def error_reporter_for(settings: Settings) -> PostHogErrorReporter | None:
