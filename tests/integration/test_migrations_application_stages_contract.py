@@ -3,7 +3,7 @@ nothing else, and no label. Split from `test_migrations.py` by area."""
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -33,10 +33,9 @@ LEGACY = (
 
 @pytest.mark.parametrize("stage", ["drafting_stage", "other"])
 def test_only_the_six_are_legal_and_no_label_is(
-    disposable_database: str, make_alembic_config: ConfigFactory, stage: str
+    disposable_database: str, migrate_to: MigrateTo, stage: str
 ) -> None:
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
 
     execute(disposable_database, SET_ROW.format("applying"))
@@ -51,11 +50,11 @@ def test_only_the_six_are_legal_and_no_label_is(
 
 
 def test_the_downgrade_restores_the_expand_step(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Twelve legal again, and `other` needs its label again."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
     execute(disposable_database, SET_ROW.format("applying"))
 

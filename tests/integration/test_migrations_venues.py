@@ -9,6 +9,7 @@ from alembic import command
 from tests.integration.test_migrations import (
     MENTOR_WITH_OFFERING,
     ConfigFactory,
+    MigrateTo,
     execute,
     scalar,
 )
@@ -67,14 +68,14 @@ def _venue_probes(url: str) -> None:
 
 
 def test_imported_meet_options_go_so_nobody_is_held_to_a_choice_they_never_made(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`a7c4e2d91f3b`: before `/me/conferencing` (#224) nothing let a mentor
     choose Meet, so every `google_meet` option was imported from a blank or an
     unrepresentable legacy venue. They go, with the pointers to them; a genuine
     `daily` choice stays."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f3a91d2c7b45")
+    migrate_to(disposable_database, "f3a91d2c7b45")
     _venue_probes(disposable_database)
     assert scalar(disposable_database, _VENUES) == (
         "venue-a@example.test=google_meet*>google_meet,"
@@ -92,13 +93,13 @@ def test_imported_meet_options_go_so_nobody_is_held_to_a_choice_they_never_made(
 
 
 def test_a_meet_the_mentor_chose_survives_a_downgrade_and_upgrade(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Provenance, not provider, decides what the cleanup removes: `source`
     records who wrote the row, so a Meet set through `/me/conferencing` is kept
     when `a7c4e2d91f3b` runs again after a downgrade, and an imported one goes."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "a7c4e2d91f3b")
+    migrate_to(disposable_database, "a7c4e2d91f3b")
     for email in ("venue-chose@example.test", "venue-import@example.test"):
         execute(
             disposable_database,
@@ -128,14 +129,14 @@ def test_a_meet_the_mentor_chose_survives_a_downgrade_and_upgrade(
 
 
 def test_the_imported_meet_downgrade_restores_the_old_load_rule(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Down, a mentor left with no default gets the `google_meet` default the old
     load gave them, and their offering points at it again. A mentor who kept a
     default is left alone: which imported option the old seeding made default is
     not recoverable, and their offering follows that default."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f3a91d2c7b45")
+    migrate_to(disposable_database, "f3a91d2c7b45")
     _venue_probes(disposable_database)
     command.upgrade(config, "a7c4e2d91f3b")
 
@@ -248,14 +249,14 @@ def _pin_probes(url: str) -> None:
 
 
 def test_imported_venue_pins_are_cleared_so_the_default_governs(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`b2d6f9a1c4e7`: nothing but the legacy load ever wrote an offering's
     venue pointer, and no screen shows one, so a pinned offering ignored the
     mentor's later switch of default. Every pointer goes; every option row and
     default stays exactly as it was."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f4a7c2d9b318")
+    migrate_to(disposable_database, "f4a7c2d9b318")
     _pin_probes(disposable_database)
     assert scalar(disposable_database, _PINS) == (
         "pin-a@example.test=daily:import*>daily,"
@@ -281,14 +282,14 @@ def test_imported_venue_pins_are_cleared_so_the_default_governs(
 
 
 def test_the_pin_downgrade_restores_the_old_load_rule(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Down, an imported default gets its live offerings pointed at it again —
     what the old load wrote. A default the mentor re-chose is theirs and is left
     following the default, and a deleted offering stays unpointed: neither is
     recoverable, and each resolves to the same venue either way."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f4a7c2d9b318")
+    migrate_to(disposable_database, "f4a7c2d9b318")
     _pin_probes(disposable_database)
     command.upgrade(config, "b2d6f9a1c4e7")
 

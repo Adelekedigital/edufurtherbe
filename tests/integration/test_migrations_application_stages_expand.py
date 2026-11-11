@@ -7,7 +7,7 @@ imported from there, not copied.
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -63,10 +63,9 @@ def legacy(stage: str) -> str:
 
 
 def test_both_vocabularies_are_legal_and_nothing_else_is(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
 
     for position, stage in enumerate(OLD + NEW):
@@ -81,10 +80,10 @@ def test_both_vocabularies_are_legal_and_nothing_else_is(
 
 
 def test_the_downgrade_narrows_back_when_no_row_holds_a_new_stage(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
     execute(disposable_database, stage_row("revisions", 0))
 
@@ -97,11 +96,11 @@ def test_the_downgrade_narrows_back_when_no_row_holds_a_new_stage(
 
 @pytest.mark.parametrize("where", ["set", "legacy"])
 def test_the_downgrade_refuses_while_a_row_holds_a_new_stage(
-    disposable_database: str, make_alembic_config: ConfigFactory, where: str
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo, where: str
 ) -> None:
     """`researching` has no old equivalent; refusing beats dropping a choice."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
     execute(
         disposable_database,

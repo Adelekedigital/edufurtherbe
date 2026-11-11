@@ -5,7 +5,7 @@ predate them.
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -32,16 +32,16 @@ ROWS = (
 )
 
 
-def seeded(url: str, config: ConfigFactory) -> None:
-    command.upgrade(config(url), PREVIOUS)
+def seeded(url: str, migrate_to: MigrateTo, config: ConfigFactory) -> None:
+    migrate_to(url, PREVIOUS)
     execute(url, SEED)
     command.upgrade(config(url), REVISION)
 
 
 def test_the_backfills_mark_internal_and_migrated_accounts(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
 
     assert scalar(disposable_database, ROWS) == (
         "admin:true:migrated,member:false:direct,migrated:false:migrated,"
@@ -50,9 +50,9 @@ def test_the_backfills_mark_internal_and_migrated_accounts(
 
 
 def test_every_existing_account_has_its_acquisition_settled(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
 
     assert (
         scalar(
@@ -73,9 +73,9 @@ def test_every_existing_account_has_its_acquisition_settled(
 
 
 def test_the_backfills_keep_bubbles_modified_date(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
 
     assert (
         scalar(
@@ -95,9 +95,9 @@ def test_the_backfills_keep_bubbles_modified_date(
 
 
 def test_a_grant_after_the_upgrade_is_projected(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
 
     execute(
         disposable_database,
@@ -111,9 +111,9 @@ def test_a_grant_after_the_upgrade_is_projected(
 
 
 def test_a_value_outside_each_vocabulary_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
 
     for statement in (
         "UPDATE users SET signup_source = 'facebook'",
@@ -125,10 +125,10 @@ def test_a_value_outside_each_vocabulary_is_refused(
 
 
 def test_downgrade_drops_it_all_and_upgrade_restores_it(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    seeded(disposable_database, make_alembic_config)
+    seeded(disposable_database, migrate_to, make_alembic_config)
     execute(
         disposable_database,
         "INSERT INTO analytics_consents (user_id, granted, version) "

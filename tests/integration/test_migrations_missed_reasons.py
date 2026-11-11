@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.enums import MissedReason
 from app.domain.missed_reasons import NOTE_MAX_LENGTH
@@ -47,13 +47,10 @@ def row(user: str, reason: str = "forgot", note: str = "NULL") -> str:
     return ROW.format(user, reason, note)
 
 
-def test_the_table_carries_its_invariants(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_the_table_carries_its_invariants(disposable_database: str, migrate_to: MigrateTo) -> None:
     """A generated id, one reason per party per session, a known reason, a
     bounded note, and rows that go with their session."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
 
     execute(disposable_database, row(MENTEE, note=f"'{'x' * NOTE_MAX_LENGTH}'"))
@@ -83,12 +80,11 @@ def test_the_table_carries_its_invariants(
 
 
 def test_the_constraints_name_what_the_code_does(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The migration spells its values out; these pin them to the enum and the
     bound the API and the model read, so the two cannot drift."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     reason = scalar(
         disposable_database,
@@ -107,10 +103,10 @@ def test_the_constraints_name_what_the_code_does(
 
 
 def test_the_downgrade_removes_the_table(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     command.downgrade(config, PREVIOUS)
 

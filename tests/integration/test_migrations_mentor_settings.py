@@ -20,7 +20,7 @@ from types import ModuleType
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.guide_countries import MAX_GUIDE_COUNTRIES
 from app.domain.social_links import MAX_LENGTH, SocialNetwork, canonical_social
@@ -144,10 +144,10 @@ def test_the_frozen_rule_reads_like_the_live_one(network: SocialNetwork, value: 
 
 
 def test_the_backfill_copies_what_reads_publish(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, BEFORE)
+    migrate_to(disposable_database, BEFORE)
     _person(disposable_database, "both@example.test", "twitter.com/ada", "youtube.com/@dee")
     _person(disposable_database, "x@example.test", "https://x.com/bo", None)
     _person(disposable_database, "junk@example.test", "not a link", "https://evil.com/@dee")
@@ -177,8 +177,8 @@ def test_the_backfill_copies_what_reads_publish(
 
 
 @pytest.fixture
-def links_db(disposable_database: str, make_alembic_config: ConfigFactory) -> str:
-    command.upgrade(make_alembic_config(disposable_database), LINKS)
+def links_db(disposable_database: str, migrate_to: MigrateTo) -> str:
+    migrate_to(disposable_database, LINKS)
     _person(disposable_database, "owner@example.test", None, None)
     return disposable_database
 
@@ -279,10 +279,10 @@ def test_an_edit_moves_updated_at(links_db: str) -> None:
 
 
 def test_the_downgrade_returns_x_and_youtube_to_their_columns(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, BEFORE)
+    migrate_to(disposable_database, BEFORE)
     _person(disposable_database, "back@example.test", "twitter.com/ada", None)
     command.upgrade(config, LINKS)
     # Written after the upgrade, as the next release's writer does.
@@ -300,12 +300,12 @@ def test_the_downgrade_returns_x_and_youtube_to_their_columns(
 
 
 def test_a_column_written_after_the_upgrade_survives_the_downgrade(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Until the code PR the profile PATCH and the loader still write the
     columns; a value they write has no row, and must not be lost."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, BEFORE)
+    migrate_to(disposable_database, BEFORE)
     _person(disposable_database, "late@example.test", None, "not a link")
     command.upgrade(config, LINKS)
     execute(
@@ -325,10 +325,10 @@ def test_a_column_written_after_the_upgrade_survives_the_downgrade(
 
 
 def test_the_downgrade_refuses_while_a_link_has_no_column(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, LINKS)
+    migrate_to(disposable_database, LINKS)
     _person(disposable_database, "insta@example.test", None, None)
     _link(disposable_database, "insta@example.test", "instagram", "https://www.instagram.com/ada")
 
@@ -341,11 +341,11 @@ def test_the_downgrade_refuses_while_a_link_has_no_column(
 
 
 def test_the_downgrade_refuses_while_a_link_has_no_profile_to_return_to(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """A user with no profile row may hold a link; its column does not exist."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, LINKS)
+    migrate_to(disposable_database, LINKS)
     execute(
         disposable_database,
         "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
@@ -362,8 +362,8 @@ def test_the_downgrade_refuses_while_a_link_has_no_profile_to_return_to(
 
 
 @pytest.fixture
-def guides_db(disposable_database: str, make_alembic_config: ConfigFactory) -> str:
-    command.upgrade(make_alembic_config(disposable_database), GUIDES)
+def guides_db(disposable_database: str, migrate_to: MigrateTo) -> str:
+    migrate_to(disposable_database, GUIDES)
     execute(disposable_database, _MENTOR.format(email="mentor@example.test"))
     return disposable_database
 
@@ -427,10 +427,10 @@ def test_the_countries_go_with_the_mentor_profile_and_hold_their_country(guides_
 
 
 def test_the_guides_downgrade_refuses_while_a_mentor_named_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, GUIDES)
+    migrate_to(disposable_database, GUIDES)
     execute(disposable_database, _MENTOR.format(email="mentor@example.test"))
     _guide(disposable_database, "mentor@example.test", 0, 0)
 
@@ -449,13 +449,13 @@ CATCH_UP = "c1e5a8d3f027"
 
 
 def test_the_catch_up_copies_what_the_columns_gained_since_the_first_copy(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """A value written after the first copy arrives, and a column edited since
     replaces its first copy: only the old writer can have left it there. A link
     the new writer handled had its column cleared, so it is left alone."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, BEFORE)
+    migrate_to(disposable_database, BEFORE)
     _person(disposable_database, "edited@example.test", "https://x.com/old", None)
     command.upgrade(config, GUIDES)
     _person(disposable_database, "late@example.test", "twitter.com/late", "not a link")
@@ -477,10 +477,10 @@ def test_the_catch_up_copies_what_the_columns_gained_since_the_first_copy(
 
 
 def test_the_catch_up_is_safe_to_run_twice(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, GUIDES)
+    migrate_to(disposable_database, GUIDES)
     _person(disposable_database, "twice@example.test", "@ada", "@ada")
     command.upgrade(config, CATCH_UP)
     command.downgrade(config, GUIDES)
@@ -505,12 +505,12 @@ def _columns(url: str) -> str | None:
 
 
 def test_the_drop_leaves_the_links_as_they_are(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Nothing is copied again: a stale column never rolls a newer link back,
     and a column value whose link was deleted does not bring it back."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, CATCH_UP)
+    migrate_to(disposable_database, CATCH_UP)
     _person(disposable_database, "stale@example.test", "https://x.com/old", None)
     _link(disposable_database, "stale@example.test", "x", "https://x.com/new")
     _person(disposable_database, "deleted@example.test", "https://x.com/gone", None)
@@ -523,10 +523,10 @@ def test_the_drop_leaves_the_links_as_they_are(
 
 
 def test_the_drop_downgrade_returns_the_columns_from_the_links(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, DROP)
+    migrate_to(disposable_database, DROP)
     _person_without_links(disposable_database, "back@example.test")
     _link(disposable_database, "back@example.test", "youtube", "https://www.youtube.com/@ada")
 

@@ -7,7 +7,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.enums import NotificationPreferenceType
 
@@ -59,17 +59,17 @@ DELETE_USER = "DELETE FROM users WHERE id = '{}'"
 EMPTIED = "DELETE FROM notification_channel_preferences"
 
 
-def upgraded(url: str, config_factory: ConfigFactory) -> None:
-    command.upgrade(config_factory(url), REVISION)
+def upgraded(url: str, migrate_to: MigrateTo) -> None:
+    migrate_to(url, REVISION)
     execute(url, SEED)
 
 
 def test_a_preference_is_one_row_per_person_and_email(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The package's composite key survives as a unique pair; the vocabulary is
     checked; the other channels keep the package's defaults."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, PREFERENCE.format(MENTEE, UNREAD))
     execute(disposable_database, PREFERENCE.format(MENTOR, UNREAD))
     # Every channel unsaid: the package's defaults, email on.
@@ -89,9 +89,9 @@ def test_a_preference_is_one_row_per_person_and_email(
 
 
 def test_a_preference_goes_with_its_person_and_its_updated_at_moves(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, PREFERENCE.format(MENTOR, UNREAD))
     execute(disposable_database, AGE)
     execute(disposable_database, TOUCH)
@@ -104,9 +104,9 @@ def test_a_preference_goes_with_its_person_and_its_updated_at_moves(
 
 
 def test_emailed_at_is_optional_and_its_index_covers_only_emailed_messages(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     assert scalar(disposable_database, "SELECT emailed_at FROM messages") is None
     execute(disposable_database, "UPDATE messages SET emailed_at = now()")
 
@@ -118,10 +118,10 @@ def test_emailed_at_is_optional_and_its_index_covers_only_emailed_messages(
 
 
 def test_the_downgrade_refuses_over_a_preference_or_an_emailed_message(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, PREFERENCE.format(MENTEE, UNREAD))
     execute(disposable_database, "UPDATE messages SET emailed_at = now()")
 

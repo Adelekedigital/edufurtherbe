@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, scalar
 
 pytestmark = pytest.mark.db
 
@@ -17,12 +17,11 @@ COLUMN = (
 
 
 def test_measured_minutes_is_nullable_and_never_negative(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Null is "not measured" and every existing row stays null, so the stats
     keep today's figure; the table refuses a negative count."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, "c3e8a1f5d29b")
+    migrate_to(disposable_database, "c3e8a1f5d29b")
 
     assert scalar(disposable_database, COLUMN) == 1
     assert (
@@ -44,10 +43,10 @@ def test_measured_minutes_is_nullable_and_never_negative(
 
 
 def test_the_downgrade_removes_the_column(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "c3e8a1f5d29b")
+    migrate_to(disposable_database, "c3e8a1f5d29b")
 
     command.downgrade(config, "b2d6f9a1c4e7")
 

@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -34,13 +34,10 @@ ROW = (
 )
 
 
-def test_the_table_carries_its_invariants(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_the_table_carries_its_invariants(disposable_database: str, migrate_to: MigrateTo) -> None:
     """A generated id, one row per (mentor, offering), a deadline exactly when
     there is a time, and rows that go with their offering."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
 
     execute(disposable_database, ROW.format("now() + interval '1 day', now()"))
@@ -83,12 +80,12 @@ def test_the_table_carries_its_invariants(
 
 
 def test_the_downgrade_removes_the_table(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """A cache: dropping it loses nothing the next refresh cannot rebuild, so
     the downgrade does not refuse while it holds rows."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, SEED)
     execute(disposable_database, ROW.format("NULL, NULL"))
 

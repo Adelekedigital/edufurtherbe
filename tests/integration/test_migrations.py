@@ -241,6 +241,10 @@ ENUM_TYPE_NAMES: tuple[str, ...] = ()
 
 ConfigFactory = Callable[[str], Config]
 
+#: `migrate_to(url, revision)`, the conftest fixture: an empty database replaced
+#: by a copy of the chain at `revision`, built once per worker.
+MigrateTo = Callable[[str, str], None]
+
 
 def scalar(url: str, sql: str) -> Any:
     async def _run() -> Any:
@@ -404,7 +408,7 @@ def test_models_and_the_chain_agree(
 
 
 def test_the_notice_backfill_reaches_rows_that_predate_it(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """A migration's backfill is the half no ordinary test can reach.
 
@@ -421,7 +425,7 @@ def test_the_notice_backfill_reaches_rows_that_predate_it(
     then upgrades the rest of the way.
     """
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "c9d4e2a71f68")
+    migrate_to(disposable_database, "c9d4e2a71f68")
 
     execute(
         disposable_database,
@@ -459,7 +463,7 @@ def test_the_notice_backfill_reaches_rows_that_predate_it(
 
 
 def test_the_topic_backfill_carries_every_classified_session_type(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Session Types #9 moves a type's offering into `session_type_offerings`.
 
@@ -469,7 +473,7 @@ def test_the_topic_backfill_carries_every_classified_session_type(
     first must arrive as a set of one, the second as nothing.
     """
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "030c8bba5d6e")
+    migrate_to(disposable_database, "030c8bba5d6e")
 
     execute(
         disposable_database,
@@ -510,7 +514,7 @@ def test_the_topic_backfill_carries_every_classified_session_type(
 
 
 def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """**The one regression `b4e9c72a1d58` can cause, and it is invisible.**
 
@@ -531,7 +535,7 @@ def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
     mentor's toggle would stop having any effect on what a reader resolves.
     """
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "e7b4d29c3f16")
+    migrate_to(disposable_database, "e7b4d29c3f16")
 
     execute(
         disposable_database,
@@ -575,7 +579,7 @@ def test_the_confirmation_seed_reads_the_offerings_before_clearing_them(
 
 
 def test_the_conferencing_backfill_seeds_before_it_drops(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """**The named regression for `d9e2b74c1f36`, and it is invisible otherwise.**
 
@@ -601,7 +605,7 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
     head checks that the same mentor resolves to the platform default.
     """
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "c8f1a3e2b904")
+    migrate_to(disposable_database, "c8f1a3e2b904")
 
     execute(
         disposable_database,
@@ -702,7 +706,7 @@ def test_the_conferencing_backfill_seeds_before_it_drops(
 
 
 def test_the_primary_pointer_downgrade_restores_data_not_just_a_column(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """**A downgrade that restores an empty column is not a downgrade.**
 
@@ -719,7 +723,7 @@ def test_the_primary_pointer_downgrade_restores_data_not_just_a_column(
     column.
     """
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "head")
+    migrate_to(disposable_database, "head")
 
     execute(
         disposable_database,
@@ -835,7 +839,7 @@ SOURCE_ROOTS = (Path("src"), Path("migrations"))
 
 
 def test_every_schema_identifier_appears_verbatim_in_source(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Catches a **silently truncated** identifier, from any source.
 
@@ -857,7 +861,7 @@ def test_every_schema_identifier_appears_verbatim_in_source(
     purpose: a name written directly into a **migration** and into no model is
     invisible to that test, and both migrations in M2 hand-write names.
     """
-    command.upgrade(make_alembic_config(disposable_database), "head")
+    migrate_to(disposable_database, "head")
 
     source = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
@@ -902,12 +906,12 @@ MENTOR_WITH_OFFERING = """
 
 
 def test_the_stage_set_backfill_carries_every_staged_type(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`e0d7461f13ce` backfills one row per type with a stage, at position 0,
     and none for a type aimed at any stage (#215)."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "7b3e91c4a2d6")
+    migrate_to(disposable_database, "7b3e91c4a2d6")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -934,7 +938,7 @@ def test_the_stage_set_backfill_carries_every_staged_type(
 
 
 def test_the_stage_set_downgrade_keeps_the_mentors_label(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """**`[drafting_stage, other]` with a label cannot survive as one stage whole.**
     The symmetric `CHECK` the downgrade restores needs the label and `other`
@@ -942,7 +946,7 @@ def test_the_stage_set_downgrade_keeps_the_mentors_label(
     kept — the documented choice over keeping `drafting_stage` and dropping the
     label, which would lose the only thing the mentor typed."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "e0d7461f13ce")
+    migrate_to(disposable_database, "e0d7461f13ce")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -969,13 +973,13 @@ def test_the_stage_set_downgrade_keeps_the_mentors_label(
 
 
 def test_the_inherit_downgrade_writes_the_resolved_values(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`228315723d63`'s downgrade restores `NOT NULL`, so an inheriting offering
     must first be given **the value it was resolving to** — its mentor's default,
     else the platform's — not a column default nobody chose (#216)."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "228315723d63")
+    migrate_to(disposable_database, "228315723d63")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -1024,13 +1028,13 @@ def test_the_inherit_downgrade_writes_the_resolved_values(
 
 
 def test_featured_and_scheduled_deletion_arrive_as_defaults(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`f3a91d2c7b45` adds both columns under existing rows as un-featured and
     unscheduled — what every offering was — and the constraints validate over
     them (#217, #218)."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "228315723d63")
+    migrate_to(disposable_database, "228315723d63")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -1060,13 +1064,13 @@ def test_featured_and_scheduled_deletion_arrive_as_defaults(
 
 
 def test_the_round_four_downgrade_keeps_a_scheduled_offering_hidden(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Down, a featured offering keeps its row and loses only its place first,
     and a scheduled one stays **hidden and undeleted** — the old code's `409`
     then refuses its `DELETE` again, which is where it was."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "f3a91d2c7b45")
+    migrate_to(disposable_database, "f3a91d2c7b45")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -1107,12 +1111,12 @@ def test_the_round_four_downgrade_keeps_a_scheduled_offering_hidden(
 
 
 def test_the_return_date_downgrade_keeps_the_pause(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`b7c41e9a2d58` drops the return date and its reminder marker, and a paused
     mentor stays paused: the pause lives in the event log, not in these columns."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "b7c41e9a2d58")
+    migrate_to(disposable_database, "b7c41e9a2d58")
     execute(
         disposable_database,
         MENTOR_WITH_OFFERING.format(
@@ -1181,12 +1185,12 @@ _MENTEE_IN_TWO = """
 
 
 def test_the_mentee_overlap_constraint_refuses_to_apply_over_existing_overlaps(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`c3f8a51d7e20` stops with the ids rather than skipping (#342): one mentee
     in two live sessions at the same hour is a decision for a person."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "b7c41e9a2d58")
+    migrate_to(disposable_database, "b7c41e9a2d58")
     execute(disposable_database, _MENTEE_IN_TWO.format(second="pending_mentor_approval"))
 
     with pytest.raises(RuntimeError, match="sessions_no_mentee_double_booking cannot be added"):
@@ -1194,12 +1198,12 @@ def test_the_mentee_overlap_constraint_refuses_to_apply_over_existing_overlaps(
 
 
 def test_the_mentee_overlap_constraint_applies_over_a_cancelled_twin(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """The accepting case: a cancelled session at the same hour is history, not a
     double booking, so the constraint applies and is valid."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "b7c41e9a2d58")
+    migrate_to(disposable_database, "b7c41e9a2d58")
     execute(disposable_database, _MENTEE_IN_TWO.format(second="cancelled"))
 
     command.upgrade(config, "c3f8a51d7e20")
@@ -1238,12 +1242,12 @@ _THREE_TYPES = """
 
 
 def test_a_type_with_its_offering_only_in_the_column_gets_its_row(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`a7e3c1d9b452` gives a column-only type its set row (#274), leaves a type
     that already has a set alone, and invents nothing for an unclassified one."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "5d8b3e1f7a24")
+    migrate_to(disposable_database, "5d8b3e1f7a24")
     execute(disposable_database, _THREE_TYPES)
 
     command.upgrade(config, "a7e3c1d9b452")
@@ -1277,7 +1281,7 @@ _SET_FIRST = _SLUGS.format(
 
 
 def test_dropping_the_legacy_offering_column_and_back(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """`b8f4d2e6a913` backfills once more, then drops the column (#274), so a
     type whose offering appeared only in the column after `a7e3c1d9b452` ran
@@ -1285,7 +1289,7 @@ def test_dropping_the_legacy_offering_column_and_back(
     brings the column back holding each type's set position 0. Asserted as
     actual offerings, so a lost value cannot pass as NULL equalling NULL."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "a7e3c1d9b452")
+    migrate_to(disposable_database, "a7e3c1d9b452")
     execute(disposable_database, _THREE_TYPES)
     column_before = scalar(disposable_database, _COLUMN)
     set_before = scalar(disposable_database, _SET_FIRST)
