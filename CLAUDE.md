@@ -177,10 +177,12 @@ on 2026-10-08, when code review moved to Codex after the push.
     (format, lint, types, layers, bandit), **the test files the change
     touches**, the mutation batch, `/security-review`, and `/code-review` at
     **medium** effort (**low** for Tier 3). **Then GitHub reviews too**
-    (owner, 2026-10-12): after the push the builder comments `/code-reviewer`
-    on every PR that changes code (Claude, falling back to Kimi, paid from the
-    Max API credit). Both gate: every finding from either is fixed or answered
-    before merging. The full suite runs in CI, and work is done only when **CI
+    (owner, 2026-10-12): the builder comments `/code-reviewer` on every PR
+    that changes code, **once per round and only after CI is green on that
+    head** (owner, 2026-11-11, to cut review spend). Both gate: every finding
+    from either is fixed or answered before merging, and **no merge without a
+    completed review**, however long a reviewer outage lasts. Reviewer and
+    cost rules: `project-conventions` → *GitHub review loop*. The full suite runs in CI, and work is done only when **CI
     is green on the PR's exact head commit**. Check the SHA, because a stale
     green has been reported before (#35). A CI failure is fixed on the branch
     like any red gate. Run `make check` locally only to reproduce a CI failure.

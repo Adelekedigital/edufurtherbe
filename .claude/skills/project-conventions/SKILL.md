@@ -645,9 +645,22 @@ For every PR that changes code, recorded 2026-10-09 for Codex. **Every review
 is by comment, never automatic** (since 2026-10-10): neither opening a PR nor
 pushing runs one, so each round is one somebody chose to run.
 
-**Which reviewer** (owner, 2026-10-12): Claude, paid from the Max plan's monthly
-API credit, and **Kimi when the Claude run fails for any reason**, a spent
-credit included; the comment names which one wrote it. `/code-reviewer kimi`,
+**Which reviewer** (owner, 2026-11-11, superseding 2026-10-12's Claude-first):
+**Kimi by default** (`CODE_REVIEWER_PROVIDER=kimi` in both repos), paid from a
+Moonshot top-up sized for about 200–300 reviews across both repos over three
+weeks. **Claude only on request** (`/code-reviewer claude`) for a high-risk PR:
+auth, money or credits, migrations, security. The comment names which one wrote it.
+
+**Cost rules** (owner, 2026-11-11, agreed with the frontend repo):
+- One review per round, posted **only after CI is green on that exact head**;
+  never after every push. Batch a round's fixes into one push.
+- Release PRs (`development` → `main`) and docs-only PRs get no review: every
+  change in a release was reviewed on its way into `development`.
+- A failed run is retried **once**, then the owner is asked. Its warning names
+  a category (out of credit, model not available, budget cap, rate limited, key
+  rejected, exit code), never the text. Out of credit means wait for a top-up:
+  **no merge without a completed review**.
+- `CLAUDE_MAX_BUDGET_USD` is a variable (default 3) capping one Claude run. `/code-reviewer kimi`,
 `/code-reviewer claude` or `/code-reviewer codex` picks one with no fallback;
 the repository variable `CODE_REVIEWER_PROVIDER` changes the default. Codex is
 kept only for reactivation. Keys are secrets (`ANTHROPIC_API_KEY`,
@@ -676,6 +689,28 @@ pinned Claude Code CLI, read-only, with the pull request's own `CLAUDE.md` and
    in the reply as not worth the change.
 7. **Merge** when that is true **and** CI is green on the PR's exact head commit
    (rule 10). No separate word from the owner (standing since 2026-10-10).
+
+### CI shape (since #640, 2026-11-11)
+
+A full run is about 5.5 minutes (it was 17.6):
+- **Three test shards.** `scripts/check.py --shard K/3` deals test files by the
+  durations in `scripts/test_durations.json`, and `--combine-coverage` enforces
+  the one floor (`COVERAGE_FAIL_UNDER`).
+  - `--check-shard-files` fails CI if the shards and pytest's own collection
+    disagree, so a test can never fall out of every shard.
+  - A stale durations file only unbalances the shards. Refresh it with
+    `check.py --record-durations <junit files>` when one shard runs long.
+- **CI's Postgres runs on tmpfs with fsync off**: tests only. `docker-compose.yml` is untouched.
+- **Docs-only PRs** (every file under `docs/`, a root `*.md` or `.claude/`) skip
+  the shards and still run lint, types and the unit tier. A `.md` under `src/`
+  or `tests/` is code.
+- **Review size** fails a feature PR over the reviewer's 3,000-line limit in
+  seconds. Both it and the reviewer count with the base branch's
+  `scripts/review_diff.sh`, so they agree.
+- **Locally, set `REQUIRE_DB_TESTS=1` with `TEST_DATABASE_URL`** on every
+  database run. Without it an unreachable database *skips* those tests, and a
+  `-q` run of dots looks the same as a pass (#641: three tests skipped locally
+  and failed in CI).
 
 A comment that does not start with `/code-reviewer` triggers nothing; a reply
 alone never starts a review. **A comment runs the workflow from `main`, not from
