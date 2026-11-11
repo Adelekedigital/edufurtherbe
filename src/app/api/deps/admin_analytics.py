@@ -36,6 +36,7 @@ from app.domain.analytics import (
     newest_first,
     resolve_compare,
     resolve_period,
+    resolve_tz,
     yesterday,
 )
 from app.domain.analytics_behaviour import (
@@ -50,6 +51,7 @@ from app.domain.analytics_behaviour import (
     funnel_tab,
     login_alert,
 )
+from app.domain.availability import local_date
 from app.domain.ports import AnalyticsReader
 from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_for
 from app.infra.db.analytics_alerts import active_alerts
@@ -88,22 +90,32 @@ def analytics_ask(
         Query(
             alias="from",
             description=(
-                "First UTC day of a custom range, `YYYY-MM-DD`, no earlier than 2024-06-01. "
+                "First day (in `tz`) of a custom range, `YYYY-MM-DD`, no earlier than 2024-06-01. "
                 "Needs `to`; one day sends the same date for both."
             ),
         ),
     ] = None,
     to: Annotated[
         str | None,
-        Query(description="Last UTC day of a custom range, inclusive, no later than today."),
+        Query(description="Last day (in `tz`) of a custom range, inclusive, no later than today."),
     ] = None,
     compare: Annotated[
         str | None,
         Query(description="`true` (default) or `false`: whether `previous` figures are sent."),
     ] = None,
+    tz: Annotated[
+        str | None,
+        Query(
+            description=(
+                "The IANA time zone the days are read in, e.g. `Africa/Lagos`: "
+                "today, every day's midnight and the series buckets. Default `UTC`."
+            )
+        ),
+    ] = None,
 ) -> AnalyticsAsk:
     now = dt.datetime.now(dt.UTC)
-    period = resolve_period(now.date(), preset=window, first=from_, last=to)
+    zone = resolve_tz(tz)
+    period = resolve_period(local_date(zone, now), preset=window, first=from_, last=to, tz=zone)
     return AnalyticsAsk(now=now, period=period, compare=resolve_compare(compare))
 
 
@@ -157,8 +169,8 @@ async def _kept[T](
 async def _cached[T](
     request: Request, tab: str, ask: AnalyticsAsk, compute: Callable[[], Awaitable[T]]
 ) -> T:
-    """A tab's figures, kept per tab, dates and compare."""
-    key = (tab, ask.period.first, ask.period.last, ask.compare)
+    """A tab's figures, kept per tab, dates, zone and compare."""
+    key = (tab, ask.period.first, ask.period.last, ask.period.tz, ask.compare)
     return await _kept(request, key, ask.now, compute)
 
 
@@ -240,7 +252,7 @@ async def _explore(
     try:
         figures = await _kept(
             request,
-            ("explore", ask.period.first, ask.period.last),
+            ("explore", ask.period.first, ask.period.last, ask.period.tz),
             ask.now,
             lambda: asyncio.to_thread(reader.explore, windows, internal),
             optional=True,
