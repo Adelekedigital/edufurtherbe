@@ -12,7 +12,10 @@ same properties, at the fact's own time. Facts are read kind by kind
   live event. It is never derived from the outbox, whose analytics rows can be
   purged (`forget_unsent_analytics`): that would move the cutoff and send
   facts twice under different ids. The same ``until`` on every run keeps a
-  rerun's ids identical.
+  rerun's ids identical. **It stays the first live deploy's instant for
+  ever** (decision 330): a rerun with a later ``until`` also sends the facts
+  between the two, which were already sent live under their outbox ids, so
+  PostHog counts them twice.
 - **Each event's `uuid` is derived from its fact** (`history_event_id`), so a
   re-run or an overlapping run is dropped by PostHog rather than counted twice.
 - **Sent with `historical_migration`**, which PostHog requires of imported
@@ -24,6 +27,9 @@ same properties, at the fact's own time. Facts are read kind by kind
   resumable, cursor-based import, same page). It also records ``until`` and
   the target (`target_fingerprint`), and a resume with either changed is
   refused: it would skip facts never sent to that project, or mix cutoffs.
+  It carries `CURSOR_FORMAT`, and a cursor of another format is refused too:
+  one written before the mentor's side (decision 337) would resume past
+  facts whose mentor events were never sent.
 - **A dry run** (no sink) counts and builds every event, sends nothing and
   writes no cursor.
 """
@@ -47,6 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.config import Settings, analytics_gaps, env_key
 from app.domain.analytics_events import (
+    MENTOR_COUNTERPARTS,
     AnalyticsEvent,
     cancelled_properties,
     granted_properties,
@@ -65,7 +72,9 @@ from app.infra.http.upstream import trim_origin
 
 __all__ = [
     "BATCH",
+    "CURSOR_FORMAT",
     "KINDS",
+    "MAX_EVENTS_PER_FACT",
     "BackfillRefusedError",
     "BackfillReport",
     "Cursor",
@@ -77,6 +86,17 @@ __all__ = [
 
 #: Events per request.
 BATCH = 100
+
+#: The most events one fact reports: a request booked outright (requested,
+#: received, confirmed) or a legacy completion (confirmed, completed,
+#: delivered). A fact's events are never split, so the cursor always points at
+#: a fact sent whole, and a smaller batch is refused.
+MAX_EVENTS_PER_FACT = 3
+
+#: The cursor's format, bumped whenever a fact starts reporting more events:
+#: a cursor of another format would resume past facts sent without them.
+#: 2 is decision 337 (the mentor's side).
+CURSOR_FORMAT = 2
 
 #: How many built events a dry run shows.
 SAMPLE = 3
@@ -92,12 +112,23 @@ class BackfillRefusedError(RuntimeError):
 def _session_events(row: RowMapping) -> list[Event]:
     """What a `session_events` row reports, after the legacy confirmation its
     ending carries (``confirmed_at``, `facts.session_event_facts`): that one is
-    dated by the request and keyed by this row, the only fact it has."""
+    dated by the request and keyed by this row, the only fact it has.
+
+    Each event is about the mentee, followed by its mentor's counterpart
+    (`MENTOR_COUNTERPARTS`, decision 337) when it has one; each side only when
+    `_sides` names that person, as the live writers skip them."""
+    mentee, mentor = _sides(row)
     built = []
-    if row["confirmed_at"] is not None:
+    if row["confirmed_at"] is not None and mentee is not None:
         confirmed = session_properties(row["session_id"], row["entry_point"])
         built.append(
-            _event(AnalyticsEvent.SESSION_CONFIRMED, row, confirmed, at=row["confirmed_at"])
+            _event(
+                AnalyticsEvent.SESSION_CONFIRMED,
+                row,
+                confirmed,
+                about=mentee,
+                at=row["confirmed_at"],
+            )
         )
     for name in session_event_names(
         row["from_status"], row["to_status"], moved_from=row["moved_from"], moved_on=row["moved_on"]
@@ -112,32 +143,62 @@ def _session_events(row: RowMapping) -> list[Event]:
             )
         else:
             properties = session_properties(row["session_id"], row["entry_point"])
-        built.append(_event(name, row, properties))
+        if mentee is not None:
+            built.append(_event(name, row, properties, about=mentee))
+        counterpart = MENTOR_COUNTERPARTS.get(name)
+        if counterpart is not None and mentor is not None:
+            built.append(_event(counterpart, row, properties, about=mentor))
     return built
+
+
+def _sides(row: RowMapping) -> tuple[UUID | None, UUID | None]:
+    """A session row's mentee and mentor, each ``None`` when no event may be
+    sent about them (`analytics_scope.sendable`, read by the reader): the one
+    place a session row's people are checked, so no builder sends about an
+    excluded one."""
+    return (
+        row["mentee_id"] if row["mentee_counted"] else None,
+        row["mentor_id"] if row["mentor_counted"] else None,
+    )
 
 
 def _credit_events(row: RowMapping) -> list[Event]:
     if row["reason"] == CreditReason.GRANT:
         return [
             _event(
-                AnalyticsEvent.CREDIT_GRANTED, row, granted_properties(row["delta"], row["source"])
+                AnalyticsEvent.CREDIT_GRANTED,
+                row,
+                granted_properties(row["delta"], row["source"]),
+                about=row["user_id"],
             )
         ]
     return [
-        _event(AnalyticsEvent.CREDIT_SPENT, row, spent_properties(-row["delta"], row["session_id"]))
+        _event(
+            AnalyticsEvent.CREDIT_SPENT,
+            row,
+            spent_properties(-row["delta"], row["session_id"]),
+            about=row["user_id"],
+        )
     ]
 
 
 def _listing_events(row: RowMapping) -> list[Event]:
-    return [_event(AnalyticsEvent.MENTOR_LISTED, row, {})]
+    return [_event(AnalyticsEvent.MENTOR_LISTED, row, {}, about=row["user_id"])]
 
 
 def _review_events(row: RowMapping) -> list[Event]:
-    return [_event(AnalyticsEvent.REVIEW_SUBMITTED, row, review_properties(row["rating"]))]
+    return [
+        _event(
+            AnalyticsEvent.REVIEW_SUBMITTED,
+            row,
+            review_properties(row["rating"]),
+            about=row["user_id"],
+        )
+    ]
 
 
 def _unlock_events(row: RowMapping) -> list[Event]:
-    return [_event(AnalyticsEvent.REFERRAL_UNLOCKED, row, {})]
+    return [_event(AnalyticsEvent.REFERRAL_UNLOCKED, row, {}, about=row["user_id"])]
 
 
 def _event(
@@ -145,11 +206,14 @@ def _event(
     row: RowMapping,
     properties: dict[str, object],
     *,
+    about: UUID,
     at: dt.datetime | None = None,
 ) -> Event:
-    """``row``'s event, at the row's own time unless ``at`` says otherwise."""
+    """``row``'s event about ``about``, always named by the caller (a reader
+    has already left out whom no event may be about), at the row's own time
+    unless ``at`` says otherwise."""
     return historical_event(
-        name, fact_id=row["id"], user_id=row["user_id"], at=at or row["at"], properties=properties
+        name, fact_id=row["id"], user_id=about, at=at or row["at"], properties=properties
     )
 
 
@@ -207,8 +271,9 @@ class Cursor:
 
 def read_cursor(path: Path, *, until: dt.datetime, target: str | None) -> Cursor | None:
     """The cursor at ``path``, or ``None`` when there is none. Refused when it
-    cannot be read whole, or was written for another ``until`` or target (the
-    target is compared only when known: a dry run may have none)."""
+    cannot be read whole, is of another `CURSOR_FORMAT`, or was written for
+    another ``until`` or target (the target is compared only when known: a dry
+    run may have none)."""
     if not path.exists():
         return None
     try:
@@ -218,6 +283,11 @@ def read_cursor(path: Path, *, until: dt.datetime, target: str | None) -> Cursor
         written_target = saved["target"]
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise BackfillRefusedError(f"the cursor {path} is unreadable ({exc!r})") from exc
+    if saved.get("format") != CURSOR_FORMAT:
+        raise BackfillRefusedError(
+            f"the cursor {path} predates mentor-side events (decision 337); "
+            "start the run again without it"
+        )
     if cursor.kind not in KINDS:
         raise BackfillRefusedError(f"the cursor names no kind of fact: {cursor.kind!r}")
     if written_until != until:
@@ -254,6 +324,7 @@ def _write_cursor(position: Position, last: RowMapping) -> None:
                 "id": str(last["id"]),
                 "until": position.until.isoformat(),
                 "target": position.target,
+                "format": CURSOR_FORMAT,
             }
         ),
         encoding="utf-8",
@@ -273,6 +344,8 @@ async def backfill_analytics(
     """Send (or, with no ``sink``, count) every past fact's event before
     ``until``, from where ``cursor`` says the last run stopped. ``target`` is
     `target_fingerprint`'s, required to send."""
+    if batch < MAX_EVENTS_PER_FACT:
+        raise ValueError(f"batch must hold one fact's events: at least {MAX_EVENTS_PER_FACT}")
     if sink is not None and target is None:
         raise BackfillRefusedError("sending needs the target PostHog host and project")
     resume = read_cursor(cursor, until=until, target=target)

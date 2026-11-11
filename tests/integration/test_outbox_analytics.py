@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from tests.integration.test_api_admin_credits import a_user
 from tests.integration.test_api_notifications import Recorder
 from tests.integration.test_api_push_messages import FakePush
 
@@ -53,14 +54,16 @@ class FakeSink:
 
 
 async def queue(engine: AsyncEngine, count: int = 1, *, user: UUID | None = None) -> list[UUID]:
-    """`count` events queued, each in its own transaction, oldest first."""
+    """`count` events queued, each in its own transaction, oldest first, about
+    ``user`` or one new account (an event about nobody is never queued)."""
+    user = user or await a_user(engine)
     ids = []
     for index in range(count):
         async with async_sessionmaker(engine)() as session:
             await enqueue_analytics(
                 session,
                 AnalyticsEvent.CREDIT_SPENT,
-                user or uuid4(),
+                user,
                 {"amount": index},
                 at=AT + dt.timedelta(seconds=index),
             )
@@ -75,6 +78,13 @@ async def queue(engine: AsyncEngine, count: int = 1, *, user: UUID | None = None
             )
             await session.commit()
     return ids
+
+
+async def rows_in(session: Any) -> list[Any]:
+    found = await session.execute(
+        text("SELECT id FROM outbox_events WHERE destination = 'analytics'")
+    )
+    return list(found.all())
 
 
 async def rows(engine: AsyncEngine) -> list[dict[str, Any]]:
@@ -104,7 +114,7 @@ async def run(engine: AsyncEngine, sink: FakeSink, now: dt.datetime = AT) -> dic
 async def test_an_event_is_one_analytics_row_carrying_the_batch_shape(
     db_engine: AsyncEngine,
 ) -> None:
-    user = uuid4()
+    user = await a_user(db_engine)
     await queue(db_engine, user=user)
 
     (row,) = await rows(db_engine)
@@ -125,7 +135,10 @@ async def test_an_event_rolls_back_with_the_transaction_that_queued_it(
     db_engine: AsyncEngine,
 ) -> None:
     async with async_sessionmaker(db_engine)() as session:
-        await enqueue_analytics(session, AnalyticsEvent.MENTOR_LISTED, uuid4(), {}, at=AT)
+        await enqueue_analytics(
+            session, AnalyticsEvent.MENTOR_LISTED, await a_user(db_engine), {}, at=AT
+        )
+        assert len(await rows_in(session)) == 1
         await session.rollback()
 
     assert await rows(db_engine) == []

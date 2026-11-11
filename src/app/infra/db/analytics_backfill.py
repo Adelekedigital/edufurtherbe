@@ -1,14 +1,16 @@
 """The stored facts the one-off analytics backfill reads (PRD 30 PR 7).
 
-One reader per kind of fact, each yielding plain rows (`id`, `at`, `user_id`
+One reader per kind of fact, each yielding plain rows (`id`, `at`, the person
 and what that kind's events carry) in ``(at, id)`` order, strictly before
 ``until`` and after an optional ``(at, id)`` position, a page at a time so
 memory stays bounded however long the history is.
 
-**Who is left out is the live rule plus one**: `analytics_scope.counted_user`,
-which the live insert filters on too, and a deleted account (`LIVE`), since
-nothing about a person who asked to go should leave for a vendor now (PRD 30
-section 8). Which rows report which event is `domain.analytics_events`'.
+**Who is left out is the live insert's rule**, `analytics_scope.sendable`:
+internal accounts, and deleted ones, since nothing about a person who asked to
+go should leave for a vendor now (PRD 30 section 8). Which rows report which
+event is `domain.analytics_events`'. A session event concerns two people
+(decision 337), so its row comes when either is sendable and says which
+(`mentee_counted`, `mentor_counted`); the runner sends each side only for its own.
 """
 
 from __future__ import annotations
@@ -18,21 +20,20 @@ from collections.abc import AsyncIterator
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, case, func, select, tuple_
+from sqlalchemy import Select, and_, case, func, or_, select, tuple_
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.domain.enums import CreditReason, MentorStatusType, SessionStatus
 from app.infra.db import keyset
-from app.infra.db.analytics_scope import counted_user
+from app.infra.db.analytics_scope import sendable
 from app.infra.db.models.credits import CreditLot, CreditTransaction
 from app.infra.db.models.mentoring import MentorStatusEvent
 from app.infra.db.models.referrals import ReferralUnlock
 from app.infra.db.models.reviews import Review
 from app.infra.db.models.sessions import Session, SessionEvent
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
 from app.infra.db.review_stats import review_value
 from app.infra.db.session_stats import canceller
 
@@ -51,25 +52,24 @@ PAGE = 500
 Position = tuple[dt.datetime, UUID]
 
 
+def _about(statement: Select[Any], user_id: Any) -> Select[Any]:
+    """``statement``'s rows about one person, ``user_id``, only when sendable."""
+    return statement.join(User, User.id == user_id).where(sendable(User))
+
+
 async def _paged(
     session: AsyncSession,
     statement: Select[Any],
     at: Any,
     row_id: Any,
-    user_id: Any,
     *,
     until: dt.datetime,
     after: Position | None,
     page: int,
 ) -> AsyncIterator[RowMapping]:
-    """``statement``'s rows about counted, live people, before ``until``, in
-    ``(at, id)`` order after ``after``, ``page`` at a time."""
-    base = (
-        statement.join(User, User.id == user_id)
-        .where(LIVE, counted_user(user_id), at < until)
-        .order_by(at, row_id)
-        .limit(page)
-    )
+    """``statement``'s rows (already narrowed to whom they may be about),
+    before ``until``, in ``(at, id)`` order after ``after``, ``page`` at a time."""
+    base = statement.where(at < until).order_by(at, row_id).limit(page)
     position = after
     while True:
         query = base
@@ -88,8 +88,9 @@ async def _paged(
 def session_event_facts(
     session: AsyncSession, *, until: dt.datetime, after: Position | None, page: int = PAGE
 ) -> AsyncIterator[RowMapping]:
-    """Each `session_events` row that may report something, about its mentee:
-    its statuses, who cancelled (`canceller`, as the live `_report` reads it),
+    """Each `session_events` row that may report something, about its mentee
+    and its mentor (``mentor_id``), with whether each is `sendable`: its
+    statuses, who cancelled (`canceller`, as the live `_report` reads it),
     ``moved_from`` (the status the session a move ended had: the `from_status`
     of its last event, the ending), ``moved_on`` (a later session was moved
     from this one, so its ending was the move's) and ``confirmed_at``.
@@ -101,6 +102,8 @@ def session_event_facts(
     funnel still reads requested, confirmed, outcome."""
     ended = aliased(SessionEvent)
     successor = aliased(Session)
+    mentee, mentor = aliased(User), aliased(User)
+    mentee_counted, mentor_counted = sendable(mentee), sendable(mentor)
     entered = aliased(SessionEvent)
     created = aliased(SessionEvent)
     never_entered = ~(
@@ -135,7 +138,10 @@ def session_event_facts(
         select(
             SessionEvent.id.label("id"),
             SessionEvent.created_at.label("at"),
-            Session.mentee_id.label("user_id"),
+            Session.mentee_id,
+            Session.mentor_id,
+            mentee_counted.label("mentee_counted"),
+            mentor_counted.label("mentor_counted"),
             Session.id.label("session_id"),
             Session.session_type_id,
             Session.entry_point,
@@ -149,6 +155,10 @@ def session_event_facts(
         )
         .select_from(SessionEvent)
         .join(Session, Session.id == SessionEvent.session_id)
+        # Both are NOT NULL foreign keys, so an inner join drops no session.
+        .join(mentee, mentee.id == Session.mentee_id)
+        .join(mentor, mentor.id == Session.mentor_id)
+        .where(or_(mentee_counted, mentor_counted))
         .where(
             SessionEvent.from_status.is_(None)
             | SessionEvent.to_status.in_(
@@ -166,7 +176,6 @@ def session_event_facts(
         statement,
         SessionEvent.created_at,
         SessionEvent.id,
-        Session.mentee_id,
         until=until,
         after=after,
         page=page,
@@ -193,10 +202,9 @@ def credit_facts(
     )
     return _paged(
         session,
-        statement,
+        _about(statement, CreditTransaction.user_id),
         CreditTransaction.created_at,
         CreditTransaction.id,
-        CreditTransaction.user_id,
         until=until,
         after=after,
         page=page,
@@ -235,10 +243,9 @@ def listing_facts(
     )
     return _paged(
         session,
-        statement,
+        _about(statement, MentorStatusEvent.mentor_user_id),
         MentorStatusEvent.created_at,
         MentorStatusEvent.id,
-        MentorStatusEvent.mentor_user_id,
         until=until,
         after=after,
         page=page,
@@ -258,10 +265,9 @@ def review_facts(
     )
     return _paged(
         session,
-        statement,
+        _about(statement, Review.reviewed_by),
         Review.created_at,
         Review.id,
-        Review.reviewed_by,
         until=until,
         after=after,
         page=page,
@@ -280,10 +286,9 @@ def unlock_facts(
     ).where(ReferralUnlock.unlocked_by_referral_id.is_not(None))
     return _paged(
         session,
-        statement,
+        _about(statement, ReferralUnlock.user_id),
         ReferralUnlock.unlocked_at,
         ReferralUnlock.id,
-        ReferralUnlock.user_id,
         until=until,
         after=after,
         page=page,

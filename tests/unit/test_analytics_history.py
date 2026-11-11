@@ -20,15 +20,22 @@ from app.core.config import Settings
 from app.core.errors import UpstreamError
 from app.domain.analytics_events import (
     HISTORY_NAMESPACE,
+    MENTOR_COUNTERPARTS,
     AnalyticsEvent,
     first_confirmation,
     historical_event,
     history_event_id,
+    requested_properties,
     session_event_names,
+    session_properties,
 )
 from app.domain.enums import SessionStatus
 from app.infra.analytics_backfill import (
+    CURSOR_FORMAT,
+    MAX_EVENTS_PER_FACT,
     BackfillRefusedError,
+    _session_events,
+    backfill_analytics,
     historical_sink,
     read_cursor,
     target_fingerprint,
@@ -124,6 +131,120 @@ def test_session_event_names(
 
 
 # --------------------------------------------------------------------------
+# The mentor's side (decision 337)
+# --------------------------------------------------------------------------
+
+
+def test_a_request_and_a_completion_have_a_mentor_side_and_nothing_else_does() -> None:
+    assert {
+        E.BOOKING_REQUESTED: E.BOOKING_RECEIVED,
+        E.SESSION_COMPLETED: E.SESSION_DELIVERED,
+    } == MENTOR_COUNTERPARTS
+    assert E.BOOKING_RECEIVED.value == "booking_received"
+    assert E.SESSION_DELIVERED.value == "session_delivered"
+
+
+def test_a_row_names_only_the_mentees_events() -> None:
+    """The mentor's side is added by the writers, never named by a row."""
+    for from_status, to_status in [(None, S.CONFIRMED), (S.CONFIRMED, S.COMPLETED)]:
+        names = session_event_names(from_status, to_status, moved_from=None, moved_on=False)
+        assert not set(names) & set(MENTOR_COUNTERPARTS.values())
+
+
+@pytest.mark.parametrize(
+    ("event", "properties"),
+    [
+        (E.BOOKING_RECEIVED, requested_properties(uuid4(), uuid4(), "mentor_profile")),
+        (E.SESSION_DELIVERED, session_properties(uuid4(), None)),
+    ],
+)
+def test_the_guard_accepts_the_mentor_sides_properties(
+    event: AnalyticsEvent, properties: dict[str, object]
+) -> None:
+    built = historical_event(event, fact_id=uuid4(), user_id=uuid4(), at=AT, properties=properties)
+    assert built["event"] == event.value
+    assert built["properties"]["session_id"] == str(properties["session_id"])
+
+
+def a_fact(
+    from_status: SessionStatus | None, to_status: SessionStatus, **values: object
+) -> dict[str, Any]:
+    """One `session_event_facts` row, both people counted unless told."""
+    return {
+        "id": uuid4(),
+        "at": AT,
+        "mentee_id": uuid4(),
+        "mentor_id": uuid4(),
+        "mentee_counted": True,
+        "mentor_counted": True,
+        "session_id": uuid4(),
+        "session_type_id": uuid4(),
+        "entry_point": None,
+        "from_status": from_status,
+        "to_status": to_status,
+        "reason_code": None,
+        "by": None,
+        "moved_from": None,
+        "moved_on": False,
+        "confirmed_at": None,
+    } | values
+
+
+def test_a_request_and_a_completion_carry_the_mentors_side() -> None:
+    made = a_fact(None, S.PENDING_MENTOR_APPROVAL)
+    held = a_fact(S.CONFIRMED, S.COMPLETED)
+
+    requested, received = _session_events(made)
+    completed, delivered = _session_events(held)
+
+    assert (requested["event"], received["event"]) == ("booking_requested", "booking_received")
+    assert (completed["event"], delivered["event"]) == ("session_completed", "session_delivered")
+    for mentee_side, mentor_side, fact in [
+        (requested, received, made),
+        (completed, delivered, held),
+    ]:
+        assert mentee_side["distinct_id"] == str(fact["mentee_id"])
+        assert mentor_side["distinct_id"] == str(fact["mentor_id"])
+        assert mentor_side["properties"] == mentee_side["properties"]
+        assert mentor_side["timestamp"] == mentee_side["timestamp"]
+        assert mentor_side["uuid"] != mentee_side["uuid"]
+
+
+def test_the_mentors_side_has_the_same_uuid_on_every_run() -> None:
+    held = a_fact(S.CONFIRMED, S.COMPLETED)
+    first = _session_events(held)
+    assert first == _session_events(held)
+    assert first[1]["uuid"] == str(history_event_id(E.SESSION_DELIVERED, held["id"]))
+
+
+@pytest.mark.parametrize(
+    ("mentee_counted", "mentor_counted", "names"),
+    [
+        (True, False, ["session_completed"]),
+        (False, True, ["session_delivered"]),
+        (False, False, []),
+    ],
+)
+def test_each_side_is_sent_only_when_its_person_is_counted(
+    mentee_counted: bool, mentor_counted: bool, names: list[str]
+) -> None:
+    held = a_fact(
+        S.CONFIRMED, S.COMPLETED, mentee_counted=mentee_counted, mentor_counted=mentor_counted
+    )
+    assert [e["event"] for e in _session_events(held)] == names
+
+
+def test_a_no_show_or_a_confirmation_has_no_mentor_side() -> None:
+    for fact in [a_fact(S.CONFIRMED, S.NO_SHOW), a_fact(S.PENDING_MENTOR_APPROVAL, S.CONFIRMED)]:
+        assert [e["distinct_id"] for e in _session_events(fact)] == [str(fact["mentee_id"])]
+
+
+def test_a_legacy_confirmation_is_the_mentees_only() -> None:
+    legacy = a_fact(S.CONFIRMED, S.COMPLETED, confirmed_at=AT, mentee_counted=False)
+    assert [e["event"] for e in _session_events(legacy)] == ["session_delivered"]
+
+
+# --------------------------------------------------------------------------
 # The sink
 # --------------------------------------------------------------------------
 
@@ -136,7 +257,7 @@ ON = {
 
 
 def settings(**values: object) -> Settings:
-    return Settings(_env_file=None, **values)  # type: ignore[arg-type]
+    return Settings(_env_file=None, **values)
 
 
 @pytest.mark.parametrize(
@@ -197,6 +318,7 @@ def a_cursor(path: Path, **values: object) -> Path:
                 "id": str(uuid4()),
                 "until": UNTIL.isoformat(),
                 "target": "a" * 64,
+                "format": CURSOR_FORMAT,
                 **values,
             }
         ),
@@ -304,3 +426,37 @@ def test_a_failed_run_exits_non_zero_with_one_line(
     assert out[-1].endswith(str(raised))
     assert "Traceback" not in "\n".join(out)
     assert not any("phc_test" in line for line in out)
+
+
+def test_a_cursor_from_before_the_mentors_side_is_refused(tmp_path: Path) -> None:
+    """Resuming it would skip the mentor-side events of every fact it passed."""
+    path = a_cursor(tmp_path / "c.json")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    del saved["format"]
+    path.write_text(json.dumps(saved), encoding="utf-8")
+
+    with pytest.raises(BackfillRefusedError, match=r"predates mentor-side events \(decision 337\)"):
+        read_cursor(path, until=UNTIL, target="a" * 64)
+    assert read_cursor(a_cursor(tmp_path / "ok.json"), until=UNTIL, target="a" * 64) is not None
+
+
+def test_a_fact_reports_at_most_three_events() -> None:
+    worst = a_fact(None, S.CONFIRMED)
+    legacy = a_fact(S.CONFIRMED, S.COMPLETED, confirmed_at=AT)
+    assert MAX_EVENTS_PER_FACT == 3
+    assert len(_session_events(worst)) == len(_session_events(legacy)) == MAX_EVENTS_PER_FACT
+
+
+@pytest.mark.parametrize("batch", [0, 1, 2])
+def test_a_batch_smaller_than_one_facts_events_is_refused(tmp_path: Path, batch: int) -> None:
+    with pytest.raises(ValueError, match="batch"):
+        asyncio.run(
+            backfill_analytics(
+                None,  # type: ignore[arg-type]
+                sink=None,
+                cursor=tmp_path / "c.json",
+                until=UNTIL,
+                target=None,
+                batch=batch,
+            )
+        )
