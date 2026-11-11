@@ -28,7 +28,14 @@ from app.domain.analytics import (
 )
 from app.domain.analytics_events import AnalyticsEvent
 from app.domain.availability import local_day_start
-from app.domain.enums import EntryPoint, PrimaryRole, ProfileViewSource, SignupSource
+from app.domain.enums import (
+    EntryPoint,
+    FunnelFigureUnit,
+    FunnelLayer,
+    PrimaryRole,
+    ProfileViewSource,
+    SignupSource,
+)
 from app.domain.mentor_stats import Window
 
 FunnelName = Literal[
@@ -55,12 +62,14 @@ class Match:
 @dataclass(frozen=True, slots=True)
 class Step:
     """A funnel step: any of ``events`` (all of ``where`` holding). With no
-    event, nothing tracks the step yet and its count is ``None``."""
+    event, nothing tracks the step yet and its count is ``None``, unless the
+    funnel is counted from the database. ``layer`` is the row it is drawn in."""
 
     key: str
     label: str
     events: tuple[str, ...]
     where: tuple[Match, ...] = ()
+    layer: FunnelLayer = FunnelLayer.PRIMARY
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +93,14 @@ class Funnel:
     by: Mapping[str, Breakdown] = field(
         default_factory=lambda: MappingProxyType({EVERYONE: Breakdown()})
     )
+    #: Counted from this app's database, not PostHog (decision 338).
+    in_database: bool = False
 
     @property
     def tracked(self) -> tuple[Step, ...]:
         """The steps the vendor is asked about: those with an event, which
-        are always a leading run (an untracked step is only ever last)."""
+        are always a leading run (an untracked step is only ever last). A
+        funnel counted from the database names no event, so has none."""
         return tuple(step for step in self.steps if step.events)
 
 
@@ -107,7 +119,8 @@ SESSION_DELIVERED = AnalyticsEvent.SESSION_DELIVERED.value
 SEARCH = "mentor_search_performed"
 PROFILE_VIEWED = "mentor_profile_viewed"
 BOOKING_STARTED = "booking_started"
-CONFERENCING_CONNECTED = "conferencing_connected"
+#: The client's share of a link, and the kind a mentor's own profile is.
+LINK_SHARED, MENTOR_PROFILE_LINK = "link_shared", "mentor_profile"
 JOIN_CLICKED, JOIN_FAILED = "session_join_clicked", "session_join_failed"
 WRITING_ASSIST = "writing_assist_used"
 APP_INSTALLED, PUSH_ALLOWED = "pwa_installed", "push_permission_granted"
@@ -133,6 +146,15 @@ _NEW_MENTEE = (
     Match("role", PrimaryRole.MENTEE.value, on="person"),
     Match("is_migrated", "true", on="person", negate=True),
 )
+#: The row a funnel draws its outcomes in, beside the path.
+_OUTCOME = FunnelLayer.SECONDARY
+#: How long from approval a mentor's first booking and session count: the
+#: activation funnel's outcomes and Overview's contribution alike.
+MENTOR_ACTIVATED_WITHIN = dt.timedelta(days=30)
+#: How long a new mentee has to reach a completed session. One span, two
+#: anchors kept on purpose: the funnel counts from onboarding (founder,
+#: decision 338), Overview's mentee activation from sign-up (an existing metric).
+MENTEE_ACTIVATED_WITHIN = dt.timedelta(days=14)
 
 FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
     {
@@ -142,14 +164,8 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                 Step("started", "Started sign-up", (SIGNUP_STARTED,)),
                 Step("code_verified", "Code verified", CODE_VERIFIED),
                 Step("onboarded", "Onboarding done", (ONBOARDING_COMPLETED,)),
-                Step(
-                    "first_booking_or_bookable",
-                    "First booking or bookable",
-                    (BOOKING_REQUESTED, CONFERENCING_CONNECTED),
-                ),
-                Step("first_completed", "First completed session", (SESSION_COMPLETED,)),
             ),
-            # Long enough for a mentor's 30 days and a mentee's 14.
+            # What follows onboarding is each role's activation funnel.
             window_days=30,
             note=(
                 "One sign-up funnel for both roles; role and source are breakdowns, "
@@ -192,36 +208,32 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
         "mentee_activation": Funnel(
             name="mentee_activation",
             steps=(
-                Step("signed_up", "Signed up", (SIGNUP_STARTED,)),
                 Step("onboarded", "Onboarding done", (ONBOARDING_COMPLETED,)),
                 Step("first_request", "First request", (BOOKING_REQUESTED,), (FROM_SERVER,)),
-                Step("first_session", "First session (14 days)", (SESSION_COMPLETED,)),
+                Step(
+                    "first_session", "First session (14 days)", (SESSION_COMPLETED,), layer=_OUTCOME
+                ),
             ),
-            window_days=14,
-            note="Target window: 14 days from sign-up.",
+            window_days=MENTEE_ACTIVATED_WITHIN.days,
+            note="Target window: 14 days from onboarding.",
             people=_NEW_MENTEE,
             by=_everyone(_sources(SignupSource.INVITE, SignupSource.DIRECT)),
         ),
         "mentor_activation": Funnel(
             name="mentor_activation",
+            # Counted from the database (`infra/db/analytics_activation.py`),
+            # so no step names an event.
             steps=(
-                # An approval lists the mentor in the same transaction, so the
-                # server's first `mentor_listed` is the approval.
-                Step("approved", "Approved", (MENTOR_LISTED,)),
-                Step("availability_set", "Availability set", ("availability_set",)),
-                Step("session_type_created", "Session created", ("session_type_created",)),
-                Step(
-                    CONFERENCING_CONNECTED,
-                    "Video connected (bookable)",
-                    (CONFERENCING_CONNECTED,),
-                ),
-                # Untracked for now: `session_completed` is the mentee's event.
-                # `SESSION_DELIVERED` is the mentor's (decision 337), and the
-                # funnel is restructured around it in the next PR (decision 338).
-                Step("first_session", "First session (30 days)", ()),
+                Step("approved", "Approved", ()),
+                Step("availability_set", "Availability set", ()),
+                Step("session_type_created", "Session created", ()),
+                Step("first_booking_received", "First booking (30 days)", (), layer=_OUTCOME),
+                Step("first_session_delivered", "First session (30 days)", (), layer=_OUTCOME),
             ),
-            window_days=30,
+            window_days=MENTOR_ACTIVATED_WITHIN.days,
             note="Bookable target: 7 days from approval.",
+            by=_everyone(_sources(SignupSource.INVITE, SignupSource.DIRECT)),
+            in_database=True,
         ),
         "mentor_application": Funnel(
             name="mentor_application",
@@ -268,6 +280,18 @@ class FunnelStep:
     key: str
     label: str
     count: Metric | None
+    layer: FunnelLayer
+
+
+@dataclass(frozen=True, slots=True)
+class FunnelFigure:
+    """A figure shown beside a funnel (decision 338): ``value.previous`` is
+    ``None`` without a compare or without data to compare with."""
+
+    key: str
+    label: str
+    value: Metric
+    unit: FunnelFigureUnit
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +301,7 @@ class FunnelTab:
     note: str
     window_days: int
     steps: list[FunnelStep]
+    figures: list[FunnelFigure] = field(default_factory=list)
 
 
 def funnel_tab(
@@ -284,8 +309,9 @@ def funnel_tab(
     by: str,
     current: Sequence[int],
     previous: Sequence[int] | None,
+    figures: Sequence[FunnelFigure] = (),
 ) -> FunnelTab:
-    """The tracked steps' counts, then ``None`` for a step nothing tracks."""
+    """The counted steps, then ``None`` for a step nothing tracks."""
     steps = []
     for i, step in enumerate(funnel.steps):
         if i < len(current):
@@ -293,10 +319,35 @@ def funnel_tab(
             count: Metric | None = compared(current[i], before, previous is not None)
         else:
             count = None
-        steps.append(FunnelStep(key=step.key, label=step.label, count=count))
+        steps.append(FunnelStep(key=step.key, label=step.label, count=count, layer=step.layer))
     return FunnelTab(
-        name=funnel.name, by=by, note=funnel.note, window_days=funnel.window_days, steps=steps
+        name=funnel.name,
+        by=by,
+        note=funnel.note,
+        window_days=funnel.window_days,
+        steps=steps,
+        figures=list(figures),
     )
+
+
+#: Each figure's key, its label (shown verbatim) and its unit.
+FIGURES: Mapping[str, tuple[str, FunnelFigureUnit]] = MappingProxyType(
+    {
+        "days_to_bookable": ("Days to bookable", FunnelFigureUnit.DAYS),
+        "calendar_connected": ("Connected a calendar (of approved)", FunnelFigureUnit.PERCENT),
+        "profile_link_shared": (
+            "Shared their profile link (of approved, with analytics on)",
+            FunnelFigureUnit.PERCENT,
+        ),
+        "median_review_days": ("Median days in review", FunnelFigureUnit.DAYS),
+    }
+)
+
+
+def figure(key: str, value: float | None, previous: float | None, compare: bool) -> FunnelFigure:
+    """The `FIGURES` entry ``key`` with its value, ``previous`` only with ``compare``."""
+    label, unit = FIGURES[key]
+    return FunnelFigure(key=key, label=label, value=compared(value, previous, compare), unit=unit)
 
 
 # --- Event cards -------------------------------------------------------------
