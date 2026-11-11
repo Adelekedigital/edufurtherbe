@@ -121,6 +121,7 @@ def assert_ended(response: httpx.Response, preview: str, reason: str) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_with_the_header_the_caller_is_the_previewed_user(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, user, preview = await live_preview(client, db_engine)
@@ -136,6 +137,7 @@ async def test_with_the_header_the_caller_is_the_previewed_user(db_engine: Async
     assert as_admin.json()["is_admin"] is True
 
 
+@pytest.mark.isolated_db
 async def test_a_target_given_a_grant_since_is_still_served_without_it(
     db_engine: AsyncEngine,
 ) -> None:
@@ -157,6 +159,7 @@ async def test_a_target_given_a_grant_since_is_still_served_without_it(
     assert admin_route.status_code == 404
 
 
+@pytest.mark.isolated_db
 async def test_an_admin_route_with_the_header_is_404(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)
@@ -227,6 +230,7 @@ async def test_a_header_with_no_preview_permission_behind_it_is_404(
     assert_preview_not_found(response)
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("named", ["unknown", "malformed", "another-admins"])
 async def test_a_header_naming_no_preview_of_this_admin_is_404(
     db_engine: AsyncEngine, named: str
@@ -243,6 +247,7 @@ async def test_a_header_naming_no_preview_of_this_admin_is_404(
     assert (await preview_row(db_engine, mine))["ended_at"] is None
 
 
+@pytest.mark.isolated_db
 async def test_a_404_that_is_not_about_the_header_is_unchanged(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, user, preview = await live_preview(client, db_engine)
@@ -266,6 +271,7 @@ async def test_a_404_that_is_not_about_the_header_is_unchanged(db_engine: AsyncE
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_preview_from_another_sign_in_ends_as_sign_out(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)
@@ -280,6 +286,7 @@ async def test_a_preview_from_another_sign_in_ends_as_sign_out(db_engine: AsyncE
     assert [e["end_reason"] for e in ends] == ["sign_out"]
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize(
     ("aged", "reason"),
     [({"active": 31}, "idle"), ({"started": 121}, "max_length")],
@@ -298,6 +305,7 @@ async def test_a_lapsed_preview_ends_as_it_lapsed(
     assert (await preview_row(db_engine, preview))["end_reason"] == reason
 
 
+@pytest.mark.isolated_db
 async def test_a_lapsed_preview_from_another_sign_in_ends_as_it_lapsed(
     db_engine: AsyncEngine,
 ) -> None:
@@ -310,6 +318,7 @@ async def test_a_lapsed_preview_from_another_sign_in_ends_as_it_lapsed(
     assert_ended(response, preview, "idle")
 
 
+@pytest.mark.isolated_db
 async def test_an_exited_preview_answers_the_reason_it_ended_with(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)
@@ -329,6 +338,7 @@ async def test_an_exited_preview_answers_the_reason_it_ended_with(db_engine: Asy
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_request_moves_last_active_at_at_most_once_a_minute(
     db_engine: AsyncEngine,
 ) -> None:
@@ -347,6 +357,7 @@ async def test_a_request_moves_last_active_at_at_most_once_a_minute(
     assert untouched["last_active_at"] == touched["last_active_at"]
 
 
+@pytest.mark.isolated_db
 async def test_a_request_within_the_minute_leaves_last_active_at(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)
@@ -404,6 +415,7 @@ async def test_only_machine_routes_write_without_resolving_a_caller() -> None:
     assert {(m, p) for m, p, caller in writes if not caller} == NO_CALLER
 
 
+@pytest.mark.isolated_db
 async def test_every_write_in_a_preview_is_refused_and_logged(db_engine: AsyncEngine) -> None:
     writes = [(method, path) for method, path, caller in _writes() if caller]
     async with app_client(db_engine) as client:
@@ -426,6 +438,7 @@ async def test_every_write_in_a_preview_is_refused_and_logged(db_engine: AsyncEn
     assert sessions == 0
 
 
+@pytest.mark.isolated_db
 async def test_a_write_in_an_ended_preview_is_401_and_logs_no_blocked_write(
     db_engine: AsyncEngine,
 ) -> None:
@@ -451,6 +464,7 @@ async def test_a_write_without_the_header_is_the_admins_own(db_engine: AsyncEngi
     assert await blocked(db_engine, preview) == []
 
 
+@pytest.mark.isolated_db
 async def test_a_read_refused_in_a_preview_is_403_and_logged(db_engine: AsyncEngine) -> None:
     """`refuse_in_preview` on a GET: the calendar consent link, whose sealed
     state would attach a calendar to the previewed user's account."""
@@ -466,6 +480,7 @@ async def test_a_read_refused_in_a_preview_is_403_and_logged(db_engine: AsyncEng
     assert own.status_code != 403
 
 
+@pytest.mark.isolated_db
 async def test_reads_in_a_preview_log_nothing(db_engine: AsyncEngine) -> None:
     async with app_client(db_engine) as client:
         admin, _, preview = await live_preview(client, db_engine)
@@ -481,6 +496,7 @@ async def test_reads_in_a_preview_log_nothing(db_engine: AsyncEngine) -> None:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_public_profile_is_shown_as_the_previewed_mentor_sees_it(
     db_engine: AsyncEngine,
 ) -> None:
@@ -499,6 +515,7 @@ async def test_a_public_profile_is_shown_as_the_previewed_mentor_sees_it(
     assert "approval_status" not in as_admin.json()
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("token", [True, False], ids=["with-token", "header-only"])
 async def test_a_public_route_does_not_read_a_bad_preview_as_anonymous(
     db_engine: AsyncEngine, token: bool
@@ -542,8 +559,10 @@ async def test_a_browser_may_send_the_preview_header() -> None:
     assert "x-ef-preview" in response.headers["access-control-allow-headers"].lower()
 
 
-async def test_the_spec_documents_the_header_and_its_refusals_where_it_is_honoured() -> None:
-    paths = create_app(Settings(_env_file=None)).openapi()["paths"]
+async def test_the_spec_documents_the_header_and_its_refusals_where_it_is_honoured(
+    openapi_spec: dict[str, Any],
+) -> None:
+    paths = openapi_spec["paths"]
 
     def headers(operation: dict[str, Any]) -> set[str]:
         return {p["name"] for p in operation.get("parameters", []) if p["in"] == "header"}

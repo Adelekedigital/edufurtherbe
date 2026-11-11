@@ -448,6 +448,7 @@ async def test_a_new_profile_is_pending_and_unlisted(db_engine: AsyncEngine) -> 
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_the_about_me_index_is_used_for_full_text_search(db_engine: AsyncEngine) -> None:
     """Asserts the plan, not just the index's existence.
 

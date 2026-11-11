@@ -7,6 +7,7 @@ everyone. So there is one acceptance case and six refusals.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
@@ -221,7 +222,7 @@ async def test_a_soft_deleted_user_cannot_sign_in(
 
 
 async def test_is_migrated_says_whether_the_account_came_from_the_old_app(
-    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient, openapi_spec: dict[str, Any]
 ) -> None:
     """The frontend sets it as a person property (PRD 30): true exactly when the
     account's sign-up source is `migrated`, and never required on `/me`."""
@@ -239,6 +240,6 @@ async def test_is_migrated_says_whether_the_account_came_from_the_old_app(
 
     assert old["is_migrated"] is True
     assert new["is_migrated"] is False
-    schema = api_client._transport.app.openapi()["components"]["schemas"]["UserRead"]  # type: ignore[attr-defined]
+    schema = openapi_spec["components"]["schemas"]["UserRead"]
     assert "is_migrated" in schema["properties"]
     assert "is_migrated" not in schema.get("required", [])

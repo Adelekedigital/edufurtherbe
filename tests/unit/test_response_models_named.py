@@ -12,9 +12,6 @@ from typing import Any
 
 import pytest
 
-from app.core.config import Settings
-from app.main import create_app
-
 
 def _resolve(schema: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     while "$ref" in schema:
@@ -56,12 +53,8 @@ def _untyped_responses(spec: dict[str, Any]) -> list[str]:
     return found
 
 
-def _spec() -> dict[str, Any]:
-    return create_app(Settings(_env_file=None)).openapi()
-
-
-def test_every_json_success_response_names_its_keys() -> None:
-    assert _untyped_responses(_spec()) == []
+def test_every_json_success_response_names_its_keys(openapi_spec: dict[str, Any]) -> None:
+    assert _untyped_responses(openapi_spec) == []
 
 
 def test_the_guard_sees_an_untyped_map() -> None:

@@ -15,9 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.schemas.profile import GoalWrite
-from app.core.config import Settings
 from app.domain.goals import FIELD_OF_STUDY_MAX_LENGTH, FIELD_OF_STUDY_SUGGESTIONS
-from app.main import create_app
 
 PATH = "/api/v1/catalog/fields-of-study"
 
@@ -78,14 +76,10 @@ def test_no_two_suggestions_differ_only_in_case() -> None:
     assert len(set(folded)) == len(folded) == len(EXPECTED)
 
 
-def spec() -> dict[str, Any]:
-    return dict(create_app(Settings(_env_file=None)).openapi())
-
-
-def test_the_route_is_its_own_operation_in_the_catalog_tag() -> None:
+def test_the_route_is_its_own_operation_in_the_catalog_tag(openapi_spec: dict[str, Any]) -> None:
     """Its own operation, not the generic lookup's: the generic one would
     document a cursor, a `q` and a 404 this list never has."""
-    paths = spec()["paths"]
+    paths = openapi_spec["paths"]
     operation = paths["/api/v1/catalog/fields-of-study"]["get"]
 
     assert operation["tags"] == ["catalog"]

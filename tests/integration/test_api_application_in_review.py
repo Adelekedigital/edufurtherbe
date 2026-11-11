@@ -165,6 +165,7 @@ async def test_clearing_every_help_area_in_review_is_a_422_and_writes_nothing(
     assert await one(db_engine, headline, mentor) != "Changed"
 
 
+@pytest.mark.isolated_db
 async def test_a_clear_racing_a_submit_waits_for_it_and_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

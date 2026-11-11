@@ -293,6 +293,7 @@ async def test_a_second_bulk_approve_approves_nobody_twice(
     assert len(await outbox(db_engine, mentor, "mentor_approved")) == 1
 
 
+@pytest.mark.isolated_db
 async def test_one_mentor_failing_undoes_nobody_else(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

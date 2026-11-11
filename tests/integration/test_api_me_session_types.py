@@ -430,6 +430,7 @@ async def test_the_order_comes_from_the_query_and_not_from_the_index(
     ], "the rows came back in heap order — the ORDER BY is not doing the work"
 
 
+@pytest.mark.isolated_db
 async def test_the_owner_read_can_use_the_mentor_index(db_engine: AsyncEngine) -> None:
     """The guardrail's `EXPLAIN`, on the real statement rather than a retyped one.
 

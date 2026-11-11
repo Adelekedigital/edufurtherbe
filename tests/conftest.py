@@ -1,6 +1,7 @@
 """Fixtures shared across every tier."""
 
 import asyncio
+import copy
 import importlib.util
 import io
 import json
@@ -10,13 +11,13 @@ import threading
 import uuid
 import zipfile
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import asyncpg
 import httpx
 import pytest
 import pytest_asyncio
@@ -29,6 +30,7 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from starlette.types import ASGIApp
+from tests.savepoint import rolled_back_engine, run_sql
 
 from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings, get_settings
@@ -87,6 +89,24 @@ def settings() -> Settings:
 def client(settings: Settings) -> Iterator[TestClient]:
     with TestClient(create_app(settings)) as test_client:
         yield test_client
+
+
+@pytest.fixture(scope="session")
+def _published_spec() -> dict[str, Any]:
+    return create_app(Settings(_env_file=None)).openapi()
+
+
+@pytest.fixture
+def openapi_spec(_published_spec: dict[str, Any]) -> dict[str, Any]:
+    """The published spec of an unconfigured app, built once per worker.
+
+    Building it is about two seconds (every route's models, walked), and some
+    thirty files read it, several in parametrised tests that each rebuilt it.
+    Each test gets a copy, so one that changes it cannot reach the next.
+    ``test_export_openapi`` and the tests that configure the app differently
+    build their own, on purpose.
+    """
+    return copy.deepcopy(_published_spec)
 
 
 # --------------------------------------------------------------------------
@@ -219,6 +239,43 @@ def admin_database_url() -> str:
     pytest.skip(_SKIP_REASON)
 
 
+async def _create_database(admin_url: str, name: str, template: str | None = None) -> None:
+    """``CREATE DATABASE``, empty or copied from ``template``.
+
+    It cannot run inside a transaction or take bind parameters, hence the raw
+    connection and the interpolated names. Every name is built in this file from
+    a uuid4 hex string, so none is caller-controlled.
+    """
+    source = f' TEMPLATE "{template}"' if template else ""
+    await run_sql(admin_url, f'CREATE DATABASE "{name}"{source}')
+
+
+async def _drop_database(admin_url: str, name: str) -> None:
+    # FORCE ends any backend still on it in the same statement; a separate
+    # terminate first left a window in which the drop saw one not yet gone.
+    await run_sql(admin_url, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+@contextmanager
+def _scratch_database(admin_url: str, prefix: str, template: str | None = None) -> Iterator[str]:
+    """A database of its own, named ``<prefix>_<hex>``, dropped afterwards.
+
+    Yields the name. One definition for every lifetime below (empty, the
+    template, the worker's, a test's copy), which differ only in these arguments.
+    """
+    name = f"{prefix}_{uuid.uuid4().hex[:16]}"
+    asyncio.run(_create_database(admin_url, name, template))
+    try:
+        yield name
+    finally:
+        asyncio.run(_drop_database(admin_url, name))
+
+
+def _database_url(admin_url: str, name: str) -> str:
+    base, _, _ = admin_url.rpartition("/")
+    return f"{base}/{name}"
+
+
 @pytest.fixture
 def disposable_database(admin_database_url: str) -> Iterator[str]:
     """An empty database of its own, dropped afterwards.
@@ -226,38 +283,9 @@ def disposable_database(admin_database_url: str) -> Iterator[str]:
     Per-test rather than shared because ``pytest-randomly`` reorders the suite:
     a migration test that downgrades a database another test expects at head
     fails only on some seeds, which is the worst kind of flake to diagnose.
-
-    ``CREATE DATABASE`` cannot run inside a transaction or take bind parameters,
-    hence the raw connection and the interpolated name. The name is built here
-    from a uuid4 hex string, so it is never caller-controlled.
     """
-    name = f"test_{uuid.uuid4().hex[:16]}"
-    base, _, _ = admin_database_url.rpartition("/")
-
-    async def _create() -> None:
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(f'CREATE DATABASE "{name}"')
-        finally:
-            await conn.close()
-
-    async def _drop() -> None:
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = $1 AND pid <> pg_backend_pid()",
-                name,
-            )
-            await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
-        finally:
-            await conn.close()
-
-    asyncio.run(_create())
-    try:
-        yield f"{base}/{name}"
-    finally:
-        asyncio.run(_drop())
+    with _scratch_database(admin_database_url, "test") as name:
+        yield _database_url(admin_database_url, name)
 
 
 def _alembic_config(url: str) -> Config:
@@ -288,18 +316,15 @@ async def _terminate_connections(admin_url: str, name: str) -> None:
     """Close every other backend on ``name``.
 
     ``CREATE DATABASE ... TEMPLATE`` refuses while anything is connected to the
-    template, and ``DROP DATABASE`` refuses the same way. One helper rather than
-    the statement twice.
+    template, so a template is cleared with this once the chain has run on it.
     """
-    conn = await asyncpg.connect(admin_url)
-    try:
-        await conn.execute(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            "WHERE datname = $1 AND pid <> pg_backend_pid()",
-            name,
-        )
-    finally:
-        await conn.close()
+    await run_sql(
+        admin_url,
+        # The timeout makes it wait until each backend has gone, not only signal it.
+        "SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity "
+        "WHERE datname = $1 AND pid <> pg_backend_pid()",
+        name,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -322,85 +347,99 @@ def migrated_template(admin_database_url: str) -> Iterator[str]:
     Session-scoped, and nothing hands out this URL: a test connecting to the
     template would block the copy for whatever ran next.
     """
-    name = f"tmpl_{uuid.uuid4().hex[:16]}"
-    base, _, _ = admin_database_url.rpartition("/")
-    url = f"{base}/{name}"
-
-    async def _create() -> None:
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(f'CREATE DATABASE "{name}"')
-        finally:
-            await conn.close()
-
-    async def _drop() -> None:
-        await _terminate_connections(admin_database_url, name)
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
-        finally:
-            await conn.close()
-
-    asyncio.run(_create())
-    try:
-        command.upgrade(_alembic_config(url), "head")
+    with _scratch_database(admin_database_url, "tmpl") as name:
+        command.upgrade(_alembic_config(_database_url(admin_database_url, name)), "head")
         # `env.py` opens its own connection and closes it, but the copy fails
         # outright if even one survives, so this is asserted rather than assumed.
         asyncio.run(_terminate_connections(admin_database_url, name))
         yield name
-    finally:
-        asyncio.run(_drop())
 
 
 @pytest.fixture
 def migrated_database(admin_database_url: str, migrated_template: str) -> Iterator[str]:
-    """A database of its own, copied from the migrated template.
+    """A database of its own, copied from the migrated template, dropped afterwards.
 
-    Still one database per test, and still dropped afterwards — the isolation
-    ``disposable_database`` documents is unchanged, and the reason for it
-    (``pytest-randomly`` reordering a downgrade into another test's path) is
-    unchanged too. Only the way the schema arrives is different.
+    What an ``ISOLATED_DB`` test's ``db_engine`` is on, and what a test that
+    opens its own connections asks for by name. The isolation
+    ``disposable_database`` documents holds here too.
 
     ``disposable_database`` is deliberately *not* used here: it yields an empty
     database, and this one is born with the schema already in it. That fixture
     stays exactly as it was for ``test_migrations.py``, which tests the chain
     itself and must keep running it from nothing.
     """
-    name = f"test_{uuid.uuid4().hex[:16]}"
-    base, _, _ = admin_database_url.rpartition("/")
+    with _scratch_database(admin_database_url, "test", migrated_template) as name:
+        yield _database_url(admin_database_url, name)
 
-    async def _create() -> None:
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{migrated_template}"')
-        finally:
-            await conn.close()
 
-    async def _drop() -> None:
-        await _terminate_connections(admin_database_url, name)
-        conn = await asyncpg.connect(admin_database_url)
-        try:
-            await conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
-        finally:
-            await conn.close()
+@pytest.fixture(scope="session")
+def worker_database(admin_database_url: str, migrated_template: str) -> Iterator[str]:
+    """One migrated database per xdist worker, which ``db_engine`` rolls back into.
 
-    asyncio.run(_create())
-    try:
-        yield f"{base}/{name}"
-    finally:
-        asyncio.run(_drop())
+    **Nothing commits here.** Every test's work is a savepoint in a transaction
+    that is rolled back, so the next test finds the database as the migrations
+    left it. **Enforced, not assumed:** the database defaults to read-only, and
+    only ``db_engine``'s own transaction is opened read-write, so a script or a
+    second engine that reached this database and wrote would fail the test
+    instead of leaving rows behind for the next one.
+    """
+    with _scratch_database(admin_database_url, "work", migrated_template) as name:
+        asyncio.run(
+            run_sql(
+                admin_database_url,
+                f'ALTER DATABASE "{name}" SET default_transaction_read_only = on',
+            )
+        )
+        yield _database_url(admin_database_url, name)
+
+
+#: The marker for a test that needs a database of its own rather than a
+#: rolled-back transaction on the shared one: it asserts ``now()`` moves, opens
+#: a second connection or races two, runs DDL, needs a real COMMIT seen, or
+#: reads a query plan (the shared database's planner statistics are not a fresh one's).
+#: ``tests/savepoint.py`` says why none of those can be rolled back.
+ISOLATED_DB = "isolated_db"
+
+
+@dataclass(frozen=True)
+class DatabaseTarget:
+    """Where ``db_engine`` points, and whether that database is the test's own."""
+
+    url: str
+    own: bool
+
+
+@pytest.fixture
+def db_target(request: pytest.FixtureRequest) -> DatabaseTarget:
+    """The shared worker database, or a copy of the test's own when it needs one.
+
+    A copy for ``ISOLATED_DB``, and for a test that asks for
+    ``migrated_database`` too: that test opens connections to the URL itself,
+    so its engine has to be on the same database. Sync, because the copy is
+    made with ``asyncio.run``, which cannot run inside ``db_engine``'s loop.
+    """
+    if request.node.get_closest_marker(ISOLATED_DB) or "migrated_database" in request.fixturenames:
+        return DatabaseTarget(request.getfixturevalue("migrated_database"), own=True)
+    return DatabaseTarget(request.getfixturevalue("worker_database"), own=False)
 
 
 @pytest_asyncio.fixture
-async def db_engine(migrated_database: str) -> AsyncIterator[AsyncEngine]:
-    """An engine bound to a migrated, disposable database.
+async def db_engine(db_target: DatabaseTarget) -> AsyncIterator[AsyncEngine]:
+    """An engine on a migrated database whose changes do not outlive the test.
+
+    By default every transaction is a savepoint in one rolled back at teardown
+    (``tests/savepoint.py``): no database is copied or dropped per test. An
+    ``ISOLATED_DB`` test gets a plain engine on a copy of its own instead.
 
     ``Settings`` is constructed directly rather than read from the environment,
     so this fixture neither depends on nor disturbs the process environment.
     """
-    engine = create_database_engine(
-        Settings(_env_file=None, database_url=SecretStr(migrated_database))
-    )
+    settings = Settings(_env_file=None, database_url=SecretStr(db_target.url))
+    if not db_target.own:
+        async with rolled_back_engine(settings, db_target.url) as engine:
+            yield engine
+        return
+    engine = create_database_engine(settings)
     try:
         yield engine
     finally:

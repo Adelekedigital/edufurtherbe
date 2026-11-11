@@ -223,6 +223,7 @@ async def test_an_ended_session_with_no_event_takes_no_turn(
     assert await event_of(db_engine, waiting) is None
 
 
+@pytest.mark.isolated_db
 async def test_a_session_ended_during_this_run_is_not_tried_twice(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

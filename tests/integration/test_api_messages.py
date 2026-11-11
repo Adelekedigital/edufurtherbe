@@ -253,6 +253,7 @@ async def test_a_client_id_from_another_chat_is_refused(
     assert await scalar(db_engine, "SELECT count(*) FROM messages") == 1
 
 
+@pytest.mark.isolated_db
 async def test_two_first_sends_at_once_open_one_chat(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -269,6 +270,7 @@ async def test_two_first_sends_at_once_open_one_chat(
     assert await scalar(db_engine, "SELECT count(*) FROM messages") == 2
 
 
+@pytest.mark.isolated_db
 async def test_a_retry_racing_its_original_stores_one_message(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -285,6 +287,7 @@ async def test_a_retry_racing_its_original_stores_one_message(
     assert await scalar(db_engine, "SELECT count(*) FROM messages") == 2
 
 
+@pytest.mark.isolated_db
 async def test_a_send_that_loses_the_race_returns_the_winner(db_engine: AsyncEngine) -> None:
     """The race held open on purpose: the first send's transaction is still
     open when the second one checks for a stored message and finds none. The

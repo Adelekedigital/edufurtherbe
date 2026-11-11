@@ -323,6 +323,7 @@ async def test_every_stored_abbreviation_is_offered_by_its_level(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_the_completed_count_uses_its_partial_index(db_engine: AsyncEngine) -> None:
     """`ix_sessions_mentor_completed` existed before any reader did.
 

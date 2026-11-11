@@ -7,13 +7,14 @@ domain `ValidationError`, and a status that is not a 422 at all.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Query
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
 from app.api import errors
 from app.core.errors import NotFoundError, ValidationError
-from app.main import create_app
 
 
 class Answer(BaseModel):
@@ -101,8 +102,8 @@ def test_a_pointer_escapes_slash_and_tilde() -> None:
     assert errors.json_pointer(("a/b", "c~d", 0)) == "/a~1b/c~0d/0"
 
 
-def test_the_published_422_is_the_problem_shape_with_errors() -> None:
-    spec = create_app().openapi()
+def test_the_published_422_is_the_problem_shape_with_errors(openapi_spec: dict[str, Any]) -> None:
+    spec = openapi_spec
     schema = spec["components"]["schemas"]["HTTPValidationError"]
 
     assert {"type", "title", "status", "detail", "errors"} <= set(schema["properties"])

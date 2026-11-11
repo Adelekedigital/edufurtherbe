@@ -54,7 +54,6 @@ from app.infra.clients.posthog_reader import (
     analytics_reader_for,
     replay_url_for,
 )
-from app.main import app
 
 WINDOW = Window(
     since=dt.datetime(2026, 11, 1, tzinfo=dt.UTC), until=dt.datetime(2026, 11, 8, tzinfo=dt.UTC)
@@ -488,8 +487,8 @@ def test_profile_view_sources_are_closed_and_shares_are_of_every_view() -> None:
     assert got == [(ProfileViewSource.OTHER, 30.0), (ProfileViewSource.EXPLORE, 20.0)]
 
 
-def test_the_profile_view_sources_are_published_as_an_enum() -> None:
-    schema = app.openapi()["components"]["schemas"]
+def test_the_profile_view_sources_are_published_as_an_enum(openapi_spec: dict[str, Any]) -> None:
+    schema = openapi_spec["components"]["schemas"]
     assert schema["SourceShareRead"]["properties"]["source"] == {
         "$ref": "#/components/schemas/ProfileViewSource",
         "description": "Where the views came from; `other` for the rest.",

@@ -134,6 +134,7 @@ async def test_every_table_with_updated_at_has_the_trigger(db_engine: AsyncEngin
     assert table_count > 0, "no tables inspected; this assertion would pass on an empty schema"
 
 
+@pytest.mark.isolated_db
 async def test_updated_at_actually_moves_on_a_seeded_table(db_engine: AsyncEngine) -> None:
     """End to end, on a real table rather than a probe.
 

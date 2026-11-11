@@ -4,6 +4,7 @@ The only place the database URL is read. Nothing else calls
 ``settings.database_url.get_secret_value()``.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import Pool
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError
@@ -114,8 +116,17 @@ def resolve_async_dsn(settings: Settings) -> str:
     return to_async_dsn(dsn)
 
 
-def create_database_engine(settings: Settings) -> AsyncEngine:
+def create_database_engine(
+    settings: Settings,
+    *,
+    poolclass: type[Pool] | None = None,
+    async_creator: Callable[[], Awaitable[Any]] | None = None,
+) -> AsyncEngine:
     """Build the engine.
+
+    ``poolclass`` and ``async_creator`` are for the test suite's rolled-back
+    engine (one connection it opens itself, with its own connect timeout);
+    left unset they are SQLAlchemy's defaults, and everything else is the same.
 
     ``pool_pre_ping`` because managed Postgres closes idle connections without
     telling the client, and the first query on a dead connection fails rather
@@ -136,6 +147,8 @@ def create_database_engine(settings: Settings) -> AsyncEngine:
         pool_pre_ping=True,
         echo=False,
         connect_args={"timeout": CONNECT_TIMEOUT},
+        poolclass=poolclass,
+        async_creator=async_creator,
     )
     apply_on_connect(engine, statement_timeout=f"{settings.database_statement_timeout_seconds}s")
     return engine

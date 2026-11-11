@@ -324,6 +324,7 @@ async def attend_and_unlock(engine: AsyncEngine, referrer_id: UUID) -> None:
         await settling.commit()
 
 
+@pytest.mark.isolated_db
 async def test_a_qualification_and_an_attendance_racing_still_unlock_and_pay_once(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -349,6 +350,7 @@ async def test_a_qualification_and_an_attendance_racing_still_unlock_and_pay_onc
     assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
+@pytest.mark.isolated_db
 async def test_two_invitees_qualifying_at_once_pay_one_top_up(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

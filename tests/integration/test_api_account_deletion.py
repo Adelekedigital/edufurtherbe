@@ -388,6 +388,7 @@ async def test_an_offer_from_a_deleted_mentor_is_withdrawn(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_booking_racing_the_mentors_deletion_is_refused(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -435,6 +436,7 @@ async def test_a_booking_racing_the_mentors_deletion_is_refused(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_transition_racing_the_deletion_is_refused_not_overwritten(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -463,6 +465,7 @@ async def test_a_transition_racing_the_deletion_is_refused_not_overwritten(
     assert row["status"] == "withdrawn"
 
 
+@pytest.mark.isolated_db
 async def test_a_double_click_deletes_once(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

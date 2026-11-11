@@ -166,6 +166,7 @@ async def test_a_limit_below_what_is_held_refuses_and_deletes_nothing(
     assert await held(db_engine, mentor) == 3
 
 
+@pytest.mark.isolated_db
 async def test_two_creates_at_the_edge_land_one(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -182,6 +183,7 @@ async def test_two_creates_at_the_edge_land_one(
     assert await held(db_engine, mentor) == DEFAULT_SESSION_TYPE_LIMIT
 
 
+@pytest.mark.isolated_db
 async def test_two_keyed_creates_at_the_edge_land_one_and_never_deadlock(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -204,6 +206,7 @@ async def test_two_keyed_creates_at_the_edge_land_one_and_never_deadlock(
     assert await held(db_engine, mentor) == DEFAULT_SESSION_TYPE_LIMIT
 
 
+@pytest.mark.isolated_db
 async def test_the_create_lock_does_not_wait_on_a_key_share_of_the_user(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

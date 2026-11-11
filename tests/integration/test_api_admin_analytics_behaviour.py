@@ -82,6 +82,7 @@ async def get(client: httpx.AsyncClient, token: str, path: str, **query: str) ->
     return await client.get(BASE + path, params=query, headers={"Authorization": f"Bearer {token}"})
 
 
+@pytest.mark.isolated_db
 async def test_switched_off_or_not_an_admin_is_a_404(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:

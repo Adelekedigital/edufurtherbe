@@ -18,7 +18,6 @@ import pytest
 import yaml
 
 from app.infra.db.demo_seed import DEMO_DOMAIN, E2E_ACCOUNTS
-from app.main import create_app
 
 E2E = Path("docs/e2e")
 DOC = yaml.safe_load((E2E / "scenarios.yaml").read_text(encoding="utf-8"))
@@ -159,8 +158,8 @@ def test_seed_accounts_are_the_ones_the_seed_creates() -> None:
     assert set(SEED) == set(E2E_ACCOUNTS)
 
 
-def test_every_api_step_is_a_route_the_app_serves() -> None:
-    paths = create_app().openapi()["paths"]
+def test_every_api_step_is_a_route_the_app_serves(openapi_spec: dict[str, Any]) -> None:
+    paths = openapi_spec["paths"]
     for scenario in SCENARIOS:
         calls = [s for s in scenario["steps"] if s["kind"] == "api"]
         calls += [a for a in scenario.get("assertions", []) if a["check"] == "api"]

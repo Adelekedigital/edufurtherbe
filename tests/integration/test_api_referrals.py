@@ -152,6 +152,7 @@ async def test_two_referrers_may_invite_the_same_person(
     assert (await invite(api_client, second, "popular@example.com")).status_code == 201
 
 
+@pytest.mark.isolated_db
 async def test_invites_are_listed_newest_first(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -232,6 +233,7 @@ async def test_claiming_someone_elses_claim_is_refused(
     assert response.status_code == 409
 
 
+@pytest.mark.isolated_db
 async def test_claiming_twice_yourself_is_idempotent(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

@@ -390,6 +390,7 @@ async def test_people_match_a_live_name_ignoring_case(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_page_and_the_badge_read_an_index(db_engine: AsyncEngine) -> None:
     """The guardrail, at 30,000 messages across 300 chats: a page and the
     unread count read `ix_messages_conversation_sent`, never a scan."""

@@ -251,6 +251,7 @@ async def test_a_transient_failure_does_not_cost_the_mentor_their_connection(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_revoked_grant_is_recorded_and_stops_being_called(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -278,6 +279,7 @@ async def test_a_revoked_grant_is_recorded_and_stops_being_called(
     assert row["refresh_token_encrypted"] == ""
 
 
+@pytest.mark.isolated_db
 async def test_the_mentor_can_see_why_it_stopped(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

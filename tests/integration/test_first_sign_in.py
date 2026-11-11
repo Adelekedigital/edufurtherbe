@@ -97,6 +97,7 @@ async def test_signing_in_again_does_not_create_a_second_account(
     assert len(await users_with(db_engine, email="twice@example.com")) == 1
 
 
+@pytest.mark.isolated_db
 async def test_two_first_requests_create_one_account(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

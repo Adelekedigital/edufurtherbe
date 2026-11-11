@@ -141,6 +141,7 @@ async def wait_until_blocked(engine: AsyncEngine, held: HeldDelete) -> None:
     pytest.fail("the upload never waited on the image lock")
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("kind", KINDS)
 async def test_an_upload_racing_the_cleanup_waits_and_lands_after_it(
     db_engine: AsyncEngine, kind: AssetKind
@@ -173,6 +174,7 @@ async def test_an_upload_racing_the_cleanup_waits_and_lands_after_it(
     assert object_exists(fake, original), "the upload landed before the delete and was lost"
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("kind", KINDS)
 async def test_a_cancelled_cleanup_holds_the_lock_until_its_delete_finishes(
     db_engine: AsyncEngine, kind: AssetKind

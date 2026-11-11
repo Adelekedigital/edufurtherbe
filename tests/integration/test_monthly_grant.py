@@ -321,6 +321,7 @@ async def test_a_period_already_topped_up_pays_only_what_is_left(db_engine: Asyn
     assert await sources_of(db_engine, user) == ["level_top_up", "monthly_free"]
 
 
+@pytest.mark.isolated_db
 async def test_a_rerun_after_a_rise_with_no_event_pays_the_rest_as_a_top_up(
     db_engine: AsyncEngine,
 ) -> None:
@@ -353,6 +354,7 @@ async def test_refunds_and_support_grants_are_outside_the_level(db_engine: Async
     assert await balance_of(db_engine, user) == 2 + 3
 
 
+@pytest.mark.isolated_db
 async def test_the_first_and_a_top_up_racing_pay_the_level_once(db_engine: AsyncEngine) -> None:
     """**The race the users' row lock exists for.** A top-up holding the lock
     has paid level 1 but not committed; the 1st's run, unlocked, would read

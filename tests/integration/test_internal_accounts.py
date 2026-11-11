@@ -170,6 +170,7 @@ async def test_a_session_with_an_internal_party_is_not_counted(db_engine: AsyncE
     assert kept == {ids[0]}
 
 
+@pytest.mark.isolated_db
 async def test_a_cli_grant_keeps_a_migrated_admins_modified_date(
     db_engine: AsyncEngine, store: ProvisioningStore
 ) -> None:
