@@ -79,6 +79,8 @@ from app.core.errors import (
     WritingAssistUnavailableError,
 )
 from app.core.errors import ValidationError as DomainValidationError
+from app.core.reporting import ErrorContext, member_on, reporting
+from app.domain.ports import ErrorReporter
 
 CONTENT_TYPE = "application/problem+json"
 
@@ -358,7 +360,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
     return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
 
 
-async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """Anything nobody anticipated, still in the one shape.
 
     **Without this, an unhandled exception leaves as `text/plain`
@@ -377,18 +379,40 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     caller *and* nothing to the operator is worse than the plain-text one it
     replaces. Stdlib logging, which `infra/observability.py` renders as JSON with
     the request's id, scrubbed, and reports to Sentry when a DSN is set.
+
+    **The one reporting point (decision 339).** Sentry and, with
+    `ANALYTICS_ERRORS_ENABLED`, PostHog get the same error with the same
+    `ErrorContext`: the request id, the route template (never the raw path,
+    whose ids name records) and the member's id only with analytics consent.
+    A deliberate 4xx never reaches this handler, so neither tool sees one.
     """
-    # `exc` is unused: it is logged through `.exception()`, which reads the active
-    # exception, and it must never reach the response body.
-    logging.getLogger(__name__).exception(
-        "unhandled error serving %s %s", request.method, request.url.path
+    context = ErrorContext(
+        request_id=structlog.contextvars.get_contextvars().get("request_id"),
+        route=route_template(request),
+        member_id=member_on(request.state),
     )
+    # `exc` never reaches the response body. Logged through `.exception()`,
+    # which reads the active exception; Sentry captures it inside this block.
+    with reporting(context):
+        logging.getLogger(__name__).exception(
+            "unhandled error serving %s %s", request.method, context.route or "an unmatched path"
+        )
+    reporter: ErrorReporter | None = getattr(request.app.state, "error_reporter", None)
+    if reporter is not None:
+        reporter.report(exc, context)
     response = problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
     # Set here because this handler runs outside every middleware, where
     # `RequestIdMiddleware` cannot add it: the id a user quotes for a 500.
-    if request_id := structlog.contextvars.get_contextvars().get("request_id"):
-        response.headers[REQUEST_ID_HEADER] = request_id
+    if context.request_id:
+        response.headers[REQUEST_ID_HEADER] = context.request_id
     return response
+
+
+def route_template(request: Request) -> str | None:
+    """The matched route's template, such as `/api/v1/sessions/{session_id}`,
+    or ``None`` when no route matched."""
+    path = getattr(request.scope.get("route"), "path", None)
+    return path if isinstance(path, str) else None
 
 
 async def handle_request_validation_error(

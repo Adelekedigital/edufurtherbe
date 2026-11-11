@@ -31,6 +31,7 @@ from app.core.errors import (
     ReadOnlyViewAsError,
     ValidationError,
 )
+from app.core.reporting import remember_member
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
@@ -193,6 +194,10 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # `oc` and `cc` are the caller's own origin and current countries, for `/me`
 # only: primary-key joins off the caller's own profile row, so they add no
 # query and widen no scope.
+#
+# `analytics_consented` is the caller's analytics answer (`granted`, unique per
+# user, so one indexed join), read here so an error report can follow consent
+# without querying a database that may be what failed (decision 339).
 CURRENT_USER = text("""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at, u.auth_method,
@@ -205,9 +210,11 @@ CURRENT_USER = text("""
            cc.code AS current_country_code, cc.display_name AS current_country_name,
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
-           (a.roles IS NOT NULL) AS is_admin
+           (a.roles IS NOT NULL) AS is_admin,
+           COALESCE(ac.granted, FALSE) AS analytics_consented
     FROM users u
     LEFT JOIN user_profiles p ON p.user_id = u.id
+    LEFT JOIN analytics_consents ac ON ac.user_id = u.id
     LEFT JOIN countries oc ON oc.id = p.origin_country_id
     LEFT JOIN countries cc ON cc.id = p.current_country_id
     LEFT JOIN LATERAL (
@@ -365,7 +372,10 @@ async def _resolve(
 ) -> dict[str, Any]:
     user = await _signed_in_user(claims, session)
     if header is None:
+        remember_member(request.state, user["id"], consented=user["analytics_consented"])
         return user
+    # In a preview no id is kept, the previewed user's or the admin's: an
+    # error there is the admin's view, not either member's (decision 339).
     return await _previewed_user(request, claims, session, user, header)
 
 

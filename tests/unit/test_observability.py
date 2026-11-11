@@ -6,20 +6,19 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 import pytest
 import sentry_sdk
 import structlog
 from pydantic import SecretStr
-from sentry_sdk.envelope import Envelope
-from sentry_sdk.transport import Transport
 
 from app.api.request_id import request_id_from
 from app.core.config import Settings
 from app.infra.observability import REDACTED, configure_logging, configure_sentry, scrub
 from app.main import create_app
+from conftest import Recording
 
 
 def settings(**values: object) -> Settings:
@@ -187,24 +186,6 @@ async def test_every_response_carries_its_id_and_cors_exposes_it() -> None:
 
 # --------------------------------------------------------------------------
 # Sentry
-
-
-class Recording(Transport):
-    events: ClassVar[list[dict[str, Any]]] = []
-
-    def capture_envelope(self, envelope: Envelope) -> None:
-        event = envelope.get_event()
-        if event is not None:
-            Recording.events.append(event)
-
-
-@pytest.fixture
-def recording() -> Iterator[list[dict[str, Any]]]:
-    Recording.events = []
-    yield Recording.events
-    sentry_sdk.get_client().close()
-    sentry_sdk.init()  # no DSN: reporting off again for every later test
-    structlog.contextvars.clear_contextvars()
 
 
 def test_without_a_dsn_sentry_stays_off() -> None:

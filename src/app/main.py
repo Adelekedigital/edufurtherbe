@@ -64,6 +64,7 @@ from app.core.errors import ConfigurationError
 from app.domain.rate_limits import SlidingWindow
 from app.infra.clients.ai_router import load_signing_key
 from app.infra.clients.notifications import live_notifier
+from app.infra.clients.posthog_errors import error_reporter_for
 from app.infra.clients.web_push import sender_for
 from app.infra.db.outbox import collect_queued, deliver, stop_collecting
 from app.infra.observability import configure_logging, configure_sentry
@@ -551,6 +552,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.free_busy_budget = SlidingWindow(
         resolved.free_busy_calls_per_minute, window_seconds=60.0
     )
+    # PostHog's half of the error trial (decision 339); `None` while it is off.
+    application.state.error_reporter = error_reporter_for(resolved)
 
     # Outside everything but CORS, so a refusal from the body limit carries an
     # id too, and CORS can expose the header it adds.

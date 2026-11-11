@@ -9,6 +9,8 @@ the request's `request_id` (bound by `api/request_id.py`).
 now, development later (owner, 2026-10-12). No request bodies, cookies, headers
 or frame locals are sent, and every event passes through the same `scrub` as
 every log line, so an address or a bearer token cannot leave in either.
+An unhandled request error is also tagged with its route template and, only
+with analytics consent, the member's id (decision 339).
 
 In `infra` because `sentry_sdk` is a vendor SDK, which only this layer may
 import; `main.py` calls the two `configure_*` functions once per app.
@@ -27,6 +29,7 @@ import structlog
 from sentry_sdk.transport import Transport
 
 from app.core.config import Settings
+from app.core.reporting import current_error
 
 REDACTED = "[REDACTED]"
 
@@ -167,10 +170,20 @@ def configure_logging(settings: Settings) -> None:
 
 
 def _before_send(event: Any, _hint: Any) -> Any:
-    """Scrub the event, and tag it with the request it came from."""
+    """Scrub the event, and tag it with the request it came from.
+
+    An unhandled request error also carries its route template and, only with
+    analytics consent, the member's id: the `ErrorContext` PostHog gets too
+    (decision 339).
+    """
     request_id = structlog.contextvars.get_contextvars().get("request_id")
     if request_id:
         event.setdefault("tags", {})["request_id"] = request_id
+    if (context := current_error()) is not None:
+        if context.route:
+            event.setdefault("tags", {})["route"] = context.route
+        if context.member_id:
+            event["user"] = {"id": str(context.member_id)}
     return scrub(event)
 
 
