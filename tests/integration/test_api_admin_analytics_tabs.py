@@ -436,3 +436,41 @@ async def test_supply_invites_and_mentor_activation_read_real_values(
     assert features["invites"]["value"]["value"] == 50.0
     assert features["invites"]["contribution"] == 1
     assert features["mentee_activation"]["value"]["value"] == 66.7
+
+
+async def test_tz_reads_the_days_in_that_zone_and_keys_the_cache(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    # Completed at 23:30 UTC on 15 March: already 16 March in Lagos (UTC+1).
+    async with db_engine.begin() as conn:
+        mentor, mentee = await person(conn), await person(conn)
+        late = dt.datetime(2025, 3, 15, 23, 30, tzinfo=dt.UTC)
+        await session_row(conn, mentor, mentee, status="completed", created=late, starts=late)
+    app = build_api_app(
+        db_engine, api_storage, Settings(_env_file=None, admin_analytics_enabled=True)
+    )
+    headers = {"Authorization": f"Bearer {await admin_token(db_engine)}"}
+    day = {"from": "2025-03-16", "to": "2025-03-16"}
+    async with client_for(app) as client:
+        # Same app, same dates: a zone is its own cache entry.
+        utc = (await client.get(f"{ROOT}/overview", params=day, headers=headers)).json()
+        lagos = (
+            await client.get(
+                f"{ROOT}/overview", params={**day, "tz": "Africa/Lagos"}, headers=headers
+            )
+        ).json()
+        bad = await client.get(f"{ROOT}/overview", params={**day, "tz": "Lagos"}, headers=headers)
+    assert utc["window"]["tz"] == "UTC"
+    assert utc["north_star"]["completed"] == {"value": 0, "previous": 1}
+    assert lagos["window"] == {
+        "from": "2025-03-16",
+        "to": "2025-03-16",
+        "previous_from": "2025-03-15",
+        "previous_to": "2025-03-15",
+        "tz": "Africa/Lagos",
+    }
+    assert lagos["north_star"]["completed"] == {"value": 1, "previous": 0}
+    assert lagos["north_star"]["series"] == [{"start": "2025-03-16", "value": 1, "previous": 0}]
+    assert bad.status_code == 422
+    assert bad.json()["type"] == "/problems/analytics-window"
+    assert bad.json()["errors"][0]["pointer"] == "/query/tz"

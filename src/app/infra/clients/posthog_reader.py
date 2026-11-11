@@ -31,8 +31,11 @@ from app.domain.analytics_behaviour import (
     FROM_SERVER,
     JOIN_CLICKED,
     JOIN_FAILED,
+    LINK_SHARED,
     LOGIN_FAILED,
     LOGIN_VERIFIED,
+    MENTOR_ACTIVATED_WITHIN,
+    MENTOR_PROFILE_LINK,
     PROFILE_VIEWED,
     PUSH_ALLOWED,
     REQUEST_FAILED,
@@ -138,6 +141,9 @@ NAMES: dict[str, str | list[str]] = {
     "requested": BOOKING_REQUESTED,
     "explore_events": [SEARCH, PROFILE_VIEWED, BOOKING_STARTED],
     "booked_events": [SEARCH, BOOKING_REQUESTED],
+    "link_shared": LINK_SHARED,
+    "profile_kind": MENTOR_PROFILE_LINK,
+    "own_flag": "true",
 }
 
 LOGIN_QUERY = _written("""
@@ -254,6 +260,24 @@ FROM (
         AND {not_internal}
     GROUP BY person_id
 )
+""")
+
+#: Of ``{mentors}`` (distinct ids), those who shared their own profile link
+#: (``own`` true; an event without it predates the flag and is not counted)
+#: from their approval, ``{approved_at}`` (Unix seconds, in the same order),
+#: until ``{within_seconds}`` after it.
+PROFILE_LINKS_QUERY = _written("""
+SELECT uniq(distinct_id) AS shared
+FROM events
+WHERE event = {link_shared}
+    AND toString(properties.kind) = {profile_kind}
+    AND toString(properties.own) = {own_flag}
+    AND has({mentors}, distinct_id)
+    AND toUnixTimestamp(timestamp) >= {approved_at}[indexOf({mentors}, distinct_id)]
+    AND toUnixTimestamp(timestamp)
+        < {approved_at}[indexOf({mentors}, distinct_id)] + {within_seconds}
+    AND timestamp >= fromUnixTimestamp({since}) AND timestamp < fromUnixTimestamp({until})
+    AND {not_internal}
 """)
 
 #: A ``{placeholder}`` in a query's text.
@@ -434,6 +458,12 @@ class NullAnalyticsReader:
         del window, internal
         raise self._refuse()
 
+    def profile_links_shared(
+        self, cohorts: Sequence[Sequence[tuple[UUID, dt.datetime]]], internal: Sequence[UUID]
+    ) -> list[int]:
+        del cohorts, internal
+        raise self._refuse()
+
 
 class PostHogReader:
     """Reads one PostHog project through its Query API."""
@@ -499,6 +529,10 @@ class PostHogReader:
 
         def parse(body: Any) -> list[int]:
             results = body["results"]
+            # PostHog answers an empty list, not a row of zeros, when no person
+            # entered the funnel (or its breakdown): nobody reached any step.
+            if results == []:
+                return [0] * steps
             if not isinstance(results, list) or len(results) != steps:
                 raise _MalformedError("not one result per step")
             ordered = sorted(results, key=lambda r: r.get("order", 0))
@@ -510,6 +544,31 @@ class PostHogReader:
         values = {**_since_until(window), "internal": _ids(internal)}
         query = hogql("admin_analytics_login_codes", LOGIN_QUERY, values)
         return self._read(query, lambda body: _login(_one(body, _LOGIN_COLUMNS)), OPTIONAL_TIMEOUT)
+
+    def profile_links_shared(
+        self, cohorts: Sequence[Sequence[tuple[UUID, dt.datetime]]], internal: Sequence[UUID]
+    ) -> list[int]:
+        # In turn, so a failure fails them all at once: no second read waits
+        # out its own timeout after the first one failed.
+        return [self._links(cohort, internal) for cohort in cohorts]
+
+    def _links(self, mentors: Sequence[tuple[UUID, dt.datetime]], internal: Sequence[UUID]) -> int:
+        if not mentors:
+            return 0
+        within = int(MENTOR_ACTIVATED_WITHIN.total_seconds())
+        values = {
+            "mentors": _ids([user for user, _ in mentors]),
+            "approved_at": [int(at.timestamp()) for _, at in mentors],
+            "within_seconds": within,
+            "since": int(min(at for _, at in mentors).timestamp()),
+            "until": int(max(at for _, at in mentors).timestamp()) + within,
+            "internal": _ids(internal),
+        }
+        return self._read(
+            hogql("admin_analytics_profile_links", PROFILE_LINKS_QUERY, values),
+            lambda body: _int(_one(body, ("shared",))["shared"]),
+            OPTIONAL_TIMEOUT,
+        )
 
     def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:
         values = {**_since_until(window), "internal": _ids(internal)}

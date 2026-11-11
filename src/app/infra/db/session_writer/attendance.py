@@ -52,7 +52,7 @@ from app.infra.db.models.sessions import (
     SessionEvent,
     SessionParticipant,
 )
-from app.infra.db.outbox import enqueue, enqueue_analytics_each
+from app.infra.db.outbox import enqueue, enqueue_session_analytics
 from app.infra.db.predicates import presence_decides_sql
 from app.infra.db.referral_writer import unlock_referrers
 from app.infra.db.review_eligibility import within_interval
@@ -418,6 +418,7 @@ async def settle_attendance(
                     # addressed without a second read of rows this statement has
                     # already touched.
                     Session.mentee_id,
+                    Session.mentor_id,
                     Session.entry_point,
                     mentor_came.label("mentor_came"),
                     mentee_came.label("mentee_came"),
@@ -489,13 +490,18 @@ async def settle_attendance(
         if owed is not None:
             await refund_credit(session, row["mentee_id"], row["id"], reason=owed, now=now)
 
-    # The analytics events, about each mentee, in the settling transaction.
+    # The analytics events, about each mentee (and a completion's mentor,
+    # decision 337), in the settling transaction.
     for outcome, event in SETTLED_EVENTS.items():
-        await enqueue_analytics_each(
+        await enqueue_session_analytics(
             session,
             event,
             [
-                (row["mentee_id"], session_properties(row["id"], row["entry_point"]))
+                (
+                    row["mentee_id"],
+                    row["mentor_id"],
+                    session_properties(row["id"], row["entry_point"]),
+                )
                 for row in settled
                 if row["status"] == outcome
             ],

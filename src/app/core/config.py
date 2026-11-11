@@ -943,6 +943,12 @@ class Settings(BaseSettings):
     analytics_project_id: str | None = Field(
         default=None, validation_alias=env_key("analytics_project_id")
     )
+    #: Unhandled request errors also go to PostHog's error tracking, beside
+    #: Sentry, for the trial (decision 339). Off by default; on, it reports
+    #: only while analytics itself is on and configured (`analytics_sink_for`).
+    analytics_errors_enabled: bool = Field(
+        default=False, validation_alias=env_key("analytics_errors_enabled")
+    )
 
     #: How many Google free/busy calls one worker process makes in any minute,
     #: for every caller together (decision 242). The public `/slots` read can
