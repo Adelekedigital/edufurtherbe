@@ -12,18 +12,16 @@ from typing import Any
 import pytest
 
 from app.api.routes.sessions import reason_codes_doc
-from app.core.config import Settings
 from app.domain.enums import SessionReasonCode
 from app.domain.sessions import TRANSITIONS, reason_required
-from app.main import create_app
 
 #: Each ending, and whether its body may offer another time instead.
 ENDINGS = {"decline": True, "withdraw": False, "cancel": True}
 
 
-@pytest.fixture(scope="module")
-def spec() -> dict[str, Any]:
-    return create_app(Settings(_env_file=None)).openapi()
+@pytest.fixture
+def spec(openapi_spec: dict[str, Any]) -> dict[str, Any]:
+    return openapi_spec
 
 
 def _ending(spec: dict[str, Any], action: str) -> dict[str, Any]:

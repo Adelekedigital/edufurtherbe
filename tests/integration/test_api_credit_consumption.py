@@ -237,6 +237,7 @@ async def test_the_soonest_expiring_lot_pays_first(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_two_concurrent_bookings_cannot_spend_one_credit_twice(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -275,6 +276,7 @@ async def test_two_concurrent_bookings_cannot_spend_one_credit_twice(
     assert len(await ledger_of(db_engine, mentee)) == 2
 
 
+@pytest.mark.isolated_db
 async def test_the_balance_never_goes_negative(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

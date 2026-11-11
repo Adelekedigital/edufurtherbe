@@ -24,7 +24,8 @@ from app.core.config import Settings
 from app.infra.auth.supabase import SupabaseTokenVerifier
 from conftest import add_user
 
-pytestmark = [pytest.mark.db, pytest.mark.asyncio]
+# The script opens its own engine on `dsn_of(db_engine)`: it must see committed rows.
+pytestmark = [pytest.mark.db, pytest.mark.asyncio, pytest.mark.isolated_db]
 
 LOCAL_DSN = "postgresql+asyncpg://edufurther:edufurther@localhost:55432/edufurther"
 REMOTE_DSN = "postgresql+asyncpg://postgres.abcdefghijklmnop:pw@aws-0-eu-west-2.pooler.supabase.com:5432/postgres"

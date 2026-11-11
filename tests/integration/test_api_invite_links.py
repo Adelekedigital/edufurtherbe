@@ -127,6 +127,7 @@ async def test_the_first_request_creates_the_link_and_the_second_returns_it(
     assert first.json()["active"] is True
 
 
+@pytest.mark.isolated_db
 async def test_concurrent_first_requests_agree_on_one_code(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -327,6 +328,7 @@ async def test_changing_the_code_retires_the_old_one(
     )
 
 
+@pytest.mark.isolated_db
 async def test_concurrent_picks_of_one_free_handle_give_one_winner(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -341,6 +343,7 @@ async def test_concurrent_picks_of_one_free_handle_give_one_winner(
     assert sorted(r.status_code for r in responses) == [200, 409]
 
 
+@pytest.mark.isolated_db
 async def test_a_pick_waits_for_a_concurrent_pick_of_the_same_handle(
     db_engine: AsyncEngine,
 ) -> None:
@@ -362,6 +365,7 @@ async def test_a_pick_waits_for_a_concurrent_pick_of_the_same_handle(
             await racer
 
 
+@pytest.mark.isolated_db
 async def test_a_pick_cannot_slip_past_a_retirement_in_flight(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -509,6 +513,7 @@ async def test_a_deleted_owner_s_link_cannot_be_claimed(
     assert (await claim(api_client, arrival, code)).status_code == 404
 
 
+@pytest.mark.isolated_db
 async def test_concurrent_claims_of_one_link_by_one_arrival_make_one_referral(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -521,6 +526,7 @@ async def test_concurrent_claims_of_one_link_by_one_arrival_make_one_referral(
     assert len({r.json()["id"] for r in responses}) == 1
 
 
+@pytest.mark.isolated_db
 async def test_a_link_claim_racing_its_own_retry_returns_one_referral(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -546,6 +552,7 @@ async def test_a_link_claim_racing_its_own_retry_returns_one_referral(
     assert second.id == first.id
 
 
+@pytest.mark.isolated_db
 async def test_a_link_claim_racing_a_single_use_claim_never_errors(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -568,6 +575,7 @@ async def test_a_link_claim_racing_a_single_use_claim_never_errors(
     )
 
 
+@pytest.mark.isolated_db
 async def test_the_loser_of_a_race_for_one_single_use_code_is_refused(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -621,6 +629,7 @@ async def test_a_handle_resolves_whatever_its_case_and_a_single_use_code_does_no
         assert (await lookup(api_client, swapped)).json() == NOBODY
 
 
+@pytest.mark.isolated_db
 async def test_two_single_use_claims_racing_never_error(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -937,6 +946,7 @@ async def test_reactivating_makes_the_same_code_work_again(
     assert (await claim(api_client, arrival, code)).status_code == 200
 
 
+@pytest.mark.isolated_db
 async def test_revoking_and_reactivating_are_idempotent(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -1038,6 +1048,7 @@ async def test_patch_needs_a_token(api_client: httpx.AsyncClient) -> None:
     assert (await api_client.patch(LINK, json={"active": False})).status_code == 401
 
 
+@pytest.mark.isolated_db
 async def test_a_pick_racing_a_new_link_s_default_code_is_refused_not_an_error(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

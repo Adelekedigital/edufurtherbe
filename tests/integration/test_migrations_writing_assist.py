@@ -16,7 +16,7 @@ import asyncio
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.profile_text import PROMPT_VERSION_MAX_LENGTH, PROMPT_VERSION_PATTERN
 
@@ -60,9 +60,9 @@ def _profile(url: str, email: str, drafted: str, version: str) -> None:
     ids=["neither", "draft", "improve", "sixty-four"],
 )
 def test_a_profile_holds_provenance_both_or_neither(
-    disposable_database: str, make_alembic_config: ConfigFactory, drafted: str, version: str
+    disposable_database: str, migrate_to: MigrateTo, drafted: str, version: str
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), PROVENANCE)
+    migrate_to(disposable_database, PROVENANCE)
     _profile(disposable_database, "ok@example.test", drafted, version)
 
     assert scalar(disposable_database, "SELECT count(*) FROM user_profiles") == 1
@@ -77,9 +77,9 @@ def test_a_profile_holds_provenance_both_or_neither(
     ids=["stamp-only", "version-only"],
 )
 def test_half_a_provenance_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory, drafted: str, version: str
+    disposable_database: str, migrate_to: MigrateTo, drafted: str, version: str
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), PROVENANCE)
+    migrate_to(disposable_database, PROVENANCE)
 
     with pytest.raises(asyncpg.CheckViolationError, match="about_me_provenance_both_or_neither"):
         _profile(disposable_database, "half@example.test", drafted, version)
@@ -116,20 +116,20 @@ def test_half_a_provenance_is_refused(
     ],
 )
 def test_a_malformed_prompt_version_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory, version: str
+    disposable_database: str, migrate_to: MigrateTo, version: str
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), PROVENANCE)
+    migrate_to(disposable_database, PROVENANCE)
 
     with pytest.raises(asyncpg.CheckViolationError, match="about_me_prompt_version_shape"):
         _profile(disposable_database, "bad@example.test", "now()", version)
 
 
 def test_provenance_without_a_bio_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Provenance describes stored text, so a bio cleared under it is refused;
     clearing all three together is accepted."""
-    command.upgrade(make_alembic_config(disposable_database), PROVENANCE)
+    migrate_to(disposable_database, PROVENANCE)
     _profile(disposable_database, "cleared@example.test", "now()", "'bio_draft-v1'")
 
     with pytest.raises(asyncpg.CheckViolationError, match="about_me_provenance_has_a_bio"):
@@ -142,13 +142,11 @@ def test_provenance_without_a_bio_is_refused(
     assert scalar(disposable_database, "SELECT count(*) FROM user_profiles") == 1
 
 
-def test_the_version_shape_is_the_domains(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_the_version_shape_is_the_domains(disposable_database: str, migrate_to: MigrateTo) -> None:
     """One rule, one representation (non-negotiable 8): the CHECK the migration
     wrote carries the pattern and bound the domain and the model read, so a
     change to one without the other fails here."""
-    command.upgrade(make_alembic_config(disposable_database), "head")
+    migrate_to(disposable_database, "head")
     definition = scalar(
         disposable_database,
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
@@ -160,13 +158,13 @@ def test_the_version_shape_is_the_domains(
 
 
 def test_the_provenance_downgrade_refuses_while_a_profile_holds_one(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Dropping the columns would delete the record that a bio was drafted, so a
     downgrade over values stops and says so; without values it drops both and
     comes back."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PROVENANCE)
+    migrate_to(disposable_database, PROVENANCE)
     _profile(disposable_database, "drafted@example.test", "now()", "'bio_draft-v1'")
 
     with pytest.raises(RuntimeError, match="provenance"):
@@ -190,9 +188,9 @@ def test_the_provenance_downgrade_refuses_while_a_profile_holds_one(
 
 
 def test_a_request_names_a_known_field_and_gets_its_own_id(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REQUESTS)
+    migrate_to(disposable_database, REQUESTS)
     execute(disposable_database, _USER.format(email="asker@example.test"))
     for field in ("'mentee_bio'", "'mentor_about'"):
         execute(disposable_database, _REQUEST.format(field=field, email="asker@example.test"))
@@ -211,21 +209,19 @@ def test_a_request_names_a_known_field_and_gets_its_own_id(
 
 @pytest.mark.parametrize("field", ["'why_mentor'", "'Mentee_bio'", "''"])
 def test_an_unknown_field_is_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory, field: str
+    disposable_database: str, migrate_to: MigrateTo, field: str
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REQUESTS)
+    migrate_to(disposable_database, REQUESTS)
     execute(disposable_database, _USER.format(email="asker@example.test"))
 
     with pytest.raises(asyncpg.CheckViolationError, match="field_is_known"):
         execute(disposable_database, _REQUEST.format(field=field, email="asker@example.test"))
 
 
-def test_a_request_goes_with_its_user(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_a_request_goes_with_its_user(disposable_database: str, migrate_to: MigrateTo) -> None:
     """The rows exist only to count against a limit; nothing else reads them, so
     they cascade rather than hold up a user's deletion."""
-    command.upgrade(make_alembic_config(disposable_database), REQUESTS)
+    migrate_to(disposable_database, REQUESTS)
     execute(disposable_database, _USER.format(email="gone@example.test"))
     execute(disposable_database, _USER.format(email="stays@example.test"))
     execute(disposable_database, _REQUEST.format(field="'mentee_bio'", email="gone@example.test"))
@@ -249,14 +245,14 @@ def _plan(url: str, sql: str, *args: object) -> str:
 
 
 def test_counting_a_users_day_for_one_field_reads_the_index(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The limit's count is asserted with `EXPLAIN`, not assumed (guardrail).
 
     Two hundred users at fifty requests each is far past what ten a day per
     field reaches in practice, so a sequential scan here would be one at scale.
     """
-    command.upgrade(make_alembic_config(disposable_database), REQUESTS)
+    migrate_to(disposable_database, REQUESTS)
     execute(
         disposable_database,
         "INSERT INTO users (email, auth_id, first_name, primary_role, timezone) "
@@ -283,12 +279,12 @@ def test_counting_a_users_day_for_one_field_reads_the_index(
 
 
 def test_the_requests_downgrade_drops_the_table_and_comes_back(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Losing the rows only resets everybody's daily count, so the downgrade
     drops the table over rows rather than refusing."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REQUESTS)
+    migrate_to(disposable_database, REQUESTS)
     execute(disposable_database, _USER.format(email="asker@example.test"))
     execute(disposable_database, _REQUEST.format(field="'mentee_bio'", email="asker@example.test"))
 

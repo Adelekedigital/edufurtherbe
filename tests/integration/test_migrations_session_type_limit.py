@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, scalar
 
 from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
 
@@ -22,12 +22,11 @@ COLUMN = (
 
 
 def test_session_type_limit_is_nullable_and_bounded(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """Null is "the default" and every existing row stays null; the bound is the
     domain's ceiling, so the migration's literal cannot drift from it."""
-    config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     assert scalar(disposable_database, COLUMN) == 1
     assert (
@@ -49,10 +48,10 @@ def test_session_type_limit_is_nullable_and_bounded(
 
 
 def test_the_downgrade_removes_the_column(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
 
     command.downgrade(config, PREVIOUS)
 

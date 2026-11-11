@@ -103,6 +103,7 @@ async def test_the_trigger_is_re_enabled_after_a_successful_load(db_engine: Asyn
         assert enabled.scalar_one() == b"O", "trigger left disabled after the load"
 
 
+@pytest.mark.isolated_db
 @pytest.mark.asyncio
 async def test_the_trigger_is_re_enabled_even_when_the_load_fails(db_engine: AsyncEngine) -> None:
     """The failure path, and it is the rollback that does the work.

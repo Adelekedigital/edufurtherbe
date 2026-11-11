@@ -183,6 +183,7 @@ async def test_you_cannot_mark_the_other_party_present(
     assert rows["mentee"]["joined_at"] is None
 
 
+@pytest.mark.isolated_db
 async def test_joining_twice_keeps_the_first_arrival(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -613,6 +614,7 @@ async def test_a_session_nobody_was_recorded_at_did_not_happen(
     assert await status_of(db_engine, booking["id"]) == "no_show"
 
 
+@pytest.mark.isolated_db
 async def test_the_settlement_records_how_it_knew(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

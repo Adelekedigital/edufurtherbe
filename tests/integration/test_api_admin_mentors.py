@@ -505,6 +505,7 @@ async def test_a_live_admin_reads_a_hidden_mentors_profile(
     ]
 
 
+@pytest.mark.isolated_db
 @pytest.mark.parametrize("tab", list(AdminMentorTab))
 async def test_a_tab_reads_sessions_through_their_indexes(
     db_engine: AsyncEngine, tab: AdminMentorTab

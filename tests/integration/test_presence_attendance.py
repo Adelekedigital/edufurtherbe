@@ -158,6 +158,7 @@ async def test_a_sighting_inside_the_window_marks_the_party_present(
     assert (await party(db_engine, session["id"], "mentor"))["attendance_status"] == "pending"
 
 
+@pytest.mark.isolated_db
 @pytest.mark.usefixtures("door")
 async def test_the_earliest_sighting_is_kept_whatever_order_they_arrive_in(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine

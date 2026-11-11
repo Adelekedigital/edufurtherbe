@@ -127,6 +127,7 @@ async def test_the_mentee_reminds_the_mentor_once_and_the_mentor_is_emailed(
     ]
 
 
+@pytest.mark.isolated_db
 async def test_both_parties_read_when_the_reminder_was_sent(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -191,6 +192,7 @@ async def test_a_stranger_and_an_unknown_id_are_both_a_404(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_second_reminder_is_a_409_and_sends_nothing_more(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -270,6 +272,7 @@ async def test_a_reminder_already_sent_on_an_answered_request_says_not_pending(
     assert problem(refused) == "/problems/request-not-pending"
 
 
+@pytest.mark.isolated_db
 async def test_two_reminders_at_once_send_one_email(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

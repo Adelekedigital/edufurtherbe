@@ -6,19 +6,19 @@ Split from `test_migrations.py` by area when it reached the file-size limit
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
 
 def test_the_revocation_downgrade_refuses_to_reactivate_a_revoked_link(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Dropping `revoked_at` would switch every revoked link back on, with
     nobody choosing that. So `d7b2f4a8c615`'s downgrade stops while one is
     revoked, and proceeds once it is reactivated."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, "head")
+    migrate_to(disposable_database, "head")
     execute(
         disposable_database,
         """

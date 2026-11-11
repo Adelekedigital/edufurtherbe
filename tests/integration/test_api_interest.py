@@ -105,6 +105,7 @@ async def test_pressing_twice_is_pressing_once(
     assert len(await rows_for(db_engine, user)) == 1
 
 
+@pytest.mark.isolated_db
 async def test_a_repeat_press_does_not_move_when_they_asked(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

@@ -186,6 +186,7 @@ async def test_an_admin_can_unlist_an_approved_mentor(
     assert (reason, created_by) == ("admin_review", admin)
 
 
+@pytest.mark.isolated_db
 async def test_history_reads_newest_first(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

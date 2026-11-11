@@ -285,6 +285,7 @@ async def test_a_written_review_makes_the_nudge_a_no_op(world: World) -> None:
     assert [row["payload"].get("kind") for row in queued] == [None]
 
 
+@pytest.mark.isolated_db
 async def test_the_nudge_carries_its_kind(world: World) -> None:
     """**Without a `kind` the dedup index does not apply.**
 

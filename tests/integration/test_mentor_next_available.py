@@ -312,6 +312,7 @@ async def computed_at(engine: AsyncEngine, mentor: UUID) -> dt.datetime:
         return value.scalar_one()
 
 
+@pytest.mark.isolated_db
 async def test_a_fresh_value_is_left_until_it_reaches_the_maximum_age(
     db_engine: AsyncEngine,
 ) -> None:

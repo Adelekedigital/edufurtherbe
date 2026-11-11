@@ -580,11 +580,9 @@ async def test_a_deleted_account_cannot_be_paused(db_engine: AsyncEngine) -> Non
     assert await unlistings(db_engine, mentor) == 0
 
 
-async def test_the_pause_publishes_its_conflict() -> None:
+async def test_the_pause_publishes_its_conflict(openapi_spec: dict[str, Any]) -> None:
     """The generated client must have a branch for the admin-unlisted refusal."""
-    from app.main import create_app
-
-    spec = create_app(Settings(_env_file=None)).openapi()
+    spec = openapi_spec
     operation = next(
         ops["post"] for path, ops in spec["paths"].items() if path.endswith("/mentor-profile/pause")
     )

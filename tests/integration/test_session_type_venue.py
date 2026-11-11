@@ -305,6 +305,7 @@ async def _waiting(engine: AsyncEngine) -> bool:
         return found.first() is not None
 
 
+@pytest.mark.isolated_db
 async def test_a_pin_and_a_default_switch_wait_for_each_other_and_never_deadlock(
     db_engine: AsyncEngine,
 ) -> None:

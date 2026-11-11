@@ -10,6 +10,7 @@ from alembic import command
 from tests.integration.test_migrations import (
     MENTOR_WITH_OFFERING,
     ConfigFactory,
+    MigrateTo,
     execute,
     scalar,
 )
@@ -32,13 +33,13 @@ STARTERS = (
 
 
 def test_the_backfill_marks_only_a_live_intro_chat(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Onboarding's offering is a live one named exactly `Intro chat`; another
     name, another casing or a deleted one is not the starter."""
     url = disposable_database
     config = make_alembic_config(url)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(url, PREVIOUS)
     _offering(url, "onboarded@example.test", "Intro chat")
     _offering(url, "lower@example.test", "intro chat")
     _offering(url, "other@example.test", "SOP review")
@@ -61,11 +62,9 @@ SECOND_STARTER = (
 )
 
 
-def test_a_mentor_holds_one_live_starter(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_a_mentor_holds_one_live_starter(disposable_database: str, migrate_to: MigrateTo) -> None:
     url = disposable_database
-    command.upgrade(make_alembic_config(url), REVISION)
+    migrate_to(url, REVISION)
     _offering(url, "two@example.test", "Intro chat")
     execute(url, f"UPDATE session_types SET is_starter = true WHERE {OWNED_BY_TWO}")  # noqa: S608
 
@@ -89,11 +88,11 @@ HELP_AREA_ANSWER = """
 
 
 def test_the_downgrade_refuses_while_an_answer_holds_a_help_area(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     url = disposable_database
     config = make_alembic_config(url)
-    command.upgrade(config, REVISION)
+    migrate_to(url, REVISION)
     execute(url, HELP_AREA_ANSWER)
 
     with pytest.raises(Exception, match="hold help areas"):

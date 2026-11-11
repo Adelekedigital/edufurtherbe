@@ -394,6 +394,7 @@ async def test_a_file_cannot_be_sent_to_somebody_you_are_not_connected_with(
     )
 
 
+@pytest.mark.isolated_db
 async def test_two_sends_racing_for_one_file_attach_it_once(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

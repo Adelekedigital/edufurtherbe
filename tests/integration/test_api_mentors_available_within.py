@@ -93,6 +93,9 @@ async def test_lists_only_mentors_free_inside_the_window(
     assert await ids(api_client, "") == {str(inside), str(outside)}
 
 
+# A time one day out from the Python clock, filtered by the database's `now()`:
+# frozen at the transaction's start it falls a second short of the edge.
+@pytest.mark.isolated_db
 async def test_the_card_shows_the_time_the_filter_matched(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

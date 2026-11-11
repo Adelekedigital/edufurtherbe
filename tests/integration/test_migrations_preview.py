@@ -6,7 +6,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.preview import PAGE_PATH_MAX_LENGTH, REVEAL_REASON_MAX_LENGTH
 
@@ -77,15 +77,15 @@ def event(kind: str, **detail: str) -> str:
     return EVENT_ROW.format(session=PREVIEW, admin=ADMIN, target=TARGET, kind=kind, **values)
 
 
-def upgraded(url: str, config_factory: ConfigFactory) -> None:
-    command.upgrade(config_factory(url), REVISION)
+def upgraded(url: str, migrate_to: MigrateTo) -> None:
+    migrate_to(url, REVISION)
     execute(url, SEED)
 
 
 def test_a_session_ends_with_a_reason_and_never_previews_its_admin(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     execute(disposable_database, session(ended_at="now()", end_reason="'idle'"))
     assert (
@@ -105,12 +105,10 @@ def test_a_session_ends_with_a_reason_and_never_previews_its_admin(
         execute(disposable_database, session(target=ADMIN))
 
 
-def test_one_live_session_per_sign_in(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
+def test_one_live_session_per_sign_in(disposable_database: str, migrate_to: MigrateTo) -> None:
     """A second live preview in the same sign-in is refused; another sign-in, or
     the first one ended, is not."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(Exception, match="uq_preview_sessions_live"):
         execute(disposable_database, session(sign_in=SIGN_IN))
@@ -127,9 +125,9 @@ def test_one_live_session_per_sign_in(
 
 
 def test_each_event_kind_carries_its_own_detail_and_only_it(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     for kind, detail in VALID.items():
         execute(disposable_database, event(kind, **detail))
@@ -158,10 +156,8 @@ def test_each_event_kind_carries_its_own_detail_and_only_it(
             execute(disposable_database, statement)
 
 
-def test_a_path_and_a_reason_are_bounded(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    upgraded(disposable_database, make_alembic_config)
+def test_a_path_and_a_reason_are_bounded(disposable_database: str, migrate_to: MigrateTo) -> None:
+    upgraded(disposable_database, migrate_to)
     longest_path = "'/" + "p" * (PAGE_PATH_MAX_LENGTH - 1) + "'"
     longest_reason = "'" + "r" * REVEAL_REASON_MAX_LENGTH + "'"
 
@@ -182,11 +178,11 @@ def test_a_path_and_a_reason_are_bounded(
 
 
 def test_the_constraints_name_the_bounds_the_code_reads(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The migration spells the bounds out; this pins them to the constants the
     API and the model read, so the two cannot drift."""
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
 
     definition = (
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_preview_events_{}'"
@@ -210,9 +206,9 @@ def test_the_constraints_name_the_bounds_the_code_reads(
 
 
 def test_nobody_is_deleted_out_from_under_a_preview_or_its_log(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, event("start"))
 
     with pytest.raises(Exception, match="fk_preview_events_session_id_preview_sessions"):
@@ -224,11 +220,11 @@ def test_nobody_is_deleted_out_from_under_a_preview_or_its_log(
 
 
 def test_the_event_log_holds_its_own_people(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The log's own user keys restrict, as the session's do: a row names who
     did it and to whom."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, event("start"))
 
     constraint = (
@@ -238,10 +234,8 @@ def test_the_event_log_holds_its_own_people(
         assert scalar(disposable_database, constraint.format(column)) == "r"
 
 
-def test_updated_at_moves_on_a_session(
-    disposable_database: str, make_alembic_config: ConfigFactory
-) -> None:
-    upgraded(disposable_database, make_alembic_config)
+def test_updated_at_moves_on_a_session(disposable_database: str, migrate_to: MigrateTo) -> None:
+    upgraded(disposable_database, migrate_to)
     execute(
         disposable_database, "UPDATE preview_sessions SET updated_at = now() - interval '1 day'"
     )
@@ -252,10 +246,10 @@ def test_updated_at_moves_on_a_session(
 
 
 def test_the_downgrade_removes_the_tables_and_refuses_over_rows(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(RuntimeError, match="preview_sessions is not empty"):
         command.downgrade(config, PREVIOUS)

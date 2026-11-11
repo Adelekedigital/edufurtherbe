@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from sqlalchemy import CheckConstraint, Table
 
@@ -64,14 +66,14 @@ def test_every_duration_check_is_the_one_range(table: Table, name: str) -> None:
 
 
 @pytest.mark.parametrize("schema", ["MentorSessionTypeWrite", "MentorSessionTypePatch"])
-def test_the_published_venues_are_the_ones_an_offering_may_hold(schema: str) -> None:
+def test_the_published_venues_are_the_ones_an_offering_may_hold(
+    schema: str, openapi_spec: dict[str, Any]
+) -> None:
     """Decision 289: a generated client offers `daily` and `google_meet` and no
     `custom`, from the same constant the validator refuses against."""
-    from app.core.config import Settings
     from app.domain.meetings import OFFERING_VENUES
-    from app.main import create_app
 
-    spec = create_app(Settings(_env_file=None)).openapi()["components"]["schemas"]  # type: ignore[call-arg]
+    spec = openapi_spec["components"]["schemas"]
     field = spec[schema]["properties"]["meeting_venue"]
 
     assert "meeting_venue" not in spec[schema].get("required", [])

@@ -280,6 +280,7 @@ async def test_a_lapsed_hold_releases_the_time_to_everyone(
     assert (await suggestion_of(api_client, booking))["status"] == "expired"
 
 
+@pytest.mark.isolated_db
 async def test_a_booking_racing_a_suggestion_is_refused_at_the_lock(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -723,6 +724,7 @@ async def test_the_earliest_time_stays_bookable_through_the_hold(
     assert (await suggestion_of(api_client, booking))["status"] == "booked"
 
 
+@pytest.mark.isolated_db
 async def test_a_stranger_racing_into_the_held_break_is_refused_at_the_lock(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

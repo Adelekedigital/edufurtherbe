@@ -10,7 +10,7 @@ import asyncpg
 import pytest
 import sqlalchemy.exc
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -41,13 +41,13 @@ _ACCOUNT_DELETED_EVENT = """
 
 
 def test_a_purge_date_must_follow_a_deletion(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """The guard applies over rows that exist before it, then refuses a purge
     date on a live account or one not after the deletion, either of which the
     purge job would delete early. A date after the deletion is accepted."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, _USER.format(tag="live", deleted_at="NULL"))
     execute(disposable_database, _USER.format(tag="deleted", deleted_at="now()"))
 
@@ -66,12 +66,12 @@ def test_a_purge_date_must_follow_a_deletion(
 
 
 def test_the_downgrade_refuses_while_an_account_awaits_its_purge(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Dropping the column would leave a deletion its owner asked for unpurged
     forever. With none pending, the column and its guard go."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, _USER.format(tag="deleted", deleted_at="now()"))
     execute(disposable_database, _PURGE_AT.format(at="now() + interval '30 days'", tag="deleted"))
 
@@ -99,12 +99,12 @@ def test_the_downgrade_refuses_while_an_account_awaits_its_purge(
 
 
 def test_the_account_deleted_reason_code_and_back(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """The migration admits `account_deleted`, and its downgrade refuses while an
     event carries it rather than rewriting the code (the `other` precedent)."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, _SESSION)
     with pytest.raises(asyncpg.CheckViolationError, match="reason_code_is_known"):
         execute(disposable_database, _ACCOUNT_DELETED_EVENT)

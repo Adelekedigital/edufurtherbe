@@ -9,7 +9,7 @@ import asyncpg
 import pytest
 from alembic import command
 from sqlalchemy.exc import IntegrityError
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.notifications import Channel
 
@@ -33,9 +33,9 @@ def row(destination: Channel) -> str:
 
 
 def test_an_email_and_a_push_for_one_reminder_both_stay(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
 
     execute(disposable_database, row(Channel.EMAIL))
     execute(disposable_database, row(Channel.PUSH))
@@ -44,9 +44,9 @@ def test_an_email_and_a_push_for_one_reminder_both_stay(
 
 
 def test_the_same_reminder_twice_on_one_channel_is_still_refused(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    command.upgrade(make_alembic_config(disposable_database), REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, row(Channel.PUSH))
 
     with pytest.raises(asyncpg.UniqueViolationError):
@@ -54,10 +54,10 @@ def test_the_same_reminder_twice_on_one_channel_is_still_refused(
 
 
 def test_downgrade_restores_the_index_without_the_channel(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     command.downgrade(config, PREVIOUS)
     execute(disposable_database, row(Channel.EMAIL))
 
@@ -66,10 +66,10 @@ def test_downgrade_restores_the_index_without_the_channel(
 
 
 def test_downgrade_fails_and_keeps_both_rows_when_a_reminder_is_on_two_channels(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, REVISION)
+    migrate_to(disposable_database, REVISION)
     execute(disposable_database, row(Channel.EMAIL))
     execute(disposable_database, row(Channel.PUSH))
 

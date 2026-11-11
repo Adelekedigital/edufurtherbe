@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 pytestmark = pytest.mark.db
 
@@ -108,10 +108,10 @@ def stored(url: str, index: int) -> tuple[list[Any], Any, Any]:
 
 
 def test_every_stored_stage_becomes_one_of_the_six(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     seed(disposable_database)
 
     command.upgrade(config, REVISION)
@@ -121,12 +121,12 @@ def test_every_stored_stage_becomes_one_of_the_six(
 
 
 def test_running_it_on_current_data_changes_nothing(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """Idempotent in effect: a type already on the six keeps its rows and its
     `updated_at`, so an offering nobody touched shows no edit."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     seed(disposable_database)
     current = list(CASES).index("already-current")
     before = scalar(

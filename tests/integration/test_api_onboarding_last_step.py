@@ -92,6 +92,7 @@ async def test_moving_back_records_the_value_sent(
     assert (await stored(db_engine, user_id)).last_step == "help"
 
 
+@pytest.mark.isolated_db
 async def test_a_finished_onboarding_keeps_its_completed_at(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
@@ -201,6 +202,7 @@ async def test_no_token_is_a_401(api_client: httpx.AsyncClient) -> None:
     assert response.status_code == 401
 
 
+@pytest.mark.isolated_db
 async def test_two_first_saves_racing_both_land(db_engine: AsyncEngine) -> None:
     """The second insert waits on the first's unique `user_id` and then updates
     it. A read-then-insert would see no row in both and fail the second with a

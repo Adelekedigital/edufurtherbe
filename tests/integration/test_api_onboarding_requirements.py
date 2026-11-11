@@ -194,6 +194,7 @@ async def test_a_saved_step_is_not_complete(
     assert await onboarding_on_me(api_client, auth_id) == {"complete": False, "missing": []}
 
 
+@pytest.mark.isolated_db
 async def test_a_retry_stays_200_after_an_answer_is_cleared(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

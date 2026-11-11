@@ -10,7 +10,7 @@ import datetime as dt
 
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.credits import end_of_month
 
@@ -48,13 +48,13 @@ OTHER_NULLS = (
 
 
 def test_a_held_starter_gets_this_month_and_a_spent_one_its_own(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     """The held starter is this period's level-1 credit; the spent one, from
     September, dies with September — given this month's end it would count as
     this month's payment and leave the month owing nothing."""
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, SEED)
 
     command.upgrade(config, REVISION)
@@ -69,10 +69,10 @@ def test_a_held_starter_gets_this_month_and_a_spent_one_its_own(
 
 
 def test_the_downgrade_restores_never_expiring_starters(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
     config = make_alembic_config(disposable_database)
-    command.upgrade(config, PREVIOUS)
+    migrate_to(disposable_database, PREVIOUS)
     execute(disposable_database, SEED)
     command.upgrade(config, REVISION)
 

@@ -268,6 +268,7 @@ async def test_patching_reorders_the_same_stages(
     assert row["application_stages"] == [APPLYING, PREPARING]
 
 
+@pytest.mark.isolated_db
 async def test_two_concurrent_edits_of_one_offering_serialise(db_engine: AsyncEngine) -> None:
     """**The row lock in `update_session_type`.** Two edits replacing the set at
     once: without it the second inserts into rows the first has not committed,

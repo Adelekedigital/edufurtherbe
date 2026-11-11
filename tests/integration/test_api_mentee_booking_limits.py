@@ -223,6 +223,7 @@ async def test_an_ended_session_does_not_block_the_same_time(db_engine: AsyncEng
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_two_bookings_racing_past_the_cap_are_serialised(db_engine: AsyncEngine) -> None:
     """The lock is what holds the count. The mentee already has one live session;
     two transactions each check for a second. Without the lock both would see

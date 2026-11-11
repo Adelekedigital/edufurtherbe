@@ -404,6 +404,7 @@ async def test_a_start_ends_a_lapsed_preview_as_it_lapsed_not_as_exit(
     assert [(e["kind"], e["end_reason"]) for e in log] == [("start", None), ("end", "idle")]
 
 
+@pytest.mark.isolated_db
 async def test_two_starts_at_once_in_one_sign_in_queue_and_leave_one_live(
     db_engine: AsyncEngine,
 ) -> None:
@@ -498,6 +499,7 @@ async def test_a_preview_is_only_its_owners_in_their_sign_in(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_a_switch_previews_another_user_and_clears_the_reveal(
     client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -772,6 +774,7 @@ async def test_me_says_whether_the_caller_may_preview(
     assert response.json()["can_preview_as_user"] is expected
 
 
+@pytest.mark.isolated_db
 async def test_the_preview_lookup_is_by_primary_key(db_engine: AsyncEngine) -> None:
     """The guardrail's `EXPLAIN` on the store's own statement. `enable_seqscan =
     off` asks whether a usable index exists, not what the planner picks over a

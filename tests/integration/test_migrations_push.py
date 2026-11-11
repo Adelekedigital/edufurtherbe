@@ -7,7 +7,7 @@ Split from `test_migrations.py` by area, as the file-size limit asks
 import asyncpg
 import pytest
 from alembic import command
-from tests.integration.test_migrations import ConfigFactory, execute, scalar
+from tests.integration.test_migrations import ConfigFactory, MigrateTo, execute, scalar
 
 from app.domain.push import (
     AUTH_MAX_LENGTH,
@@ -46,16 +46,16 @@ def row(
     return ROW.format(user, endpoint, p256dh, auth)
 
 
-def upgraded(url: str, config_factory: ConfigFactory) -> None:
-    command.upgrade(config_factory(url), REVISION)
+def upgraded(url: str, migrate_to: MigrateTo) -> None:
+    migrate_to(url, REVISION)
     execute(url, SEED)
 
 
 @pytest.mark.parametrize("second_owner", [ALICE, BOB])
 def test_a_subscription_is_stored_once_per_endpoint_whoever_owns_it(
-    disposable_database: str, make_alembic_config: ConfigFactory, second_owner: str
+    disposable_database: str, migrate_to: MigrateTo, second_owner: str
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     execute(disposable_database, row())
     assert (
@@ -88,9 +88,9 @@ def test_a_subscription_is_stored_once_per_endpoint_whoever_owns_it(
     ],
 )
 def test_the_database_refuses_a_subscription_out_of_bounds(
-    disposable_database: str, make_alembic_config: ConfigFactory, bad: dict[str, str]
+    disposable_database: str, migrate_to: MigrateTo, bad: dict[str, str]
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     with pytest.raises(asyncpg.CheckViolationError):
         execute(disposable_database, row(**bad))
@@ -98,9 +98,9 @@ def test_the_database_refuses_a_subscription_out_of_bounds(
 
 
 def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     longest = "https://" + "e" * (ENDPOINT_MAX_LENGTH - 8)
     execute(
@@ -112,9 +112,9 @@ def test_the_bounds_are_the_domains_and_both_edges_are_allowed(
 
 
 def test_deleting_a_user_deletes_their_subscriptions(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, row(user=ALICE))
     execute(disposable_database, row(user=BOB, endpoint=ENDPOINT + "-bob"))
 
@@ -125,9 +125,9 @@ def test_deleting_a_user_deletes_their_subscriptions(
 
 
 def test_an_update_moves_updated_at_and_a_users_rows_are_indexed(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, row())
     execute(
         disposable_database,
@@ -145,9 +145,9 @@ def test_an_update_moves_updated_at_and_a_users_rows_are_indexed(
 
 
 def test_the_downgrade_drops_the_table(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, make_alembic_config: ConfigFactory, migrate_to: MigrateTo
 ) -> None:
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
     execute(disposable_database, row())
 
     command.downgrade(make_alembic_config(disposable_database), PREVIOUS)
@@ -156,11 +156,11 @@ def test_the_downgrade_drops_the_table(
 
 
 def test_the_endpoint_constraint_spells_the_domains_pattern(
-    disposable_database: str, make_alembic_config: ConfigFactory
+    disposable_database: str, migrate_to: MigrateTo
 ) -> None:
     """The migration spells the pattern out; this pins it to the constant the
     model (and the request model) reads."""
-    upgraded(disposable_database, make_alembic_config)
+    upgraded(disposable_database, migrate_to)
 
     body = scalar(
         disposable_database,

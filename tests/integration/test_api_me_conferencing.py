@@ -7,6 +7,7 @@ mentor who never chose gets from the platform: EduFurther video, `daily`
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
@@ -184,14 +185,14 @@ async def test_the_routes_name_no_user_but_the_caller() -> None:
     assert {route.path for route in router.routes} == {URL}  # type: ignore[attr-defined]
 
 
-async def test_every_published_fallback_names_the_platform_default() -> None:
+async def test_every_published_fallback_names_the_platform_default(
+    openapi_spec: dict[str, Any],
+) -> None:
     """The offering descriptions quote the fallback from the constant that
     resolves it, so the spec cannot promise a provider the runtime no longer uses."""
-    from app.core.config import Settings
     from app.domain.meetings import PLATFORM_DEFAULT_PROVIDER
-    from app.main import create_app
 
-    spec = create_app(Settings(_env_file=None)).openapi()
+    spec = openapi_spec
     schemas = spec["components"]["schemas"]
     texts = [
         schemas["SessionTypeRead"]["properties"]["meeting_venue"]["description"],

@@ -249,10 +249,12 @@ async def test_a_locked_app_answers_a_machine_route_as_an_unlocked_one_does(path
     assert DETAIL not in locked.text
 
 
-def test_every_route_is_locked_unless_it_is_a_named_machine_route() -> None:
+def test_every_route_is_locked_unless_it_is_a_named_machine_route(
+    openapi_spec: dict[str, Any],
+) -> None:
     """Pinned rather than derived: a new route under an exempt prefix, or outside
     `/api/`, changes this list, so adding one is a decision somebody reviews."""
-    paths = create_app(settings()).openapi()["paths"]
+    paths = openapi_spec["paths"]
     lock = EdgeProxyMiddleware(Recorder(), secrets=(CURRENT,), exempt=EDGE_PROXY_EXEMPT)
 
     unlocked = sorted(

@@ -595,6 +595,7 @@ async def test_an_expired_key_is_reclaimed_rather_than_replayed(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.isolated_db
 async def test_the_exclusion_constraint_refuses_a_genuine_race(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:

@@ -565,6 +565,7 @@ async def plan_of(engine: AsyncEngine, **kwargs: Any) -> str:
     return "\n".join(row[0] for row in rows)
 
 
+@pytest.mark.isolated_db
 async def test_the_log_and_a_history_read_an_index(db_engine: AsyncEngine) -> None:
     """The guardrail, at 48,000 ledger rows (1,200 mentees with 40 each): the
     log walks `ix_credit_transactions_created` newest first, and one mentee's

@@ -13,13 +13,6 @@ from typing import Any
 
 import pytest
 
-from app.core.config import Settings
-from app.main import create_app
-
-
-def spec() -> dict[str, Any]:
-    return dict(create_app(Settings(_env_file=None)).openapi())
-
 
 @pytest.mark.parametrize(
     ("schema", "required"),
@@ -31,10 +24,12 @@ def spec() -> dict[str, Any]:
         ("UserLanguageWrite", ["language_id"]),
     ],
 )
-def test_a_patch_body_publishes_no_defaults(schema: str, required: list[str]) -> None:
+def test_a_patch_body_publishes_no_defaults(
+    schema: str, required: list[str], openapi_spec: dict[str, Any]
+) -> None:
     """`MentorProfileWrite` is the create body too, and it holds there as well:
     both routes dump with `exclude_unset`, and each column has its own default."""
-    body = spec()["components"]["schemas"][schema]
+    body = openapi_spec["components"]["schemas"][schema]
 
     defaulted = sorted(
         name for name, prop in body["properties"].items() if prop.get("default") is not None
