@@ -2,7 +2,9 @@
 
 One row per person, replaced in place, and **only ever the caller's**: every
 statement names `user_id` in its `WHERE` or its insert, so nobody can read or
-write another person's answer (non-negotiable 5).
+write another person's answer (non-negotiable 5). `consent_accepted` is the
+one rule of what an answer means, and is read only inside an admin figure's
+count (decision 338), never to return anyone's answer.
 """
 
 from __future__ import annotations
@@ -16,9 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.legal import AnalyticsConsent
 
-__all__ = ["consent_of", "record_consent"]
+__all__ = ["consent_accepted", "consent_of", "record_consent"]
 
 _COLUMNS = (AnalyticsConsent.granted, AnalyticsConsent.version, AnalyticsConsent.updated_at)
+
+
+def consent_accepted(user_id: Any) -> Any:
+    """`EXISTS`: ``user_id`` accepted analytics, so the vendor knows them by
+    their id (decision 329); without it they are cookieless to it."""
+    return (
+        select(AnalyticsConsent.id)
+        .where(AnalyticsConsent.user_id == user_id, AnalyticsConsent.granted.is_(True))
+        .exists()
+    )
 
 
 async def consent_of(session: AsyncSession, user_id: UUID) -> Any | None:

@@ -34,7 +34,7 @@ from app.domain.analytics import (
     SupplyTab,
 )
 from app.domain.analytics_behaviour import BehaviourTab, FunnelName, FunnelTab
-from app.domain.enums import MissedReason, ProfileViewSource
+from app.domain.enums import FunnelFigureUnit, FunnelLayer, MissedReason, ProfileViewSource
 
 
 class WindowRead(BaseModel):
@@ -533,6 +533,28 @@ class FunnelStepRead(BaseModel):
     label: str
     value: int | None = Field(description="People who reached it; null when nothing tracks it.")
     previous: int | None = Field(description="The previous period's; null with `compare=false`.")
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    layer: FunnelLayer = Field(
+        default=FunnelLayer.PRIMARY,
+        description=(
+            "The row it is drawn in: `primary`, the funnel's path, or `secondary`, "
+            "its outcomes. A funnel with one row has every step `primary`."
+        ),
+    )
+
+
+class FunnelFigureRead(BaseModel):
+    """A figure shown beside a funnel, for the same people and window."""
+
+    key: str
+    label: str = Field(description="Shown verbatim.")
+    value: float | None = Field(description="Null with nothing to measure.")
+    previous: float | None = Field(
+        description="The previous period's; null with `compare=false` or nothing to measure."
+    )
+    unit: FunnelFigureUnit = Field(
+        description="`days`, one decimal, or `percent`, 0-100 with one decimal."
+    )
 
 
 class AnalyticsFunnelRead(SectionRead):
@@ -543,6 +565,23 @@ class AnalyticsFunnelRead(SectionRead):
     note: str = Field(description="The funnel's footer note.")
     window_days: int = Field(description="Days a person has from the first step to the last.")
     steps: list[FunnelStepRead] = Field(description="Every step, in order.")
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    figures: list[FunnelFigureRead] = Field(
+        default_factory=list,
+        description=(
+            "Figures beside the funnel, in order; empty for a funnel with none. "
+            "`mentor_activation`: `days_to_bookable`, the median days from approval "
+            "to the first moment weekly hours and a published session type of their "
+            "own stood at the same time, of those who got there; "
+            "`calendar_connected`, % of the mentors approved who connected a "
+            "calendar before 30 days from approval; `profile_link_shared`, % of the "
+            "mentors approved with analytics on who shared their own profile link "
+            "within 30 days of approval (PostHog `link_shared` with `own` true, so "
+            "counted only since the frontend added that flag), null when none has "
+            "analytics on or PostHog does not answer. `mentor_application`: "
+            "`median_review_days` (the Supply tab's, for decisions made in the window)."
+        ),
+    )
 
     @classmethod
     def of(cls, period: Period, alerts: list[Alert], tab: FunnelTab) -> AnalyticsFunnelRead:
@@ -557,12 +596,23 @@ class AnalyticsFunnelRead(SectionRead):
                 FunnelStepRead(
                     key=step.key,
                     label=step.label,
+                    layer=step.layer,
                     value=None if step.count is None else int(step.count.value or 0),
                     previous=None
                     if step.count is None or step.count.previous is None
                     else int(step.count.previous),
                 )
                 for step in tab.steps
+            ],
+            figures=[
+                FunnelFigureRead(
+                    key=f.key,
+                    label=f.label,
+                    value=f.value.value,
+                    previous=f.value.previous,
+                    unit=f.unit,
+                )
+                for f in tab.figures
             ],
         )
 

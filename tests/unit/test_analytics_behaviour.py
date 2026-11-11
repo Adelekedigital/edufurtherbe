@@ -34,8 +34,10 @@ from app.domain.analytics_behaviour import (
     BehaviourFigures,
     Counted,
     ExploreFigures,
+    Funnel,
     LoginCodes,
     Searchers,
+    Step,
     behaviour_tab,
     breakdown_for,
     explore_feature,
@@ -84,18 +86,33 @@ def event(key: str, value: str) -> dict[str, Any]:
 
 
 STEPS = {
-    "signup": "started code_verified onboarded first_booking_or_bookable first_completed",
+    "signup": "started code_verified onboarded",
     "booking": "started type time questions requested completed",
-    "mentee_activation": "signed_up onboarded first_request first_session",
-    "mentor_activation": "approved availability_set session_type_created conferencing_connected "
-    "first_session",
+    "mentee_activation": "onboarded first_request first_session",
+    "mentor_activation": "approved availability_set session_type_created first_booking_received "
+    "first_session_delivered",
     "mentor_application": "started about_you education hours submitted approved",
+}
+#: Each funnel's steps' layers, in order (decision 338): `p` primary, `s` secondary.
+LAYERS = {
+    "signup": "ppp",
+    "booking": "pppppp",
+    "mentee_activation": "pps",
+    "mentor_activation": "pppss",
+    "mentor_application": "pppppp",
+}
+#: Steps decision 338 dropped: gone for good, never renamed onto another.
+DROPPED = {
+    "signup": ("first_booking_or_bookable", "first_completed"),
+    "mentee_activation": ("signed_up",),
+    "mentor_activation": ("conferencing_connected", "first_session"),
 }
 WINDOWS = {"signup": 30, "booking": 60, "mentee_activation": 14, "mentor_activation": 30}
 BY = {
     "signup": "all mentee mentor invite direct campaign migrated",
     "booking": "all mentor_profile explore home onboarding_guest rebook_after_review",
     "mentee_activation": "all invite direct",
+    "mentor_activation": "all invite direct",
 }
 
 
@@ -105,6 +122,21 @@ def test_each_funnel_has_its_steps_window_and_own_breakdowns(name: str) -> None:
     assert " ".join(s.key for s in funnel.steps) == STEPS[name]
     assert funnel.window_days == WINDOWS.get(name, 30)
     assert " ".join(funnel.by) == BY.get(name, "all")
+
+
+@pytest.mark.parametrize("name", STEPS)
+def test_each_step_is_drawn_in_its_layer_and_dropped_steps_are_gone(name: str) -> None:
+    funnel = FUNNELS[name]  # type: ignore[index]
+    assert "".join(s.layer.value[0] for s in funnel.steps) == LAYERS[name]
+    assert not {s.key for s in funnel.steps} & set(DROPPED.get(name, ()))
+    tab = funnel_tab(funnel, "all", [0] * len(funnel.steps), None)
+    assert [s.layer for s in tab.steps] == [s.layer for s in funnel.steps]
+
+
+def test_only_mentor_activation_is_counted_from_the_database() -> None:
+    assert [f.name for f in FUNNELS.values() if f.in_database] == ["mentor_activation"]
+    # Nothing in it names an event: PostHog is never asked for it.
+    assert FUNNELS["mentor_activation"].tracked == ()
 
 
 def test_the_five_funnels_in_order() -> None:
@@ -136,27 +168,36 @@ def test_an_unknown_funnel_is_not_found() -> None:
         funnel_named("sign_up")
 
 
-def test_mentee_activation_starts_when_sign_up_does() -> None:
+def test_mentee_activation_starts_when_onboarding_is_done() -> None:
     first = FUNNELS["mentee_activation"].steps[0]
-    assert (first.key, first.label, first.events) == ("signed_up", "Signed up", ("signup_started",))
-    assert first.events == FUNNELS["signup"].steps[0].events
+    assert (first.key, first.label, first.events) == (
+        "onboarded",
+        "Onboarding done",
+        ("onboarding_completed",),
+    )
+    assert first.events == FUNNELS["signup"].steps[-1].events
+    assert FUNNELS["mentee_activation"].note == "Target window: 14 days from onboarding."
 
 
 def test_only_a_trailing_step_is_untracked() -> None:
     for funnel in FUNNELS.values():
         tracked = [bool(step.events) for step in funnel.steps]
         assert tracked == sorted(tracked, reverse=True), funnel.name
-    assert [s.key for s in FUNNELS["mentor_activation"].tracked][-1] == "conferencing_connected"
 
 
 def test_a_funnel_tab_compares_and_leaves_an_untracked_step_null() -> None:
-    funnel = FUNNELS["mentor_activation"]
-    tab = funnel_tab(funnel, "all", [10, 8, 6, 4], [9, 7, 5, 3])
-    assert [s.count.value if s.count else None for s in tab.steps] == [10, 8, 6, 4, None]
-    assert [s.count.previous if s.count else None for s in tab.steps] == [9, 7, 5, 3, None]
-    alone = funnel_tab(funnel, "all", [10, 8, 6, 4], None)
+    funnel = Funnel(
+        name="signup",
+        steps=(Step("a", "A", ("signup_started",)), Step("b", "B", ())),
+        window_days=1,
+        note="Note.",
+    )
+    tab = funnel_tab(funnel, "all", [10], [9])
+    assert [s.count.value if s.count else None for s in tab.steps] == [10, None]
+    assert [s.count.previous if s.count else None for s in tab.steps] == [9, None]
+    alone = funnel_tab(funnel, "all", [10], None)
     assert alone.steps[0].count is not None and alone.steps[0].count.previous is None
-    assert tab.note == "Bookable target: 7 days from approval."
+    assert (tab.note, tab.figures) == ("Note.", [])
 
 
 @pytest.mark.parametrize(("attempts", "failed"), [(100, 10), (0, 0)])
@@ -244,8 +285,8 @@ def test_the_explore_card_is_searchers_who_went_on_over_searchers() -> None:
 
 
 def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
-    read, seen = posthog_reader(lambda _: funnel_answer(50, 40, 30, 20, 10))
-    assert read.funnel(FUNNELS["signup"], "migrated", WINDOW, INTERNAL) == [50, 40, 30, 20, 10]
+    read, seen = posthog_reader(lambda _: funnel_answer(50, 40, 30))
+    assert read.funnel(FUNNELS["signup"], "migrated", WINDOW, INTERNAL) == [50, 40, 30]
     (request,) = seen
     assert request.method == "POST"
     assert str(request.url) == f"{HOST}/api/projects/42/query/"
@@ -263,7 +304,7 @@ def test_a_funnel_is_a_funnels_query_to_the_private_query_api() -> None:
     left_out = {"type": "hogql", "key": LEFT_OUT}
     assert query["properties"] == [left_out, person("signup_source", "migrated")]
     events = [node["event"] for node in query["series"]]
-    assert events == ["signup_started", None, "onboarding_completed", None, "session_completed"]
+    assert events == ["signup_started", None, "onboarding_completed"]
     either = "event IN ('login_code_verified', 'google_oauth_completed')"
     assert query["series"][1]["properties"] == [{"type": "hogql", "key": either}]
 
@@ -281,7 +322,7 @@ def test_an_entry_point_narrows_the_first_booking_step_and_requests_are_the_serv
 
 
 def test_mentee_activation_counts_new_mentees_only() -> None:
-    read, seen = posthog_reader(lambda _: funnel_answer(4, 3, 2, 1))
+    read, seen = posthog_reader(lambda _: funnel_answer(3, 2, 1))
     read.funnel(FUNNELS["mentee_activation"], "invite", WINDOW, INTERNAL)
     assert body_of(seen[0])["query"]["properties"] == [
         {"type": "hogql", "key": LEFT_OUT},
@@ -579,7 +620,7 @@ def test_the_optional_reads_are_quick_and_the_tab_reads_wait_for_posthog() -> No
     def handler(request: httpx.Request) -> httpx.Response:
         timeouts.append(request.extensions["timeout"])
         if body_of(request)["query"]["kind"] == "FunnelsQuery":
-            return funnel_answer(5, 4, 3, 2, 1)
+            return funnel_answer(5, 4, 3)
         return rows(LOGIN, [1, 0, 0])
 
     read, _ = posthog_reader(handler)
@@ -648,6 +689,7 @@ def test_the_null_reader_refuses_every_read() -> None:
         lambda: null.behaviour(WINDOW, INTERNAL),
         lambda: null.explore([WINDOW], INTERNAL),
         lambda: null.login_codes(WINDOW, INTERNAL),
+        lambda: null.profile_links_shared([(ADMIN, WINDOW.since)], INTERNAL),
     ):
         with pytest.raises(AnalyticsUpstreamError):
             read()
