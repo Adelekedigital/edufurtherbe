@@ -41,9 +41,15 @@ jobs:
       - name: Format, lint, types, layers, size
         run: uv run python scripts/check.py --only format,lint,types,layers,size
 
+      # The shards split files found by pyproject's testpaths and python_files;
+      # this fails when that list and pytest's own collection disagree.
+      - name: Shards cover pytest's collection
+        run: uv run python scripts/check.py --check-shard-files
+
   # Decides whether the test shards run. A pull request whose every file is
-  # docs/ or markdown skips them, and `Tests` below still reports a status, so
-  # nothing waits on a check that never comes. Not `paths-ignore`, which would
+  # under docs/, or markdown at the root or under .claude/, skips them; a .md
+  # anywhere else (src/, tests/) is code. `Tests` below still reports a status,
+  # so nothing waits on a check that never comes. Not `paths-ignore`, which would
   # make the checks vanish instead. Anything else, a push or a manual run
   # included, runs the shards.
   changes:
@@ -72,7 +78,7 @@ jobs:
           files=$(git diff --name-only --no-renames "$BASE...$HEAD")
           printf '%s\n' "$files"
           # An empty diff runs the shards: "nothing changed" is not "docs only".
-          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then
+          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|^[^/]+\.md$|^\.claude/.+\.md$'; then
             echo "code=false" >> "$GITHUB_OUTPUT"
             echo "Docs only: the test shards are skipped; Tests runs the unit tier."
           else
@@ -97,9 +103,13 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          # The whole PR, as the first /code-reviewer run sees it.
+          # The whole PR, as the first /code-reviewer run sees it, counted by
+          # the base branch's script as the reviewer does; the PR's own copy only
+          # while the base has none.
           from=$(git merge-base "$BASE" "$HEAD")
-          size=$(bash scripts/review_diff.sh "$from" "$HEAD" "$RUNNER_TEMP/pr.diff")
+          counter="$RUNNER_TEMP/review_diff.sh"
+          git show "$BASE:scripts/review_diff.sh" > "$counter" 2>/dev/null || cp scripts/review_diff.sh "$counter"
+          size=$(bash "$counter" "$from" "$HEAD" "$RUNNER_TEMP/pr.diff")
           lines=$(printf '%s\n' "$size" | sed -n 's/^lines=//p')
           max=$(printf '%s\n' "$size" | sed -n 's/^max=//p')
           echo "$lines reviewed lines (limit $max)."
@@ -202,6 +212,8 @@ jobs:
             .coverage.shard-${{ matrix.shard }}
             junit-shard-${{ matrix.shard }}.xml
           include-hidden-files: true
+          # A re-run of a failed shard replaces its data rather than clashing.
+          overwrite: true
           if-no-files-found: error
           retention-days: 3
 
@@ -252,7 +264,7 @@ jobs:
 
       - name: Unit tests (docs only)
         if: needs.changes.outputs.code == 'false'
-        run: uv run python scripts/check.py --fast
+        run: uv run python scripts/check.py --only tests-unit
 
       - name: Upload coverage
         if: always() && needs.changes.outputs.code == 'true'

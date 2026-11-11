@@ -192,9 +192,13 @@ jobs:
           # What is reviewed, and the size limit, are scripts/review_diff.sh,
           # which ci.yml's review-size check runs too. Taken from the base
           # branch like the prompt: this job's later steps hold the keys, so
-          # nothing from the pull request itself is ever executed here.
-          if ! git show "origin/$BASE_REF:scripts/review_diff.sh" > code-review/review_diff.sh 2>/dev/null; then
-            echo "::error::scripts/review_diff.sh is not on $BASE_REF."
+          # nothing from the pull request itself is ever executed here. A base
+          # that predates the script (a stacked PR, a release PR against an
+          # older main) uses the copy in this workflow's own commit, the
+          # default branch's, which holds it whenever this file does.
+          if ! git show "origin/$BASE_REF:scripts/review_diff.sh" > code-review/review_diff.sh 2>/dev/null &&
+             ! git show "$GITHUB_SHA:scripts/review_diff.sh" > code-review/review_diff.sh 2>/dev/null; then
+            echo "::error::scripts/review_diff.sh is on neither $BASE_REF nor $GITHUB_SHA."
             exit 1
           fi
           bash code-review/review_diff.sh "$from" "$HEAD" code-review/pr.diff > code-review/size.txt
@@ -272,17 +276,23 @@ jobs:
               claude -p --restricted --strict-mcp-config \
               --tools "Read,Grep,Glob" --output-format text \
               --max-budget-usd "$CLAUDE_MAX_BUDGET_USD" "$@" \
-              < code-review/prompt.md > code-review/result.md 2> code-review/stderr.txt || rc=$?
+              < code-review/prompt.md > code-review/result.md 2> "$STDERR" || rc=$?
             return "$rc"
           }
+          # Outside the checkout, so the next reviewer leg cannot Read it.
+          STDERR="$RUNNER_TEMP/reviewer-stderr.txt"
 
-          # Why a leg did not complete, as a category only: the CLI's output is
-          # matched, never printed. The same patterns, in the same order, as the
-          # frontend repository's reviewer (FE #545); stderr is matched too,
-          # because here it is captured apart from the review.
+          # Why a leg did not complete, as a category only: matched, never
+          # printed, and deleted once classified. The same patterns, in the same
+          # order, as the frontend repository's reviewer (FE #545). Matched
+          # against stderr and the last line of stdout only: print mode reports
+          # an in-run failure (credit, key, model) as its result on stdout, and
+          # the review prose above it, where "PR #401" or "payment" is ordinary,
+          # is never read.
           why() {
-            # No pipe: under pipefail, `grep -q` closing early would fail `cat`.
-            match() { grep -qsiE "$1" code-review/result.md code-review/stderr.txt; }
+            signal="$RUNNER_TEMP/reviewer-signal.txt"
+            { cat "$STDERR"; grep -v '^[[:space:]]*$' code-review/result.md | tail -1; } > "$signal" 2>/dev/null || true
+            match() { grep -qsiE "$1" "$signal"; }
             if match 'credit balance|insufficient (credit|balance|quota)|billing|quota exceeded|payment'; then
               reason="out of credit"
             elif match 'model.{0,40}(not found|does not exist|invalid|not available)|not_found_error|unknown model'; then
@@ -298,6 +308,7 @@ jobs:
             else
               reason="no review in its output"
             fi
+            rm -f "$STDERR" "$signal"
             echo "::warning::The $p review did not complete: $reason"
           }
 
@@ -329,6 +340,7 @@ jobs:
             echo "Trying the next reviewer, if any."
             label=""
           done
+          rm -f "$STDERR"
 
           if [ -z "$used" ]; then
             echo "::error::No reviewer completed (tried: $CHAIN)."

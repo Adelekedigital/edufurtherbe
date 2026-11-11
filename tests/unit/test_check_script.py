@@ -11,6 +11,7 @@ gate in CI while the job still reported success.
 
 import importlib.util
 import re
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -66,11 +67,11 @@ def test_the_full_gate_parallelises_tests_but_the_fast_gate_does_not() -> None:
 
 def test_every_step_name_used_by_a_workflow_exists() -> None:
     check = load_check()
-    known = {name for name, _ in check.STEPS}
+    known = {name for name, _ in check.SELECTABLE}
 
     referenced: set[str] = set()
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
-        for match in re.findall(r"--only\s+([\w,]+)", workflow.read_text(encoding="utf-8")):
+        for match in re.findall(r"--only\s+([\w,-]+)", workflow.read_text(encoding="utf-8")):
             referenced.update(match.split(","))
 
     assert referenced, "no workflow selects any step — the gate is not wired to CI"
@@ -86,9 +87,65 @@ def test_the_coverage_floor_has_one_definition() -> None:
     assert f"--cov-fail-under={check.COVERAGE_FAIL_UNDER}" in full_tests
     assert f"--fail-under={check.COVERAGE_FAIL_UNDER}" in report
     assert check.COVERAGE_FAIL_UNDER == 85
-    # The workflows call check.py for it; a literal there would be a second floor.
+    # Everything else calls check.py for it; a literal anywhere else is a second floor.
     for workflow in sorted(WORKFLOWS.glob("*.yml")):
         assert "fail-under" not in workflow.read_text(encoding="utf-8"), workflow.name
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    coverage = pyproject["tool"]["coverage"]
+    assert "fail_under" not in coverage.get("report", {})
+    assert "fail_under" not in coverage.get("run", {})
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert not re.search(r"fail[-_]under", makefile)
+
+
+def test_unit_tests_alone_are_selectable_but_not_in_the_full_gate() -> None:
+    check = load_check()
+
+    selected = check.select(["tests-unit"])
+
+    assert selected == [step for step in check.FAST if step[0] == "tests-unit"]
+    assert "tests-unit" not in {name for name, _ in check.select([])}
+
+
+def test_test_files_follow_pytest_configuration() -> None:
+    check = load_check()
+
+    files = check.test_files()
+
+    assert check.pytest_ini()["testpaths"] == ["tests"]
+    assert "tests/unit/test_check_script.py" in files
+    assert all(path.startswith("tests/") for path in files)
+    assert "tests/conftest.py" not in files
+
+
+def test_collected_files_are_read_from_node_ids() -> None:
+    check = load_check()
+    output = (
+        "tests/unit/test_a.py::test_one\n"
+        "tests/unit/test_a.py::TestX::test_two[1-2]\n"
+        "tests/integration/test_b.py::test_three\n"
+        "\n"
+        "3 tests collected in 0.12s\n"
+    )
+
+    assert check.collected_files(output) == {"tests/unit/test_a.py", "tests/integration/test_b.py"}
+    # `-qq` (pyproject's -q plus another) prints a count per file instead.
+    counts = "tests/unit/test_a.py: 2\ntests/integration/test_b.py: 1\n"
+    assert check.collected_files(counts) == {"tests/unit/test_a.py", "tests/integration/test_b.py"}
+
+
+def test_a_shard_file_list_that_disagrees_with_pytest_is_reported() -> None:
+    check = load_check()
+
+    problems = check.shard_file_problems(
+        collected={"tests/a.py", "tests/b.py"}, listed={"tests/b.py", "tests/c.py"}
+    )
+
+    assert problems == [
+        "collected by pytest but in no shard: tests/a.py",
+        "in a shard but collected nothing: tests/c.py",
+    ]
+    assert check.shard_file_problems(collected={"tests/a.py"}, listed={"tests/a.py"}) == []
 
 
 def test_shards_cover_every_test_file_exactly_once() -> None:

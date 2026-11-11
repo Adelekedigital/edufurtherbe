@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from defusedxml import ElementTree
 
@@ -80,9 +83,12 @@ STEPS: list[Step] = [
 #: found, and it skips coverage, so it cannot tell you the threshold still holds.
 #: Run it while writing; run the full gate before committing.
 _FAST_STEPS = {"format", "lint", "types", "layers", "size"}
-FAST: list[Step] = [step for step in STEPS if step[0] in _FAST_STEPS] + [
-    ("tests-unit", ["pytest", "tests/unit", "-q"])
-]
+TESTS_UNIT: Step = ("tests-unit", ["pytest", "tests/unit", "-q"])
+FAST: list[Step] = [step for step in STEPS if step[0] in _FAST_STEPS] + [TESTS_UNIT]
+
+#: What ``--only`` may name: the gate's steps, and the unit tier on its own (a
+#: docs-only PR in CI). Running every step never includes the unit tier twice.
+SELECTABLE: list[Step] = [*STEPS, TESTS_UNIT]
 
 
 #: After the shards: their data files (``COVERAGE_FILE=.coverage.<shard>``) into
@@ -94,10 +100,68 @@ COMBINE: list[Step] = [
 ]
 
 
+#: pytest's default ``python_files``, used only while pyproject sets none. A copy
+#: of pytest's rule, so it is pinned: ``--check-shard-files``, which CI runs,
+#: fails when these files and pytest's own collection disagree.
+PYTEST_DEFAULT_PYTHON_FILES = ["test_*.py", "*_test.py"]
+
+
+def pytest_ini() -> dict[str, Any]:
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    ini: dict[str, Any] = pyproject["tool"]["pytest"]["ini_options"]
+    return ini
+
+
 def test_files() -> list[str]:
-    """Every file pytest collects by its default patterns, relative to the root."""
-    found = {*TEST_ROOT.rglob("test_*.py"), *TEST_ROOT.rglob("*_test.py")}
+    """The files pytest collects, by pyproject's testpaths and python_files."""
+    ini = pytest_ini()
+    patterns = ini.get("python_files", PYTEST_DEFAULT_PYTHON_FILES)
+    if isinstance(patterns, str):
+        patterns = patterns.split()
+    found = {
+        path
+        for root in ini.get("testpaths", ["."])
+        for pattern in patterns
+        for path in (PROJECT_ROOT / root).rglob(pattern)
+    }
     return sorted(path.relative_to(PROJECT_ROOT).as_posix() for path in found)
+
+
+def collected_files(output: str) -> set[str]:
+    """The files ``pytest --collect-only`` lists: node ids, or ``path: count`` under -qq."""
+    files = set()
+    for line in output.splitlines():
+        match = re.match(r"([^\s:]+\.py)(?:::|: \d+$)", line)
+        if match:
+            files.add(match[1])
+    return files
+
+
+def shard_file_problems(*, collected: set[str], listed: set[str]) -> list[str]:
+    return [
+        f"collected by pytest but in no shard: {path}" for path in sorted(collected - listed)
+    ] + [f"in a shard but collected nothing: {path}" for path in sorted(listed - collected)]
+
+
+def check_shard_files() -> int:
+    """Fail unless the files the shards split are exactly what pytest collects."""
+    result = subprocess.run(
+        ["uv", "run", "pytest", "--collect-only", "-q", "-p", "no:randomly"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(result.stdout[-4000:], result.stderr[-4000:], sep="\n", file=sys.stderr)
+        return 1
+    problems = shard_file_problems(
+        collected=collected_files(result.stdout), listed=set(test_files())
+    )
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if not problems:
+        print(f"The shards split exactly the {len(test_files())} files pytest collects.")
+    return 1 if problems else 0
 
 
 def load_durations() -> dict[str, float]:
@@ -174,7 +238,7 @@ def select(names: list[str]) -> list[Step]:
     if not names:
         return list(STEPS)
 
-    known = {name for name, _ in STEPS}
+    known = {name for name, _ in SELECTABLE}
     unknown = sorted(set(names) - known)
     if unknown:
         raise SystemExit(
@@ -182,7 +246,7 @@ def select(names: list[str]) -> list[Step]:
         )
 
     wanted = set(names)
-    return [step for step in STEPS if step[0] in wanted]
+    return [step for step in SELECTABLE if step[0] in wanted]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,6 +274,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="JUNIT",
         help=f"rewrite {DURATIONS_FILE.name} from a full run's junit file(s) and exit",
     )
+    parser.add_argument(
+        "--check-shard-files",
+        action="store_true",
+        help="CI: fail unless the shards split exactly the files pytest collects",
+    )
     parser.add_argument("--list", action="store_true", help="print the step names and exit")
     parser.add_argument(
         "--fast",
@@ -228,11 +297,21 @@ def main(argv: list[str] | None = None) -> int:
         # `select` uses for an unknown name: a check that quietly ran something
         # other than what was asked for is worse than one that refused.
         raise SystemExit("--fast and --only cannot be combined; --fast is a preset of --only.")
-    chosen = (args.fast or args.only, args.shard, args.combine_coverage, args.record_durations)
+    chosen = (
+        args.fast or args.only,
+        args.shard,
+        args.combine_coverage,
+        args.record_durations,
+        args.check_shard_files,
+    )
     if sum(map(bool, chosen)) > 1:
         raise SystemExit(
-            "Choose one of --fast/--only, --shard, --combine-coverage and --record-durations."
+            "Choose one of --fast/--only, --shard, --combine-coverage, --record-durations"
+            " and --check-shard-files."
         )
+
+    if args.check_shard_files:
+        return check_shard_files()
 
     if args.record_durations:
         durations = durations_from_junit(args.record_durations)
