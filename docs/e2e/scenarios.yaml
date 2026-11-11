@@ -19,7 +19,7 @@
 #   sitting, after the booked start (`after` names the step they wait for).
 # - E2E accounts are internal (`users.is_internal`, the demo domain), so no
 #   analytics outbox row is written for them (decision 329). Checks of
-#   analytics rows assert their absence; see TODO(question) in BOOK-001.
+#   analytics rows assert their absence (accepted by the founder, 2026-11-10).
 version: 1
 
 seed:
@@ -83,6 +83,9 @@ scenarios:
          body: {requires_booking_confirmation: true},
          expect: {status: 200, json: {/requires_booking_confirmation: true}},
          human: "The mentor asks to confirm each booking."}
+      - {kind: api, id: daily_on, viewer: mentor_listed, method: PATCH, path: /api/v1/me/conferencing,
+         body: {provider: daily}, expect: {status: 200, json: {/provider: daily}},
+         human: "The mentor chooses EduFurther video (Daily) for their sessions."}
     cleanup: ["None: the next run uses a new tag."]
 
   # ------------------------------------------------------------------ auth
@@ -240,7 +243,9 @@ scenarios:
       Booking spends one credit and stores the entry point (decision 329); an
       accepted request is confirmed; both parties join in the window (10 minutes
       before to 15 after); settlement marks it completed and the credit stays
-      spent (decision 229).
+      spent (decision 229). Venues (founder, 2026-11-10): agents run it on
+      Daily; humans run it twice, on Daily and on Google Meet (the mentor
+      connects Google first, OAUTH-001). Custom links are not offered.
     smoke_prod: false
     preconditions: ["SETUP-001 passed", "mentee_with_credits has no live session with mentor_listed"]
     steps:
@@ -300,7 +305,7 @@ scenarios:
          human: "After the join window closes, run settlement."}
       - {kind: api, id: completed, viewer: mentee_with_credits, method: GET, path: "/api/v1/sessions/{session_id}",
          params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: completed}},
-         human: "The session is completed. TODO(question): with a Daily venue, attendance comes from Daily's webhook, not /join; which venue does the E2E mentor use on staging?"}
+         human: "The session is completed. On Daily, attendance comes from Daily's webhook, so both must actually enter the room (join_ui)."}
       - {kind: api, id: still_spent, viewer: mentee_with_credits, method: GET, path: /api/v1/me,
          expect: {status: 200, json: {/credits/balance: 0, /mentee_completed_sessions: 1}},
          human: "The credit stays spent."}
@@ -317,7 +322,7 @@ scenarios:
       - {id: booking_requested_row, check: db, after: book,
          query: "SELECT count(*) AS n FROM outbox_events o JOIN users u ON u.id = o.entity_id WHERE o.destination = 'analytics' AND o.event_type = 'booking_requested' AND o.payload->'properties'->>'session_id' = :s",
          binds: {s: "${session_id}"}, expect: {first: {n: 0}},
-         human: "No analytics row, because E2E accounts are internal. TODO(question): the brief asks to see a booking_requested row; that needs a non-internal test account, which the demo domain cannot be. Accept the absence, or add one non-demo staging account?"}
+         human: "No analytics row, because E2E accounts are internal; the event itself is covered by automated tests (founder, 2026-11-10)."}
       - {id: accepted_email, check: db, after: accept,
          query: "SELECT count(*) AS n FROM outbox_events WHERE entity_id = :s AND event_type = 'request_accepted'",
          binds: {s: "${session_id}"}, expect: {first: {n: 1}}, human: "The mentee was told it was accepted."}
@@ -431,7 +436,7 @@ scenarios:
     smoke_prod: false
     preconditions:
       - "SETUP-001 passed"
-      - "TODO(question): bookings need 24h notice, so reaching the 12h window means booking one day and cancelling the next. Is that acceptable, or may staging set MENTEE_CANCEL_REFUND_HOURS above 24 for the run (which changes CANCEL-001's boundary too)?"
+      - "A two-day run (founder, 2026-11-10): book on day 1, cancel in the second sitting. Staging keeps the production refund window."
     steps:
       - {kind: api, id: types, viewer: anonymous, method: GET, path: "/api/v1/users/{user_id}/session-types",
          params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
@@ -595,8 +600,8 @@ scenarios:
     smoke_prod: false
     preconditions:
       - "ONB-001 passed (level 0 to 1 is tested there)"
-      - "TODO(question): the job pays once per month, so a mid-month run on staging is a no-op. Is --dry-run enough before launch, or should a run be scheduled for the 1st?"
-      - "TODO(question): levels 2 and 3 need a qualified invite and an attended session (decisions 295, 308); which invite flow should the E2E use to reach them?"
+      - "The job pays once a month: a dry run before launch, then the real run is checked on the 1st after launch (founder, 2026-11-10)."
+      - "Levels 2 and 3 are reached through the real invite flow in INVITE-001 (founder, 2026-11-10); this scenario covers levels 0 and 1."
     steps:
       - {kind: api, id: before, viewer: mentee_new, method: GET, path: /api/v1/me,
          expect: {status: 200, json: {/credits/monthly/level: 1, /credits/next_reset_at: "<present>"}},
@@ -722,7 +727,7 @@ scenarios:
       - {id: restored, check: db, after: restore,
          query: "SELECT deleted_at IS NULL AS live FROM users WHERE id = :u",
          binds: {u: "${mentee_to_delete.id}"}, expect: {first: {live: true}}, human: "The account is live again."}
-    cleanup: ["TODO(question): the actual purge cannot run inside 30 days on staging; confirm it is covered by its integration tests and the daily job's logs instead."]
+    cleanup: ["None. The purge itself is covered by its integration tests and the daily job's logs (founder, 2026-11-10)."]
 
   # ------------------------------------------------------------------ preview
   - id: PREVIEW-001
