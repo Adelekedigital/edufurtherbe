@@ -36,9 +36,10 @@ hours on half the legacy rows.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, available_timezones
 
 from app.core.config import NOTICE_CEILING_MINUTES, NOTICE_FLOOR_MINUTES, Settings
 from app.domain.enums import AvailabilityExceptionType
@@ -204,13 +205,23 @@ def normalise_timezone(name: str) -> str:
 
     Trimmed as well as validated: ``" America/New_York "`` is a name `ZoneInfo`
     rejects, and storing it unstripped would defer the same failure.
+
+    **A name is looked up in the zone database's own list, never on disk.**
+    `ZoneInfo` opens a file named by its input, so a crafted name (300
+    characters, ``a*b``) raised an `OSError` this missed, a 500; and a
+    case-insensitive filesystem accepted ``utc`` that Linux refuses (security
+    and code review, 2026-11-11). Membership answers the same everywhere.
     """
     trimmed = name.strip()
-    try:
-        ZoneInfo(trimmed)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
-        raise UnknownTimezoneError(f"{name!r} is not an IANA timezone") from exc
+    if trimmed not in _iana_names():
+        raise UnknownTimezoneError(f"{name[:64]!r} is not an IANA timezone")
     return trimmed
+
+
+@functools.cache
+def _iana_names() -> frozenset[str]:
+    """Every zone name the installed database holds, read once per process."""
+    return frozenset(available_timezones())
 
 
 @dataclass(frozen=True, slots=True, order=True)

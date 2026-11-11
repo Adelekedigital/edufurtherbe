@@ -49,6 +49,10 @@ DAILY_UP_TO_DAYS = 14
 SPARK_POINTS = 8
 #: The zone a request without `tz` reads its days in.
 DEFAULT_TZ = "UTC"
+#: The zone the platform-wide alerts read "yesterday" in, whoever is looking:
+#: one banner for every admin (decision 335). Its own name, so changing
+#: `DEFAULT_TZ` can never move the alerts.
+PLATFORM_TZ = "UTC"
 #: How a custom range's dates must be written.
 _ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -169,9 +173,9 @@ def series_buckets(period: Period) -> list[Window]:
     the window's first day (the last may be shorter), so the current and the
     previous period match point by point. Not ISO weeks, by design. Each edge
     is a local midnight in the period's zone."""
-    step = dt.timedelta(days=1 if series_unit(period) == "day" else 7)
+    every = 1 if series_unit(period) == "day" else 7
     after = period.last + dt.timedelta(days=1)
-    starts = [period.first + step * i for i in range(-(-period.days // step.days))]
+    starts = [period.first + dt.timedelta(days=d) for d in range(0, period.days, every)]
     ends = [*starts[1:], after]
     return [period.between(a, b) for a, b in zip(starts, ends, strict=True)]
 
@@ -361,9 +365,9 @@ def quiet_alert(
 
 
 def yesterday(today: dt.date) -> Period:
-    """The UTC day before ``today``: the delivery alert's window."""
+    """The `PLATFORM_TZ` day before ``today``: the delivery alert's window."""
     day = today - dt.timedelta(days=1)
-    return Period(first=day, last=day)
+    return Period(first=day, last=day, tz=PLATFORM_TZ)
 
 
 def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
@@ -377,7 +381,7 @@ def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
         title="Messages not going out",
         body=f"{failed_yesterday} emails, notifications or analytics events failed yesterday.",
         link=None,
-        raised_at=local_day_start(today, DEFAULT_TZ),
+        raised_at=local_day_start(today, PLATFORM_TZ),
     )
 
 

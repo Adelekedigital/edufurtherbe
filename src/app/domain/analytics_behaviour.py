@@ -15,7 +15,7 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError, NotFoundError
 from app.domain.analytics import (
-    DEFAULT_TZ,
+    PLATFORM_TZ,
     Alert,
     AlertLink,
     Feature,
@@ -480,5 +480,5 @@ def login_alert(codes: LoginCodes, today: dt.date) -> Alert | None:
         title="Log-in codes failing",
         body=body,
         link=AlertLink(tab="funnels", funnel="signup", by=SignupSource.MIGRATED.value),
-        raised_at=local_day_start(today, DEFAULT_TZ),
+        raised_at=local_day_start(today, PLATFORM_TZ),
     )

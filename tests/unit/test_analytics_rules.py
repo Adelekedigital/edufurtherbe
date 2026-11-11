@@ -260,13 +260,39 @@ def test_today_is_the_date_in_the_zone() -> None:
     assert a.Period(first=TODAY, last=TODAY).day_of(late) == dt.date(2026, 11, 10)
 
 
-@pytest.mark.parametrize("bad", ["", "Mars/Olympus", "utc+1", "../etc/passwd", "Africa/"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "Mars/Olympus",
+        "utc+1",
+        "../etc/passwd",
+        "Africa/",
+        # The filesystem's own refusals (too long a name, a wildcard), which once
+        # escaped as an OSError and a 500 (security review, 2026-11-11).
+        "a" * 300,
+        "Africa/" + "a" * 300,
+        "a*b",
+        "<script>",
+        r"Africa\Lagos",
+        # Accepted on a case-insensitive filesystem, refused on Linux: refused everywhere.
+        "utc",
+        "africa/lagos",
+    ],
+)
 def test_a_zone_that_is_not_iana_is_refused_on_tz(bad: str) -> None:
     with pytest.raises(AnalyticsWindowError) as refused:
         a.resolve_tz(bad)
     assert refused.value.field_errors == (
         ("/query/tz", "must be an IANA time zone, e.g. Africa/Lagos"),
     )
+
+
+@pytest.mark.parametrize(
+    "good", ["UTC", "Africa/Lagos", "America/Argentina/Buenos_Aires", "Etc/GMT+5", "EST5EDT"]
+)
+def test_every_iana_shape_is_accepted(good: str) -> None:
+    assert a.resolve_tz(good) == good
 
 
 def test_a_zone_is_trimmed() -> None:

@@ -79,7 +79,7 @@ from app.infra.db.models.sessions import (
 from app.infra.db.models.user import User
 from app.infra.db.public_visibility import live_window, mentor_is_public, session_type_is_live
 
-__all__ = ["OFFERED_SPAN_DAYS", "FreeBusyReader", "list_slots", "mentor_today", "offered_slot"]
+__all__ = ["OFFERED_SPAN_DAYS", "FreeBusyReader", "list_slots", "offered_slot"]
 
 #: How far either side of a requested instant `offered_slot` asks the grid for.
 #:
@@ -199,16 +199,6 @@ def _busy(user_id: UUID, span_start: dt.datetime, span_end: dt.datetime) -> Sele
     )
 
 
-def mentor_today(timezone: str, now: dt.datetime) -> dt.date:
-    """Today, in the mentor's zone — where an omitted `start` begins.
-
-    One function because the next-free-time job searches exactly the range
-    `list_slots` answers, and a second copy of where that range starts is the
-    one that drifts: the card would search days `/slots` never offers.
-    """
-    return local_date(timezone, now)
-
-
 async def list_slots(
     session: AsyncSession,
     user_id: UUID,
@@ -278,7 +268,7 @@ async def list_slots(
         return None
 
     if start is None:
-        start = mentor_today(offering["timezone"], now)
+        start = local_date(offering["timezone"], now)
     if end is None:
         end = start + dt.timedelta(days=min(DEFAULT_PROJECTION_DAYS, window.projection_days))
 
