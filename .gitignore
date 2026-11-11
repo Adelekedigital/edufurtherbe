@@ -19,9 +19,11 @@ wheels/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 junit.xml
+junit-shard-*.xml
 
 # Bubble migration artefacts — contains member PII, never commit
 data/

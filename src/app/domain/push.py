@@ -19,7 +19,13 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from app.core.config import BASE64URL_PATTERN
-from app.domain.messages import CHAT_PATH, PENDING_REQUEST_PATH, SESSION_PATH
+from app.domain.messages import (
+    CHAT_PATH,
+    PENDING_REQUEST_PATH,
+    PUSH_SOURCE,
+    SESSION_PATH,
+    tracked,
+)
 from app.domain.names import addressed_by
 from app.domain.notifications import LAST_REMINDER_KIND, SESSION_REMINDER_KINDS, Notification
 
@@ -168,7 +174,9 @@ def message_push(
         type=PushType.MESSAGE,
         title="New message",
         body=f"New message from {addressed_by(first_name, last_name)}",
-        url=CHAT_PATH.format(user_id=sender_id),
+        url=tracked(
+            CHAT_PATH.format(user_id=sender_id), source=PUSH_SOURCE, campaign=PushType.MESSAGE
+        ),
         tag=f"message:{sender_id}",
         badge=unread,
     )
@@ -254,16 +262,25 @@ def session_push_spec(
 
 
 def session_push(
-    spec: SessionPush, *, session_id: UUID, other_name: str, unread: int, ttl: dt.timedelta
+    spec: SessionPush,
+    *,
+    notification: Notification,
+    session_id: UUID,
+    other_name: str,
+    unread: int,
+    ttl: dt.timedelta,
 ) -> PushMessage:
     """The push itself. `other_name` is the party who is not the recipient;
-    `ttl` is what is left of the spec's, so a late send expires on time."""
+    `ttl` is what is left of the spec's, so a late send expires on time. Its
+    link carries `notification` as its campaign (decision 336)."""
     body = spec.body.format(name=other_name)
     return PushMessage(
         type=spec.type,
         title=spec.title,
         body=body[:1].upper() + body[1:],
-        url=spec.path.format(session_id=session_id),
+        url=tracked(
+            spec.path.format(session_id=session_id), source=PUSH_SOURCE, campaign=notification
+        ),
         tag=f"session:{session_id}",
         badge=unread,
         ttl=ttl,

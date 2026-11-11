@@ -30,7 +30,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError
@@ -233,12 +233,35 @@ def _app_link(context: MessageContext, path: str, name: str) -> str:
     Every link goes through here: with no application origin configured a
     link would go out as a bare path that no mail client can open.
     """
-    return _absolute(_needs(context.app_base_url, name), path)
+    return _email_link(context, _absolute(_needs(context.app_base_url, name), path))
 
 
 def _absolute(app_base_url: str, path: str) -> str:
     """The origin and a path joined: the one place a link into the app is built."""
     return f"{app_base_url.rstrip('/')}{path}"
+
+
+#: Every notification link's `utm_medium`; `utm_source` is `email` or `push`
+#: and `utm_campaign` the notification's kind (decision 336).
+UTM_MEDIUM = "notification"
+EMAIL_SOURCE = "email"
+PUSH_SOURCE = "push"
+
+
+def tracked(link: str, *, source: str, campaign: str) -> str:
+    """``link`` (a path or a URL) with the visit's source, medium and campaign
+    added to its query, before any ``#fragment``: the one place they are put."""
+    parts = urlsplit(link)
+    tags = urlencode({"utm_source": source, "utm_medium": UTM_MEDIUM, "utm_campaign": campaign})
+    query = f"{parts.query}&{tags}" if parts.query else tags
+    return urlunsplit(parts._replace(query=query))
+
+
+def _email_link(context: MessageContext, url: str) -> str:
+    """An email's link, tagged with its kind; plain for a message with none."""
+    if context.notification is None:
+        return url
+    return tracked(url, source=EMAIL_SOURCE, campaign=context.notification.value)
 
 
 def session_page_url(app_base_url: str, session_id: str) -> str | None:
@@ -265,7 +288,8 @@ def _session_url(context: MessageContext) -> str:
     room out days in advance and undo both.
     """
     session_id = _needs(context.session_id, "sessionUrl")
-    return _needs(session_page_url(context.app_base_url, session_id), "sessionUrl")
+    url = _needs(session_page_url(context.app_base_url, session_id), "sessionUrl")
+    return _email_link(context, url)
 
 
 def _pending_request_url(context: MessageContext) -> str:

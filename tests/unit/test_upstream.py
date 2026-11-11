@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from app.infra.http.upstream import why
+from app.infra.http.upstream import LIMIT, why
 
 
 def test_an_exception_with_no_response_falls_back_to_its_own_text() -> None:
@@ -29,6 +29,16 @@ def test_an_explicit_response_overrides_the_exceptions_own() -> None:
     assert why(ValueError("Expecting value"), response) == (
         "Expecting value; upstream said: <html>not json</html>"
     )
+
+
+def test_a_secret_is_cut_out_before_the_body_is_shortened() -> None:
+    """The secret straddles the limit: shortening first would keep its first half."""
+    echoed = "phx_personal_key"
+    body = "x" * (LIMIT - 8) + echoed + " after"
+    said = why(ValueError("401"), httpx.Response(401, content=body), secret=echoed)
+
+    assert echoed[:8] not in said
+    assert said == "401; upstream said: " + ("x" * (LIMIT - 8) + "[secret] after")[:LIMIT]
 
 
 def test_an_unread_streamed_response_falls_back_rather_than_raising() -> None:
