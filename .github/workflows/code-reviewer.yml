@@ -267,11 +267,35 @@ jobs:
           # The CLI gets only the key its provider needs, never the other one
           # or the job token.
           review() {
+            rc=0
             env -u ANTHROPIC_KEY -u MOONSHOT_KEY -u GH_TOKEN \
               claude -p --restricted --strict-mcp-config \
               --tools "Read,Grep,Glob" --output-format text \
               --max-budget-usd "$CLAUDE_MAX_BUDGET_USD" "$@" \
-              < code-review/prompt.md > code-review/result.md
+              < code-review/prompt.md > code-review/result.md 2> code-review/stderr.txt || rc=$?
+            return "$rc"
+          }
+
+          # Why a leg did not complete, in a few words. Never the review or the
+          # prompt: only the exit code, a kind matched against stderr and the
+          # last line of stdout (where the CLI prints its own errors), and
+          # stderr's last line with anything token-like scrubbed.
+          why() {
+            seen=$( { cat code-review/stderr.txt; tail -1 code-review/result.md; } 2>/dev/null || true)
+            match() { printf '%s\n' "$seen" | grep -qiE "$1"; }
+            case "$rc" in 124|137|143) kind="timeout or killed" ;; *) kind="" ;; esac
+            if [ -n "$kind" ]; then :
+            elif match 'budget'; then kind="budget stop (--max-budget-usd)"
+            elif match 'credit balance|billing|quota|insufficient'; then kind="API: credit or quota"
+            elif match 'not_found_error|model.*(not found|not exist|invalid|unknown)'; then kind="API: unknown model"
+            elif match 'timed? ?out|timeout'; then kind="timeout"
+            elif match 'api error|authentication|x-api-key|rate.?limit|overloaded|[45][0-9][0-9] '; then kind="API error"
+            elif [ "$rc" -eq 0 ]; then kind="exit 0 but no review in the output"
+            else kind="unrecognised error"
+            fi
+            last=$(grep -v '^[[:space:]]*$' code-review/stderr.txt 2>/dev/null | tail -1 | cut -c1-200 |
+              sed -E 's/(sk-|Bearer )[^ ]*/[scrubbed]/g; s/[A-Za-z0-9+\/=_.-]{24,}/[scrubbed]/g; s/::/: /g' || true)
+            echo "::warning::The $p review did not complete: exit $rc, $kind.${last:+ Last stderr line: $last}"
           }
 
           used=""
@@ -298,7 +322,8 @@ jobs:
               used="$label"
               break
             fi
-            echo "::warning::The $p review did not complete; trying the next reviewer, if any."
+            why
+            echo "Trying the next reviewer, if any."
             label=""
           done
 
