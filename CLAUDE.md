@@ -171,9 +171,10 @@ on 2026-10-08, when code review moved to Codex after the push.
    for now, build to scale, build securely, follow the industry pattern or
    standard**. Record the choice, the options weighed and why in the PR body
    and the decision row, and report it in the session summary. Only what
-   **critically needs the owner** still waits: money, legal, consent or
-   privacy policy, an irreversible change to real data, or an outward
-   commitment. The gates are unchanged: rule 9, and no merge without a
+   **critically needs the owner** still waits: money or billing, legal or
+   consent, a product direction with no recorded answer, anything
+   irreversible or customer-facing in production, access or secrets (the same
+   list the frontend repo keeps). The gates are unchanged: rule 9, and no merge without a
    completed review and CI green on the exact head.
 9. **Unchanged by 7 and 8**, because these are what make the speed safe: watch
    every test fail before it passes; no threshold lowered to go green;
