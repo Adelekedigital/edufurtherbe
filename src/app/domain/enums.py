@@ -1040,6 +1040,21 @@ class ProfileViewSource(StrEnum):
     OTHER = "other"
 
 
+class FunnelLayer(StrEnum):
+    """Which row of an analytics funnel a step is drawn in (decision 338):
+    the path itself, or the outcomes beside it."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
+class FunnelFigureUnit(StrEnum):
+    """What a figure beside an analytics funnel is counted in (decision 338)."""
+
+    DAYS = "days"
+    PERCENT = "percent"
+
+
 class EntryPoint(StrEnum):
     """Where in the app a booking began (`sessions.entry_point`).
 

@@ -238,8 +238,18 @@ _POSTHOG_RESPONSES = _RESPONSES | {
         "People entering the funnel in the window who reached each step within "
         "`window_days` (untracked: null). `by` must be one the funnel offers, else `422`:\n\n"
         + _FUNNELS
-        + _POSTHOG
-        + _SECTION
+        + "Each step's `layer` is the row it is drawn in: `primary`, the path, or "
+        "`secondary`, the outcomes beside it. `figures` sit beside the funnel (see "
+        "the schema), `[]` for a funnel with none.\n\n"
+        "**`mentor_activation` is read from this database**, not PostHog, and is "
+        "never a `503`: mentors approved in the window, at their first approval in "
+        "it; of them, those with weekly hours still there at or after approval; of "
+        "those, those with a published session type of their own (not the one "
+        "onboarding made). The outcomes count from approval: a booking request to "
+        "them within 30 days, then of those a completed session as mentor within 30 "
+        "days. `by` is their sign-up source. Only its `profile_link_shared` figure "
+        "reads PostHog, and is null when PostHog does not answer.\n\n"
+        "Every other funnel: " + _POSTHOG + _SECTION
     ),
     responses=_POSTHOG_RESPONSES,
 )

@@ -46,9 +46,11 @@ __all__ = [
     "mentor_is_public",
     "mentor_is_published",
     "mentor_is_visible_to",
+    "offerings",
     "session_type_is_live",
     "session_type_of",
     "taking_bookings",
+    "weekly_hours",
 ]
 
 
@@ -198,26 +200,75 @@ def mentor_is_bookable() -> list[Any]:
     return [has_live_offering(), has_weekly_hours()]
 
 
+def _standing(row: Any, since: Any = None) -> Any:
+    """``row`` (a table with `is_active` and `deleted_at`) counts: switched on
+    and not deleted. With ``since``, a row deleted at or after it also counts:
+    it stood then. The one statement of it, for hours, windows and offerings."""
+    live = and_(row.is_active.is_(True), row.deleted_at.is_(None))
+    return live if since is None else or_(live, row.deleted_at >= since)
+
+
+def _offering_stands(since: Any = None) -> Any:
+    """`_standing` for an offering: with ``since``, one its mentor set to go at
+    or after it (hidden until its sessions settle, #218) stood then too."""
+    stands = _standing(SessionType, since)
+    return stands if since is None else or_(stands, SessionType.deletion_scheduled_at >= since)
+
+
+def offerings(*, since: Any = None, own: bool = False) -> Select[Any]:
+    """The profile's offerings that count, with a booking config, as their
+    `created_at`: live, or with ``since`` standing at or after it; with
+    ``own``, not the one onboarding created (`is_starter`)."""
+    where = [SessionType.mentor_user_id == MentorProfile.user_id, _offering_stands(since)]
+    if own:
+        where.append(SessionType.is_starter.is_(False))
+    return (
+        select(SessionType.created_at)
+        .join(
+            SessionTypeBookingConfig,
+            SessionTypeBookingConfig.session_type_id == SessionType.id,
+        )
+        .where(*where)
+        .correlate(MentorProfile)
+    )
+
+
 def has_live_offering() -> Any:
     """`EXISTS`: at least one active, undeleted offering with a booking config.
 
     Half of `mentor_is_bookable`, named so a mentor can be told which half they
     are missing (`setup_needed` on their own profile).
     """
-    return (
-        select(SessionType.id)
+    return offerings().exists()
+
+
+def weekly_hours(*, since: Any = None) -> tuple[Select[Any], Select[Any]]:
+    """The profile's weekly hours that count, as their `created_at`: its own
+    rules, and the windows of its offerings that count; live, or with
+    ``since`` standing at or after it."""
+    general = (
+        select(AvailabilityRule.created_at)
+        .where(
+            AvailabilityRule.mentor_user_id == MentorProfile.user_id,
+            _standing(AvailabilityRule, since),
+        )
+        .correlate(MentorProfile)
+    )
+    dedicated = (
+        select(SessionTypeSchedulingWindow.created_at)
+        .join(SessionType, SessionType.id == SessionTypeSchedulingWindow.session_type_id)
         .join(
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionType.id,
         )
         .where(
             SessionType.mentor_user_id == MentorProfile.user_id,
-            SessionType.is_active.is_(True),
-            SessionType.deleted_at.is_(None),
+            _offering_stands(since),
+            _standing(SessionTypeSchedulingWindow, since),
         )
         .correlate(MentorProfile)
-        .exists()
     )
+    return general, dedicated
 
 
 def has_weekly_hours() -> Any:
@@ -230,33 +281,8 @@ def has_weekly_hours() -> Any:
     (#199). Windows count only on a live offering — one switched off, deleted or
     without a booking config offers nothing.
     """
-    general = (
-        select(AvailabilityRule.id)
-        .where(
-            AvailabilityRule.mentor_user_id == MentorProfile.user_id,
-            AvailabilityRule.is_active.is_(True),
-            AvailabilityRule.deleted_at.is_(None),
-        )
-        .correlate(MentorProfile)
-        .exists()
-    )
-    dedicated = (
-        select(SessionTypeSchedulingWindow.id)
-        .join(SessionType, SessionType.id == SessionTypeSchedulingWindow.session_type_id)
-        .join(
-            SessionTypeBookingConfig,
-            SessionTypeBookingConfig.session_type_id == SessionType.id,
-        )
-        .where(
-            SessionType.mentor_user_id == MentorProfile.user_id,
-            SessionType.is_active.is_(True),
-            SessionType.deleted_at.is_(None),
-            *live_window(),
-        )
-        .correlate(MentorProfile)
-        .exists()
-    )
-    return or_(general, dedicated)
+    general, dedicated = weekly_hours()
+    return or_(general.exists(), dedicated.exists())
 
 
 def live_window() -> list[Any]:
@@ -266,10 +292,7 @@ def live_window() -> list[Any]:
     windows, liveness reads them, and the owner's read reports them as
     `uses_own_windows`, so the three cannot disagree about which windows exist.
     """
-    return [
-        SessionTypeSchedulingWindow.is_active.is_(True),
-        SessionTypeSchedulingWindow.deleted_at.is_(None),
-    ]
+    return [_standing(SessionTypeSchedulingWindow)]
 
 
 def has_own_windows(session_type_id: Any) -> Any:

@@ -39,14 +39,24 @@ from app.domain.analytics import (
     resolve_tz,
     yesterday,
 )
+from app.domain.analytics_activation import (
+    Activation,
+    ApprovedMentor,
+    activation_figures,
+    activation_steps,
+)
 from app.domain.analytics_behaviour import (
     FUNNEL_NAMES,
     BehaviourFigures,
+    Funnel,
+    FunnelFigure,
+    FunnelTab,
     LoginCodes,
     behaviour_tab,
     breakdown_for,
     explore_feature,
     explore_windows,
+    figure,
     funnel_named,
     funnel_tab,
     login_alert,
@@ -54,11 +64,12 @@ from app.domain.analytics_behaviour import (
 from app.domain.availability import local_date
 from app.domain.ports import AnalyticsReader
 from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_for
+from app.infra.db.analytics_activation import approved_mentors
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_growth import growth_tab
 from app.infra.db.analytics_scope import internal_ids
-from app.infra.db.analytics_supply import supply_tab
+from app.infra.db.analytics_supply import median_review_days, supply_tab
 from app.infra.db.analytics_tabs import overview_tab, sessions_tab
 
 
@@ -316,7 +327,21 @@ async def analytics_funnel(
 ) -> AnalyticsFunnelRead:
     funnel = funnel_named(name)
     chosen = breakdown_for(funnel, by)
+    if funnel.in_database:
+        tab = await _activation(request, ask, reader, session, funnel, chosen)
+    else:
+        tab = await _posthog_funnel(request, ask, reader, session, funnel, chosen)
+    return AnalyticsFunnelRead.of(ask.period, alerts, tab)
 
+
+async def _posthog_funnel(
+    request: Request,
+    ask: AnalyticsAsk,
+    reader: AnalyticsReader,
+    session: SessionDep,
+    funnel: Funnel,
+    chosen: str,
+) -> FunnelTab:
     async def compute() -> tuple[list[int], list[int] | None]:
         internal = await internal_ids(session)
         current = await asyncio.to_thread(
@@ -328,7 +353,74 @@ async def analytics_funnel(
         return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
 
     current, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
-    return AnalyticsFunnelRead.of(ask.period, alerts, funnel_tab(funnel, chosen, current, previous))
+    figures: list[FunnelFigure] = []
+    if funnel.name == "mentor_application":
+
+        async def review() -> tuple[float | None, float | None]:
+            now = await median_review_days(session, ask.period.window)
+            if not ask.compare:
+                return now, None
+            return now, await median_review_days(session, ask.period.previous().window)
+
+        now, before = await _cached(request, "funnel:review_days", ask, review)
+        figures.append(figure("median_review_days", now, before, ask.compare))
+    return funnel_tab(funnel, chosen, current, previous, figures)
+
+
+async def _activation(
+    request: Request,
+    ask: AnalyticsAsk,
+    reader: AnalyticsReader,
+    session: SessionDep,
+    funnel: Funnel,
+    chosen: str,
+) -> FunnelTab:
+    """The mentor activation funnel from the database; its profile-link
+    figure is an optional PostHog read, null when PostHog cannot answer."""
+    breakdown = funnel.by[chosen]
+    periods = [ask.period, *([ask.period.previous()] if ask.compare else [])]
+
+    async def compute() -> list[list[ApprovedMentor]]:
+        return [await approved_mentors(session, p.window, breakdown) for p in periods]
+
+    cohorts = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
+    windows = []
+    for period, mentors in zip(periods, cohorts, strict=True):
+        shared = await _profile_links(request, ask, reader, session, period, chosen, mentors)
+        windows.append(Activation(mentors=mentors, shared=shared))
+    steps = [[activation_steps(w.mentors)[s.key] for s in funnel.steps] for w in windows]
+    previous = windows[1] if ask.compare else None
+    return funnel_tab(
+        funnel,
+        chosen,
+        steps[0],
+        steps[1] if ask.compare else None,
+        activation_figures(windows[0], previous),
+    )
+
+
+async def _profile_links(
+    request: Request,
+    ask: AnalyticsAsk,
+    reader: AnalyticsReader,
+    session: SessionDep,
+    period: Period,
+    chosen: str,
+    mentors: list[ApprovedMentor],
+) -> int | None:
+    """How many of ``mentors`` shared their profile link, or ``None`` when
+    PostHog cannot answer (the figure is null, the funnel unchanged)."""
+
+    async def compute() -> int:
+        internal = await internal_ids(session)
+        approvals = [(m.user_id, m.approved_at) for m in mentors]
+        return await asyncio.to_thread(reader.profile_links_shared, approvals, internal)
+
+    key = ("profile_links", chosen, period.first, period.last, period.tz)
+    try:
+        return await _kept(request, key, ask.now, compute, optional=True)
+    except AnalyticsUpstreamError:
+        return None
 
 
 AnalyticsFunnelDep = Annotated[AnalyticsFunnelRead, Depends(analytics_funnel)]

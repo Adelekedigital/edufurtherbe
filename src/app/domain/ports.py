@@ -8,6 +8,7 @@ factory there chooses the real one or the null one from settings (decision
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
@@ -58,4 +59,11 @@ class AnalyticsReader(Protocol):
 
     def login_codes(self, window: Window, internal: Sequence[UUID]) -> LoginCodes:
         """Log-in code attempts and failures in ``window``."""
+        ...
+
+    def profile_links_shared(
+        self, mentors: Sequence[tuple[UUID, dt.datetime]], internal: Sequence[UUID]
+    ) -> int:
+        """How many of ``mentors`` (each with their approval) shared their own
+        profile link at or after it."""
         ...

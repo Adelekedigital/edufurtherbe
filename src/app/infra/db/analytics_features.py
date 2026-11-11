@@ -25,9 +25,10 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import and_, func, select, tuple_
+from sqlalchemy import Select, and_, func, select, tuple_
 from sqlalchemy.orm import aliased
 
+from app.domain.analytics_behaviour import MENTOR_ACTIVATED_WITHIN
 from app.domain.availability import BookingWindow
 from app.domain.enums import MentorStatusType, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
@@ -49,8 +50,6 @@ from app.infra.db.session_stats import completed
 REPLY_WITHIN = dt.timedelta(hours=24)
 #: How soon a new mentee must have a completed session to count as activated.
 MENTEE_ACTIVATED_WITHIN = dt.timedelta(days=14)
-#: How soon an approved mentor's first session counts toward sessions.
-MENTOR_FIRST_SESSION_WITHIN = dt.timedelta(days=30)
 #: Mentor supply looks this many days ahead.
 SUPPLY_DAYS = 14
 
@@ -221,44 +220,70 @@ def mentee_activation() -> tuple[Measure, Measure]:
     return (lambda w: new_mentees(w, activated=True), new_mentees)
 
 
-def _approvals(window: Window, *, extra: Any = None) -> Any:
+def approved_in(window: Window, *columns: Any) -> Select[Any]:
+    """``columns`` over approvals made in ``window`` of a counted mentor, each
+    beside its `MentorProfile` and `User`: the one statement of the mentor
+    activation cohort, which Overview and the funnel both read."""
     event = MentorStatusEvent
-    where = [
-        event.status_type == MentorStatusType.APPROVED,
-        during(event.created_at, window),
-        counted_user(event.mentor_user_id),
-    ]
-    if extra is not None:
-        where.append(extra)
-    return _scalar(
-        select(func.count(func.distinct(event.mentor_user_id)))
+    return (
+        select(*columns)
         .select_from(event)
         .join(MentorProfile, MentorProfile.user_id == event.mentor_user_id)
         .join(User, User.id == event.mentor_user_id)
-        .where(*where)
+        .where(
+            event.status_type == MentorStatusType.APPROVED,
+            during(event.created_at, window),
+            counted_user(event.mentor_user_id),
+        )
     )
+
+
+def _approvals(window: Window, *, extra: Any = None) -> Any:
+    query = approved_in(window, func.count(func.distinct(MentorStatusEvent.mentor_user_id)))
+    return _scalar(query if extra is None else query.where(extra))
 
 
 def mentor_activation() -> tuple[Measure, Measure]:
     return (lambda w: _approvals(w, extra=taking_bookings()), _approvals)
 
 
+def _soon_after(column: Any, approved: Any) -> list[Any]:
+    """``column`` at or after ``approved`` and before `MENTOR_ACTIVATED_WITHIN` has passed."""
+    return [column >= approved, column < approved + MENTOR_ACTIVATED_WITHIN]
+
+
+def delivered_soon(mentor_id: Any, approved: Any) -> Any:
+    """`EXISTS`: a completed session with ``mentor_id`` as mentor, between
+    counted people, starting soon after ``approved`` (`_soon_after`)."""
+    return (
+        select(Session.id)
+        .where(
+            Session.mentor_id == mentor_id,
+            completed(),
+            counted_session(),
+            *_soon_after(Session.starts_at, approved),
+        )
+        .exists()
+    )
+
+
+def received_soon(mentor_id: Any, approved: Any) -> Any:
+    """`EXISTS`: a request to ``mentor_id`` (`is_request`: no move, counted
+    people) made soon after ``approved``."""
+    return (
+        select(Session.id)
+        .where(
+            Session.mentor_id == mentor_id, is_request(), *_soon_after(Session.created_at, approved)
+        )
+        .exists()
+    )
+
+
 def mentors_who_held(window: Window) -> Any:
     """Mentor activation's contribution: mentors approved in ``window`` with a
     completed session starting within 30 days of approval."""
     event = MentorStatusEvent
-    return _approvals(
-        window,
-        extra=select(Session.id)
-        .where(
-            Session.mentor_id == event.mentor_user_id,
-            completed(),
-            counted_session(),
-            Session.starts_at >= event.created_at,
-            Session.starts_at < event.created_at + MENTOR_FIRST_SESSION_WITHIN,
-        )
-        .exists(),
-    )
+    return _approvals(window, extra=delivered_soon(event.mentor_user_id, event.created_at))
 
 
 # --- mentor supply (now) ---------------------------------------------------
