@@ -165,6 +165,16 @@ on 2026-10-08, when code review moved to Codex after the push.
    existing pattern implies, state the assumption in the PR body, and keep
    building. When something genuinely does qualify, **batch it**: hold it until
    the tier's natural pause and ask everything at once, in the #50 shape.
+
+   **Narrowed again (owner, 2026-11-11): decide it by the build principles.**
+   Even a question that qualifies is decided, not held, by four tests: **build
+   for now, build to scale, build securely, follow the industry pattern or
+   standard**. Record the choice, the options weighed and why in the PR body
+   and the decision row, and report it in the session summary. Only what
+   **critically needs the owner** still waits: money, legal, consent or
+   privacy policy, an irreversible change to real data, or an outward
+   commitment. The gates are unchanged: rule 9, and no merge without a
+   completed review and CI green on the exact head.
 9. **Unchanged by 7 and 8**, because these are what make the speed safe: watch
    every test fail before it passes; no threshold lowered to go green;
    object-level authorization scoped in the query on every read and write path;
