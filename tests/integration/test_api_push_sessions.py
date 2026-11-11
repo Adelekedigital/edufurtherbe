@@ -32,6 +32,12 @@ from app.infra.jobs import runner
 from app.infra.jobs.runner import RuntimeJobs
 from conftest import A_REASON
 
+
+def tags(campaign: str) -> str:
+    """A session push link's tags (decision 336)."""
+    return f"utm_source=push&utm_medium=notification&utm_campaign={campaign}"
+
+
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 FCM = "https://fcm.googleapis.com/fcm/send/"
@@ -96,7 +102,7 @@ async def test_a_request_pushes_the_mentor_only(
                 "type": "booking_request",
                 "title": "New booking request",
                 "body": "Mo wants to book a session with you",
-                "url": f"/bookings?tab=pending&booking={sid}",
+                "url": f"/bookings?tab=pending&booking={sid}&{tags('session_requested')}",
                 "tag": f"session:{sid}",
                 "badge": 0,
             },
@@ -318,7 +324,9 @@ async def test_the_five_minute_reminder_pushes_both_from_its_callback_urgently(
             ),
         ]
     )
-    assert {b["url"] for _, b, *_ in fake.sent} == {f"/sessions/{sid}"}
+    assert {b["url"] for _, b, *_ in fake.sent} == {
+        f"/sessions/{sid}?{tags('session_last_reminder')}"
+    }
 
 
 async def test_the_email_sweep_leaves_the_push_rows_to_their_own(
