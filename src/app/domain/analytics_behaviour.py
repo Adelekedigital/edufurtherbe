@@ -99,7 +99,8 @@ class Funnel:
     @property
     def tracked(self) -> tuple[Step, ...]:
         """The steps the vendor is asked about: those with an event, which
-        are always a leading run (an untracked step is only ever last)."""
+        are always a leading run (an untracked step is only ever last). A
+        funnel counted from the database names no event, so has none."""
         return tuple(step for step in self.steps if step.events)
 
 
@@ -150,6 +151,10 @@ _OUTCOME = FunnelLayer.SECONDARY
 #: How long from approval a mentor's first booking and session count: the
 #: activation funnel's outcomes and Overview's contribution alike.
 MENTOR_ACTIVATED_WITHIN = dt.timedelta(days=30)
+#: How long a new mentee has to reach a completed session. One span, two
+#: anchors kept on purpose: the funnel counts from onboarding (founder,
+#: decision 338), Overview's mentee activation from sign-up (an existing metric).
+MENTEE_ACTIVATED_WITHIN = dt.timedelta(days=14)
 
 FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
     {
@@ -209,7 +214,7 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                     "first_session", "First session (14 days)", (SESSION_COMPLETED,), layer=_OUTCOME
                 ),
             ),
-            window_days=14,
+            window_days=MENTEE_ACTIVATED_WITHIN.days,
             note="Target window: 14 days from onboarding.",
             people=_NEW_MENTEE,
             by=_everyone(_sources(SignupSource.INVITE, SignupSource.DIRECT)),
@@ -331,7 +336,7 @@ FIGURES: Mapping[str, tuple[str, FunnelFigureUnit]] = MappingProxyType(
         "days_to_bookable": ("Days to bookable", FunnelFigureUnit.DAYS),
         "calendar_connected": ("Connected a calendar (of approved)", FunnelFigureUnit.PERCENT),
         "profile_link_shared": (
-            "Shared their profile link (of approved)",
+            "Shared their profile link (of approved, with analytics on)",
             FunnelFigureUnit.PERCENT,
         ),
         "median_review_days": ("Median days in review", FunnelFigureUnit.DAYS),

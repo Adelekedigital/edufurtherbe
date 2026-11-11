@@ -64,15 +64,17 @@ async def cohort(engine: AsyncEngine) -> dict[str, UUID]:
     """Four counted mentors and an internal one, all set up by hand:
 
     * Ada, approved 10 days ago: hours from before approval, her own type 2
-      days after it, a request and a completed session within 30 days, a
-      calendar. Every step; bookable in 2 days.
+      days after it, both switched off since (milestones stay reached), a
+      request and a completed session within 30 days, a calendar, analytics
+      on. Every step; bookable in 2 days.
     * Bo, approved 10 days ago: hours deleted before approval, so none; his
-      own type and a request. Approved and booked only.
+      own type and a request, analytics on. Approved and booked only.
     * Cy, approved 10 days ago: hours deleted after approval still count; only
-      onboarding's type, which is not his own.
+      onboarding's type, which is not his own. Analytics off.
     * Ed, approved 45 days ago: his hours are his own type's windows, both set
       before approval (bookable at once); a request and a session 31 days
-      after approval, too late to count.
+      after approval, too late to count, and a calendar 35 days after it,
+      too late as well. Analytics on.
     * Ida: everything, but an internal account, so nowhere.
     """
     names = ("ada", "bo", "cy", "ed", "ida")
@@ -105,14 +107,28 @@ async def cohort(engine: AsyncEngine) -> dict[str, UUID]:
             {"t": eds, "c": ago(46)},
         )
         await session_row(conn, ida, mentee, status="completed", created=ago(9), starts=ago(7))
-        for mentor in (ada, ida):
+        for mentor, connected in ((ada, ago(0)), (ida, ago(0)), (ed, ago(10))):
             await conn.execute(
                 text(
-                    "INSERT INTO calendar_connections (user_id, provider, refresh_token_encrypted) "
-                    "VALUES (:u, 'google', 'sealed')"
+                    "INSERT INTO calendar_connections "
+                    "(user_id, provider, refresh_token_encrypted, connected_at) "
+                    "VALUES (:u, 'google', 'sealed', :at)"
                 ),
-                {"u": mentor},
+                {"u": mentor, "at": connected},
             )
+        for mentor, granted in ((ada, True), (bo, True), (cy, False), (ed, True), (ida, True)):
+            await conn.execute(
+                text(
+                    "INSERT INTO analytics_consents (user_id, granted, version) "
+                    "VALUES (:u, :g, 'v1')"
+                ),
+                {"u": mentor, "g": granted},
+            )
+        for switch_off in (
+            "UPDATE availability_rules SET is_active = false WHERE mentor_user_id = :m",
+            "UPDATE session_types SET is_active = false WHERE mentor_user_id = :m",
+        ):
+            await conn.execute(text(switch_off), {"m": ada})
         await conn.execute(
             text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, 'super_admin')"),
             {"u": ida},
@@ -138,7 +154,7 @@ async def test_mentor_activation_counts_real_rows_and_leaves_internal_mentors_ou
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     await cohort(db_engine)
-    posthog = PostHog(shared=2)
+    posthog = PostHog(shared=1)
     body = await funnel(db_engine, api_storage, posthog, window="90d")
     steps = body["steps"]
     assert [s["key"] for s in steps] == STEPS.split()
@@ -152,19 +168,20 @@ async def test_mentor_activation_counts_real_rows_and_leaves_internal_mentors_ou
         # Ada 2 days, Ed 0: the median is 1.
         "days_to_bookable": (1.0, None, "days"),
         "calendar_connected": (25.0, None, "percent"),
-        "profile_link_shared": (50.0, None, "percent"),
+        # Of the three with analytics on (Ada, Bo, Ed), one shared.
+        "profile_link_shared": (33.3, None, "percent"),
     }
     assert [f["label"] for f in body["figures"]] == [
         "Days to bookable",
         "Connected a calendar (of approved)",
-        "Shared their profile link (of approved)",
+        "Shared their profile link (of approved, with analytics on)",
     ]
-    # From the database: PostHog is asked only who shared, for the window's
-    # cohort (the previous one is empty, so nothing is asked for it).
+    # From the database: PostHog is asked only who shared, of the window's
+    # consenting mentors (the previous cohort is empty, so nothing for it).
     assert posthog.asked("FunnelsQuery") == 0
     assert posthog.asked("admin_analytics_profile_links") == 1
     (asked,) = (q for q in posthog.seen if q.get("name") == "admin_analytics_profile_links")
-    assert len(asked["values"]["mentors"]) == 4
+    assert len(asked["values"]["mentors"]) == 3
 
 
 async def test_compare_false_nulls_every_previous(
@@ -191,6 +208,17 @@ async def test_a_previous_window_compares_its_own_cohort(
     ]
     assert figures(body)["days_to_bookable"] == (2.0, 0.0, "days")
     assert figures(body)["calendar_connected"] == (33.3, 0.0, "percent")
+
+
+async def test_a_failed_share_read_is_asked_once_for_both_periods(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    await cohort(db_engine)
+    posthog = PostHog(down=True)
+    # Both periods have a consenting mentor (Ada and Bo now, Ed before).
+    body = await funnel(db_engine, api_storage, posthog, window="30d")
+    assert figures(body)["profile_link_shared"] == (None, None, "percent")
+    assert posthog.asked("admin_analytics_profile_links") == 1
 
 
 async def test_by_invite_reads_the_sign_up_source(

@@ -64,7 +64,7 @@ from app.domain.analytics_behaviour import (
 from app.domain.availability import local_date
 from app.domain.ports import AnalyticsReader
 from app.infra.clients.posthog_reader import analytics_reader_for, replay_url_for
-from app.infra.db.analytics_activation import approved_mentors
+from app.infra.db.analytics_activation import approvals, with_setup
 from app.infra.db.analytics_alerts import active_alerts
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_growth import growth_tab
@@ -156,9 +156,11 @@ async def _kept[T](
     compute: Callable[[], Awaitable[T]],
     *,
     optional: bool = False,
+    brief: Callable[[T], bool] | None = None,
 ) -> T:
     """Figures from this app's `TabCache`, or computed and kept. An ``optional``
-    read (one a database tab adds) also keeps a failure for `FAILED_FOR`."""
+    read (one a database tab adds) also keeps a failure for `FAILED_FOR`, as
+    it keeps figures ``brief`` says lack an optional part."""
     cache: TabCache | None = getattr(request.app.state, "analytics_cache", None)
     if cache is None:
         cache = request.app.state.analytics_cache = TabCache()
@@ -173,16 +175,22 @@ async def _kept[T](
         if optional:
             cache.put(key, _FAILED, now, keep_for=FAILED_FOR)
         raise
-    cache.put(key, value, now)
+    short = brief is not None and brief(value)
+    cache.put(key, value, now, **({"keep_for": FAILED_FOR} if short else {}))
     return value
 
 
 async def _cached[T](
-    request: Request, tab: str, ask: AnalyticsAsk, compute: Callable[[], Awaitable[T]]
+    request: Request,
+    tab: str,
+    ask: AnalyticsAsk,
+    compute: Callable[[], Awaitable[T]],
+    *,
+    brief: Callable[[T], bool] | None = None,
 ) -> T:
     """A tab's figures, kept per tab, dates, zone and compare."""
     key = (tab, ask.period.first, ask.period.last, ask.period.tz, ask.compare)
-    return await _kept(request, key, ask.now, compute)
+    return await _kept(request, key, ask.now, compute, brief=brief)
 
 
 async def _login_alert(
@@ -375,19 +383,34 @@ async def _activation(
     funnel: Funnel,
     chosen: str,
 ) -> FunnelTab:
-    """The mentor activation funnel from the database; its profile-link
-    figure is an optional PostHog read, null when PostHog cannot answer."""
+    """The mentor activation funnel from the database. Its profile-link figure
+    is an optional PostHog read run beside the setup queries, null when
+    PostHog cannot answer; steps and figures are one snapshot, kept together."""
     breakdown = funnel.by[chosen]
     periods = [ask.period, *([ask.period.previous()] if ask.compare else [])]
 
-    async def compute() -> list[list[ApprovedMentor]]:
-        return [await approved_mentors(session, p.window, breakdown) for p in periods]
+    async def compute() -> list[Activation]:
+        cohorts = [await approvals(session, p.window, breakdown) for p in periods]
+        # Read before the PostHog read starts, never alongside it on this session.
+        internal = await internal_ids(session)
+        read = asyncio.create_task(_profile_links(reader, cohorts, internal))
+        try:
+            mentors = [
+                await with_setup(session, p.window, breakdown, cohort)
+                for p, cohort in zip(periods, cohorts, strict=True)
+            ]
+        except BaseException:
+            read.cancel()
+            raise
+        shared = await read
+        return [
+            Activation(mentors=m, shared=None if shared is None else shared[i])
+            for i, m in enumerate(mentors)
+        ]
 
-    cohorts = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
-    windows = []
-    for period, mentors in zip(periods, cohorts, strict=True):
-        shared = await _profile_links(request, ask, reader, session, period, chosen, mentors)
-        windows.append(Activation(mentors=mentors, shared=shared))
+    windows = await _cached(
+        request, f"funnel:{funnel.name}:{chosen}", ask, compute, brief=_without_posthog
+    )
     steps = [[activation_steps(w.mentors)[s.key] for s in funnel.steps] for w in windows]
     previous = windows[1] if ask.compare else None
     return funnel_tab(
@@ -399,26 +422,20 @@ async def _activation(
     )
 
 
+def _without_posthog(windows: list[Activation]) -> bool:
+    """The figures came without PostHog's part: keep them only `FAILED_FOR`,
+    so the figure returns as soon as PostHog does."""
+    return any(w.shared is None for w in windows)
+
+
 async def _profile_links(
-    request: Request,
-    ask: AnalyticsAsk,
-    reader: AnalyticsReader,
-    session: SessionDep,
-    period: Period,
-    chosen: str,
-    mentors: list[ApprovedMentor],
-) -> int | None:
-    """How many of ``mentors`` shared their profile link, or ``None`` when
-    PostHog cannot answer (the figure is null, the funnel unchanged)."""
-
-    async def compute() -> int:
-        internal = await internal_ids(session)
-        approvals = [(m.user_id, m.approved_at) for m in mentors]
-        return await asyncio.to_thread(reader.profile_links_shared, approvals, internal)
-
-    key = ("profile_links", chosen, period.first, period.last, period.tz)
+    reader: AnalyticsReader, cohorts: list[list[ApprovedMentor]], internal: list[UUID]
+) -> list[int] | None:
+    """Per cohort, how many of its consenting mentors shared their profile
+    link, or ``None`` when PostHog cannot answer (one failure for all)."""
+    asked = [[(m.user_id, m.approved_at) for m in cohort if m.consented] for cohort in cohorts]
     try:
-        return await _kept(request, key, ask.now, compute, optional=True)
+        return await asyncio.to_thread(reader.profile_links_shared, asked, internal)
     except AnalyticsUpstreamError:
         return None
 

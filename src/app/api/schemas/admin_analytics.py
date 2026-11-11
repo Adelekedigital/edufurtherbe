@@ -570,12 +570,16 @@ class AnalyticsFunnelRead(SectionRead):
         default_factory=list,
         description=(
             "Figures beside the funnel, in order; empty for a funnel with none. "
-            "`mentor_activation`: `days_to_bookable` (median days from approval "
-            "until they had weekly hours and a published session type of their "
-            "own, of those who did), `calendar_connected` and `profile_link_shared` "
-            "(% of the mentors approved; the last from PostHog, null when it does "
-            "not answer). `mentor_application`: `median_review_days` (the Supply "
-            "tab's, for decisions made in the window)."
+            "`mentor_activation`: `days_to_bookable`, the median days from approval "
+            "to the first moment weekly hours and a published session type of their "
+            "own stood at the same time, of those who got there; "
+            "`calendar_connected`, % of the mentors approved who connected a "
+            "calendar before 30 days from approval; `profile_link_shared`, % of the "
+            "mentors approved with analytics on who shared their own profile link "
+            "within 30 days of approval (PostHog `link_shared` with `own` true, so "
+            "counted only since the frontend added that flag), null when none has "
+            "analytics on or PostHog does not answer. `mentor_application`: "
+            "`median_review_days` (the Supply tab's, for decisions made in the window)."
         ),
     )
 

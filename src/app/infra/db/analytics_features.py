@@ -28,7 +28,7 @@ from typing import Any
 from sqlalchemy import Select, and_, func, select, tuple_
 from sqlalchemy.orm import aliased
 
-from app.domain.analytics_behaviour import MENTOR_ACTIVATED_WITHIN
+from app.domain.analytics_behaviour import MENTEE_ACTIVATED_WITHIN, MENTOR_ACTIVATED_WITHIN
 from app.domain.availability import BookingWindow
 from app.domain.enums import MentorStatusType, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
@@ -48,8 +48,6 @@ from app.infra.db.session_stats import completed
 
 #: How soon a chat's first message must be answered to count.
 REPLY_WITHIN = dt.timedelta(hours=24)
-#: How soon a new mentee must have a completed session to count as activated.
-MENTEE_ACTIVATED_WITHIN = dt.timedelta(days=14)
 #: Mentor supply looks this many days ahead.
 SUPPLY_DAYS = 14
 
@@ -209,6 +207,7 @@ def new_mentees(window: Window, *, activated: bool = False) -> Any:
                 Session.mentee_id == User.id,
                 completed(),
                 counted_session(),
+                # From sign-up here; the mentee funnel counts from onboarding.
                 Session.starts_at < User.created_at + MENTEE_ACTIVATED_WITHIN,
             )
             .exists()

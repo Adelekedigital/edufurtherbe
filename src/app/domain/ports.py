@@ -62,8 +62,9 @@ class AnalyticsReader(Protocol):
         ...
 
     def profile_links_shared(
-        self, mentors: Sequence[tuple[UUID, dt.datetime]], internal: Sequence[UUID]
-    ) -> int:
-        """How many of ``mentors`` (each with their approval) shared their own
-        profile link at or after it."""
+        self, cohorts: Sequence[Sequence[tuple[UUID, dt.datetime]]], internal: Sequence[UUID]
+    ) -> list[int]:
+        """Per cohort, how many of its mentors (each with their approval)
+        shared their own profile link within `MENTOR_ACTIVATED_WITHIN` of it.
+        One failure fails the whole read."""
         ...

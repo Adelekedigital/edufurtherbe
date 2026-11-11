@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 
 from app.infra.db.models.availability import AvailabilityRule, SessionTypeSchedulingWindow
 from app.infra.db.models.mentoring import MentorProfile
@@ -202,28 +202,23 @@ def mentor_is_bookable() -> list[Any]:
 
 def _standing(row: Any, since: Any = None) -> Any:
     """``row`` (a table with `is_active` and `deleted_at`) counts: switched on
-    and not deleted. With ``since``, a row deleted at or after it also counts:
-    it stood then. The one statement of it, for hours, windows and offerings."""
-    live = and_(row.is_active.is_(True), row.deleted_at.is_(None))
-    return live if since is None else or_(live, row.deleted_at >= since)
-
-
-def _offering_stands(since: Any = None) -> Any:
-    """`_standing` for an offering: with ``since``, one its mentor set to go at
-    or after it (hidden until its sessions settle, #218) stood then too."""
-    stands = _standing(SessionType, since)
-    return stands if since is None else or_(stands, SessionType.deletion_scheduled_at >= since)
+    and not deleted. With ``since``, a milestone: any row not deleted before
+    ``since`` stood at or after it, even if switched off or deleted later.
+    The one statement of it, for hours, windows and offerings."""
+    if since is None:
+        return and_(row.is_active.is_(True), row.deleted_at.is_(None))
+    return or_(row.deleted_at.is_(None), row.deleted_at >= since)
 
 
 def offerings(*, since: Any = None, own: bool = False) -> Select[Any]:
-    """The profile's offerings that count, with a booking config, as their
-    `created_at`: live, or with ``since`` standing at or after it; with
-    ``own``, not the one onboarding created (`is_starter`)."""
-    where = [SessionType.mentor_user_id == MentorProfile.user_id, _offering_stands(since)]
+    """The profile's offerings that count, with a booking config, as when each
+    stood (`created_at`, `deleted_at`): live, or with ``since`` standing at or
+    after it; with ``own``, not the one onboarding created (`is_starter`)."""
+    where = [SessionType.mentor_user_id == MentorProfile.user_id, _standing(SessionType, since)]
     if own:
         where.append(SessionType.is_starter.is_(False))
     return (
-        select(SessionType.created_at)
+        select(SessionType.created_at, SessionType.deleted_at)
         .join(
             SessionTypeBookingConfig,
             SessionTypeBookingConfig.session_type_id == SessionType.id,
@@ -243,11 +238,11 @@ def has_live_offering() -> Any:
 
 
 def weekly_hours(*, since: Any = None) -> tuple[Select[Any], Select[Any]]:
-    """The profile's weekly hours that count, as their `created_at`: its own
-    rules, and the windows of its offerings that count; live, or with
-    ``since`` standing at or after it."""
+    """The profile's weekly hours that count, as when each stood (from, until):
+    its own rules, and the windows of its offerings that count (while both
+    stood); live, or with ``since`` standing at or after it."""
     general = (
-        select(AvailabilityRule.created_at)
+        select(AvailabilityRule.created_at, AvailabilityRule.deleted_at)
         .where(
             AvailabilityRule.mentor_user_id == MentorProfile.user_id,
             _standing(AvailabilityRule, since),
@@ -255,7 +250,11 @@ def weekly_hours(*, since: Any = None) -> tuple[Select[Any], Select[Any]]:
         .correlate(MentorProfile)
     )
     dedicated = (
-        select(SessionTypeSchedulingWindow.created_at)
+        select(
+            func.greatest(SessionTypeSchedulingWindow.created_at, SessionType.created_at),
+            # `least` skips a null: the first of the two deletions, or none.
+            func.least(SessionTypeSchedulingWindow.deleted_at, SessionType.deleted_at),
+        )
         .join(SessionType, SessionType.id == SessionTypeSchedulingWindow.session_type_id)
         .join(
             SessionTypeBookingConfig,
@@ -263,7 +262,7 @@ def weekly_hours(*, since: Any = None) -> tuple[Select[Any], Select[Any]]:
         )
         .where(
             SessionType.mentor_user_id == MentorProfile.user_id,
-            _offering_stands(since),
+            _standing(SessionType, since),
             _standing(SessionTypeSchedulingWindow, since),
         )
         .correlate(MentorProfile)
