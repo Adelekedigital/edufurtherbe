@@ -2,7 +2,8 @@
 
 One row per person, replaced in place, and **only ever the caller's**: every
 statement names `user_id` in its `WHERE` or its insert, so nobody can read or
-write another person's answer (non-negotiable 5).
+write another person's answer (non-negotiable 5). It is read back with the
+caller, by `api/deps/core.CURRENT_USER` (`analytics_consent_of`).
 """
 
 from __future__ import annotations
@@ -10,23 +11,14 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.db.models.legal import AnalyticsConsent
 
-__all__ = ["consent_of", "record_consent"]
+__all__ = ["record_consent"]
 
 _COLUMNS = (AnalyticsConsent.granted, AnalyticsConsent.version, AnalyticsConsent.updated_at)
-
-
-async def consent_of(session: AsyncSession, user_id: UUID) -> Any | None:
-    """The caller's answer (`granted`, `version`, `updated_at`), or ``None``
-    when they never gave one."""
-    return (
-        await session.execute(select(*_COLUMNS).where(AnalyticsConsent.user_id == user_id))
-    ).one_or_none()
 
 
 async def record_consent(

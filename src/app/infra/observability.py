@@ -29,7 +29,7 @@ import structlog
 from sentry_sdk.transport import Transport
 
 from app.core.config import Settings
-from app.core.reporting import current_error
+from app.core.reporting import ErrorContext, current_error
 
 REDACTED = "[REDACTED]"
 
@@ -99,28 +99,110 @@ def _is_sensitive(key: object) -> bool:
 SQL_MARKER = "[SQL:"
 
 
+#: A value an error message quotes: asyncpg's `'Jane Smith'`, pydantic's
+#: `input_value='...'`, a `"..."` name.
+_QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"")
+#: A URL, kept to its scheme and host: the path and query can name a record or
+#: carry a credential, and userinfo is a credential.
+_URL = re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*)://(?:[^@/\s'\"]*@)?([^/\s?#'\"]+)[^\s'\"]*")
+#: Six or more digits in a row: a phone number, an account or card number.
+_LONG_NUMBER = re.compile(r"\d{6,}")
+QUOTED_VALUE = "'[value]'"
+LONG_NUMBER = "[number]"
+
+
 def without_statement(message: str) -> str:
     """A database error's message cut to its first line, before SQLAlchemy's
     `[SQL:` and everything after it (the statement, its parameters and a
     driver's `DETAIL` line, which quote names and values). Any other message
-    is returned unchanged. Applied before `scrub`, for Sentry and PostHog alike
-    (decision 339)."""
+    is returned unchanged."""
     if SQL_MARKER not in message:
         return message
     return message.split(SQL_MARKER, 1)[0].partition("\n")[0].rstrip()
 
 
-def _cut_statements(event: Any) -> None:
-    """`without_statement` on a Sentry event's exception values and log message."""
-    for value in (event.get("exception") or {}).get("values") or []:
-        if isinstance(value.get("value"), str):
-            value["value"] = without_statement(value["value"])
+def reportable_message(message: str) -> str:
+    """**The one rule for an exception's text leaving for Sentry or PostHog**
+    (decision 339), applied before `scrub`: the SQL statement cut
+    (`without_statement`), every quoted literal masked as `'[value]'`, every
+    URL reduced to ``scheme://host`` and every run of six or more digits
+    masked. The exception's type is untouched and the message keeps its shape,
+    so the same fault still groups as one issue."""
+    cut = _URL.sub(r"\1://\2", without_statement(message))
+    return _LONG_NUMBER.sub(LONG_NUMBER, _QUOTED.sub(QUOTED_VALUE, cut))
+
+
+def short_path(filename: str) -> tuple[str, bool]:
+    """A frame's file from its package root, never the machine's own
+    directories, and whether it is ours (`app/...`) rather than a library's."""
+    path = filename.replace(chr(92), "/")
+    library = "site-packages/" in path
+    for marker in ("site-packages/", "/src/"):
+        if marker in path:
+            path = path.rsplit(marker, 1)[1]
+            break
+    else:
+        if path.startswith("/") or ":" in path:
+            path = path.rsplit("/", 1)[-1]
+    return path, not library and path.startswith("app/")
+
+
+#: What a Sentry error event keeps; everything else (request, contexts, extra,
+#: breadcrumbs, server_name, modules, an integration's own fields) is dropped.
+_EVENT_KEPT = ("event_id", "timestamp", "platform", "level", "logger", "environment", "release")
+#: What a transaction drops: it needs its spans and trace context to be one.
+_TRANSACTION_DROPPED = ("request", "extra", "breadcrumbs", "server_name", "user", "modules")
+
+
+def _frames(stacktrace: Any) -> list[dict[str, Any]]:
+    frames = []
+    for frame in (stacktrace or {}).get("frames") or []:
+        path, in_app = short_path(str(frame.get("filename") or frame.get("abs_path") or ""))
+        frames.append(
+            {
+                "filename": path,
+                "function": frame.get("function"),
+                "lineno": frame.get("lineno"),
+                "in_app": in_app,
+            }
+        )
+    return frames
+
+
+def _allowed(event: Any, context: ErrorContext | None) -> dict[str, Any]:
+    """**A Sentry error event built from an allowlist** (decision 339): the
+    exception's type and `reportable_message` value with its frames as file,
+    function and line; the log line's own text; the tags we set; the level,
+    release and environment; ``user.id`` only when the context carries one."""
+    kept: dict[str, Any] = {key: event[key] for key in _EVENT_KEPT if key in event}
+    values = (event.get("exception") or {}).get("values") or []
+    if values:
+        kept["exception"] = {
+            "values": [
+                {
+                    "type": value.get("type"),
+                    "value": reportable_message(str(value.get("value") or "")),
+                    "mechanism": {
+                        "type": (value.get("mechanism") or {}).get("type", "generic"),
+                        "handled": (value.get("mechanism") or {}).get("handled", True),
+                    },
+                    "stacktrace": {"frames": _frames(value.get("stacktrace"))},
+                }
+                for value in values
+            ]
+        }
     entry = event.get("logentry") or {}
-    for key in ("message", "formatted"):
-        if isinstance(entry.get(key), str):
-            entry[key] = without_statement(entry[key])
-    if isinstance(event.get("message"), str):
-        event["message"] = without_statement(event["message"])
+    text = entry.get("formatted") or entry.get("message") or event.get("message")
+    if isinstance(text, str):
+        kept["logentry"] = {"message": reportable_message(text)}
+    tags = {"request_id": (event.get("tags") or {}).get("request_id")}
+    if context is not None:
+        tags["route"] = context.route
+        kept["transaction"] = context.route
+        if context.member_id:
+            kept["user"] = {"id": str(context.member_id)}
+    kept["tags"] = {key: value for key, value in tags.items() if value}
+    return kept
 
 
 def scrub(value: Any) -> Any:
@@ -201,20 +283,19 @@ def configure_logging(settings: Settings) -> None:
 def _before_send(event: Any, _hint: Any) -> Any:
     """Scrub the event, and tag it with the request it came from.
 
-    An unhandled request error also carries its route template and, only with
-    analytics consent, the member's id: the `ErrorContext` PostHog gets too
-    (decision 339). A database error's statement and parameters are cut first.
+    An error event is rebuilt from an allowlist (`_allowed`): an unhandled
+    request error carries its route template and, only with analytics consent
+    from a sendable member, their id: the `ErrorContext` PostHog gets too
+    (decision 339). A transaction keeps its spans and loses its request.
     """
     request_id = structlog.contextvars.get_contextvars().get("request_id")
     if request_id:
         event.setdefault("tags", {})["request_id"] = request_id
-    if (context := current_error()) is not None:
-        if context.route:
-            event.setdefault("tags", {})["route"] = context.route
-        if context.member_id:
-            event["user"] = {"id": str(context.member_id)}
-    _cut_statements(event)
-    return scrub(event)
+    if event.get("type") == "transaction":
+        for key in _TRANSACTION_DROPPED:
+            event.pop(key, None)
+        return scrub(event)
+    return scrub(_allowed(event, current_error()))
 
 
 def configure_sentry(settings: Settings, *, transport: type[Transport] | None = None) -> bool:
@@ -228,7 +309,14 @@ def configure_sentry(settings: Settings, *, transport: type[Transport] | None = 
         dsn=settings.sentry_dsn.get_secret_value(),
         environment=settings.environment,
         release=settings.railway_git_commit_sha,
-        traces_sample_rate=settings.sentry_traces_sample_rate,
+        # Zero means no tracing at all (`None`), not tracing sampled at zero.
+        traces_sample_rate=settings.sentry_traces_sample_rate or None,
+        # **No `sentry-trace` or `baggage` header on any outgoing request.**
+        # sentry-sdk attaches them to every request its httpx integration sees
+        # unless this list is narrowed (`should_propagate_trace`), whatever the
+        # sample rate: PostHog, Loops, Supabase, Daily and Google would each
+        # get our trace ids.
+        trace_propagation_targets=[],
         # No user, cookies, headers or bodies; no frame locals, which hold
         # whatever the failing code was holding.
         send_default_pii=False,

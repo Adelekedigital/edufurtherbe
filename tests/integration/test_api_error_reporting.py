@@ -21,6 +21,7 @@ from app.api.deps.core import CurrentUserDep
 from app.core.config import Settings
 from app.infra.clients.posthog import PostHogSink
 from app.infra.clients.posthog_errors import PostHogErrorReporter
+from app.infra.db.demo_seed import DEMO_DOMAIN
 from app.infra.observability import configure_sentry
 from conftest import Recording, add_user, bearer, build_api_app
 
@@ -30,9 +31,14 @@ HOST = "https://ph.example.test"
 TOKEN = "phc_public"  # noqa: S105 - a public ingestion token, made up
 
 
-async def a_member(engine: AsyncEngine, consent: bool | None) -> tuple[UUID, dict[str, str]]:
+async def a_member(
+    engine: AsyncEngine, consent: bool | None, *, internal: bool = False
+) -> tuple[UUID, dict[str, str]]:
+    """A member with ``consent``; ``internal`` gives a demo address, which the
+    database marks `is_internal` (decision 329)."""
+    domain = DEMO_DOMAIN if internal else "example.test"
     async with engine.begin() as conn:
-        user = await add_user(conn, f"{uuid4()}@example.test")
+        user = await add_user(conn, f"{uuid4()}@{domain}")
         if consent is not None:
             await conn.execute(
                 text(
@@ -44,11 +50,15 @@ async def a_member(engine: AsyncEngine, consent: bool | None) -> tuple[UUID, dic
     return user, bearer(await token_for(engine, user))
 
 
-@pytest.mark.parametrize(("consent", "identified"), [(None, False), (False, False), (True, True)])
+@pytest.mark.parametrize(
+    ("consent", "internal", "identified"),
+    [(None, False, False), (False, False, False), (True, True, False), (True, False, True)],
+)
 async def test_a_500_is_reported_to_both_with_consent_driven_identity(
     db_engine: AsyncEngine,
     recording: list[dict[str, Any]],
     consent: bool | None,
+    internal: bool,
     identified: bool,
 ) -> None:
     configure_sentry(
@@ -66,7 +76,7 @@ async def test_a_500_is_reported_to_both_with_consent_driven_identity(
         del thing_id, user
         raise RuntimeError("the database fell over")
 
-    user, token = await a_member(db_engine, consent)
+    user, token = await a_member(db_engine, consent, internal=internal)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(f"/api/v1/broken/{uuid4()}", headers=token)

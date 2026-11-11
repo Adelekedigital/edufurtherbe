@@ -300,15 +300,22 @@ def _problem_type(exc: Exception) -> str:
     return "about:blank"
 
 
-async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
-    """Map a deliberate domain error to its response.
+async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
+    """Map a deliberate domain error to its response; **a 500 among them is
+    reported** like any unhandled error (`report_server_error`), a 4xx never."""
+    response = _app_error_response(exc)
+    if response.status_code >= OPERATOR_ERROR:
+        report_server_error(request, exc)
+    return response
+
+
+def _app_error_response(exc: Exception) -> JSONResponse:
+    """The response a deliberate domain error maps to.
 
     ``ConfigurationError`` is handled apart from the table and **its detail is
     withheld**: it names settings, and a message like "SUPABASE_JWKS_URL
     is unset" tells an anonymous caller what this service is wired to.
     """
-    # `request` is unused but required: FastAPI calls every exception handler
-    # with it, and dropping the parameter changes the signature it dispatches to.
     if isinstance(exc, ConfigurationError):
         return problem(
             status_code=OPERATOR_ERROR,
@@ -386,20 +393,7 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     whose ids name records) and the member's id only with analytics consent.
     A deliberate 4xx never reaches this handler, so neither tool sees one.
     """
-    context = ErrorContext(
-        request_id=structlog.contextvars.get_contextvars().get("request_id"),
-        route=route_template(request),
-        member_id=member_on(request.state),
-    )
-    # `exc` never reaches the response body. Logged through `.exception()`,
-    # which reads the active exception; Sentry captures it inside this block.
-    with reporting(context):
-        logging.getLogger(__name__).exception(
-            "unhandled error serving %s %s", request.method, context.route or "an unmatched path"
-        )
-    reporter: ErrorReporter | None = getattr(request.app.state, "error_reporter", None)
-    if reporter is not None:
-        reporter.report(exc, context)
+    context = report_server_error(request, exc)
     response = problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
     # Set here because this handler runs outside every middleware, where
     # `RequestIdMiddleware` cannot add it: the id a user quotes for a 500.
@@ -408,11 +402,49 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     return response
 
 
-def route_template(request: Request) -> str | None:
+def report_server_error(request: Request, exc: Exception) -> ErrorContext:
+    """**The one reporting point** for every 500 (decision 339): logged with
+    its traceback, which Sentry captures inside `reporting(context)`, and handed
+    to PostHog's reporter with the same context. `exc` never reaches a body."""
+    context = ErrorContext(
+        request_id=structlog.contextvars.get_contextvars().get("request_id"),
+        route=route_template(request),
+        member_id=member_on(request.state),
+    )
+    with reporting(context):
+        logging.getLogger(__name__).error(
+            "unhandled error serving %s %s",
+            request.method,
+            context.route,
+            exc_info=exc,
+        )
+    reporter: ErrorReporter | None = getattr(request.app.state, "error_reporter", None)
+    if reporter is not None:
+        reporter.report(exc, context)
+    return context
+
+
+#: The route an error is reported under when no route matched (a 404 path, a
+#: mount): never the raw path.
+UNMATCHED_ROUTE = "/(other)"
+
+
+def route_template(request: Request) -> str:
     """The matched route's template, such as `/api/v1/sessions/{session_id}`,
-    or ``None`` when no route matched."""
-    path = getattr(request.scope.get("route"), "path", None)
-    return path if isinstance(path, str) else None
+    or `UNMATCHED_ROUTE`.
+
+    **The router's prefix is on FastAPI's effective route context**, not on
+    `scope["route"]`, whose `path` is the router-relative original (FastAPI
+    0.137 onwards); Sentry's FastAPI integration reads it the same way.
+    """
+    effective = request.scope.get("fastapi", {}).get("effective_route_context")
+    for path in (
+        getattr(effective, "path", None),
+        getattr(request.scope.get("route"), "path", None),
+    ):
+        if isinstance(path, str) and path:
+            return path
+    return UNMATCHED_ROUTE
 
 
 async def handle_request_validation_error(

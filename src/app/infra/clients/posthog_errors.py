@@ -7,18 +7,20 @@ and one token path. Its shape follows
 https://posthog.com/docs/error-tracking/installation/manual ("Make a request"):
 ``$exception_list`` of ``type``, ``value``, ``mechanism`` and a ``raw``
 ``stacktrace`` whose frames carry ``platform: "custom"``, ``lang``,
-``function``, ``filename``, ``lineno`` and ``in_app``. Frames are oldest first,
-as Sentry orders them.
+``function``, ``filename``, ``lineno`` and ``in_app``. Ordered as PostHog's
+own Python SDK orders them (posthog-python ``exception_utils``): the caught
+exception first, then its ``__cause__`` or ``__context__``; frames oldest first.
 
-**Only the exception's type, scrubbed message and frames leave**, the message
-cut before any SQL statement (`without_statement`): no request
-or response body, header, cookie, source line or frame local. The whole event
-then passes through `observability.scrub`, the one rule for logs and Sentry.
+**Built from an allowlist**: the exception's type, its message through
+`observability.reportable_message`, and frames as file, function and line;
+then the tags Sentry gets (request id, route, release, environment). No
+request or response body, header, cookie, source line or frame local. The
+whole event then passes through `observability.scrub`.
 
-**Identity follows consent.** With a consenting member the event is theirs
-(``distinct_id`` = `users.id`, as every server event is); otherwise it is
-anonymous, under the request's own random id with
-``$process_person_profile: false``
+**Identity follows consent.** With a consenting, sendable member the event is
+theirs (``distinct_id`` = `users.id`, as every server event is); otherwise it
+is anonymous, under a fresh random id per event (never the caller-supplied
+request id) with ``$process_person_profile: false``
 (https://posthog.com/docs/data/anonymous-vs-identified-events).
 
 **Sent after the handler returns, never awaited by it**: `report` schedules
@@ -46,11 +48,14 @@ from app.domain.analytics_events import GEOIP_DISABLE
 from app.domain.ports import AnalyticsSink
 from app.infra.clients.posthog import NullAnalyticsSink, analytics_sink_for
 from app.infra.http.client import shared
-from app.infra.observability import scrub, without_statement
+from app.infra.observability import reportable_message, scrub, short_path
 
 __all__ = [
     "ERROR_TIMEOUT",
+    "MAX_CHAIN",
+    "MAX_FRAMES",
     "MAX_IN_FLIGHT",
+    "SHUTDOWN_DEADLINE",
     "PostHogErrorReporter",
     "error_reporter_for",
     "exception_event",
@@ -58,33 +63,62 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: Short: a report that cannot land in a few seconds is dropped, not retried.
-ERROR_TIMEOUT = httpx.Timeout(3.0)
+#: Short: a report that cannot land in about three seconds is dropped, not
+#: retried. httpx times each phase apart, so the bound is their sum: 0.5 s for
+#: a pooled connection, 1 s to connect, 0.5 s to write and 1 s to read the
+#: one small reply, 3 s in all.
+ERROR_TIMEOUT = httpx.Timeout(connect=1.0, read=1.0, write=0.5, pool=0.5)
 #: A message longer than this is cut: a driver error can quote a whole statement.
 MAX_MESSAGE = 1000
 #: Sends in flight at once; past it a report is dropped. Each holds a worker
 #: thread for up to the timeout, and an outage that fails every request must
 #: not take the threads the token check and other adapters run on.
 MAX_IN_FLIGHT = 4
+#: How deep a chain of causes is followed, and how many frames each keeps (the
+#: innermost, nearest the raise).
+MAX_CHAIN = 3
+MAX_FRAMES = 50
+#: How long shutdown waits for sends still in flight.
+SHUTDOWN_DEADLINE = 2.0
 
 
 def _frame(frame: traceback.FrameSummary) -> dict[str, Any]:
-    path = frame.filename.replace("\\", "/")
-    # The path from the package root, never the machine's own directories.
-    library = "site-packages/" in path
-    for marker in ("site-packages/", "/src/"):
-        if marker in path:
-            path = path.rsplit(marker, 1)[1]
-            break
-    else:
-        path = path.rsplit("/", 1)[-1]
+    path, in_app = short_path(frame.filename)
     return {
         "platform": "custom",
         "lang": "python",
         "function": frame.name,
         "filename": path,
         "lineno": frame.lineno,
-        "in_app": not library and path.startswith("app/"),
+        "in_app": in_app,
+    }
+
+
+def _chain(exc: BaseException) -> list[BaseException]:
+    """``exc`` and the exceptions behind it, outermost first, as Python
+    prints them: ``__cause__``, else ``__context__`` unless suppressed."""
+    chain = [exc]
+    while len(chain) < MAX_CHAIN:
+        current = chain[-1]
+        behind = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+        if behind is None or behind in chain:
+            break
+        chain.append(behind)
+    return chain
+
+
+def _exception(exc: BaseException) -> dict[str, Any]:
+    # No source lines read: `lookup_lines=False` keeps this cheap on the loop.
+    frames = traceback.StackSummary.extract(
+        traceback.walk_tb(exc.__traceback__), lookup_lines=False
+    )
+    return {
+        "type": type(exc).__name__,
+        "value": reportable_message(str(exc))[:MAX_MESSAGE],
+        "mechanism": {"handled": False, "synthetic": False},
+        "stacktrace": {"type": "raw", "frames": [_frame(f) for f in frames[-MAX_FRAMES:]]},
     }
 
 
@@ -98,17 +132,7 @@ def exception_event(
     """The `$exception` event for ``exc``, scrubbed."""
     member = context.member_id
     properties: dict[str, Any] = {
-        "$exception_list": [
-            {
-                "type": type(exc).__name__,
-                "value": without_statement(str(exc))[:MAX_MESSAGE],
-                "mechanism": {"handled": False, "synthetic": False},
-                "stacktrace": {
-                    "type": "raw",
-                    "frames": [_frame(f) for f in traceback.extract_tb(exc.__traceback__)],
-                },
-            }
-        ],
+        "$exception_list": [_exception(each) for each in _chain(exc)],
         "request_id": context.request_id,
         "route": context.route,
         "release": release,
@@ -120,7 +144,8 @@ def exception_event(
     event: dict[str, Any] = scrub(
         {
             "event": "$exception",
-            "distinct_id": str(member) if member else (context.request_id or uuid4().hex),
+            # Never the request id when anonymous: a caller may choose it.
+            "distinct_id": str(member) if member else uuid4().hex,
             "timestamp": dt.datetime.now(dt.UTC).isoformat(),
             "properties": properties,
         }
@@ -160,10 +185,11 @@ class PostHogErrorReporter:
             # A warning, not an error: an error line would itself go to Sentry.
             logger.warning("error report not sent to analytics")
 
-    async def drain(self) -> None:
-        """Wait for every send in flight, for the tests."""
-        while self._pending:
-            await asyncio.gather(*self._pending, return_exceptions=True)
+    async def drain(self, timeout: float | None = None) -> None:
+        """Wait for every send in flight, at most ``timeout`` seconds in all:
+        the app's shutdown (`SHUTDOWN_DEADLINE`) and the tests."""
+        if self._pending:
+            await asyncio.wait(set(self._pending), timeout=timeout)
 
 
 def error_reporter_for(settings: Settings) -> PostHogErrorReporter | None:

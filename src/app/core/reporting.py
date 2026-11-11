@@ -4,7 +4,8 @@ alike (decision 339).
 **Built once, by `api/errors.handle_unexpected_error`**, and read by both
 tools, so they cannot disagree on the request, the route or the member.
 
-**The member's id is there only with analytics consent.** It is recorded on
+**The member's id is there only with analytics consent**, and only for a
+member analytics may name (live, not internal). It is recorded on
 the request when the auth dependency resolves the caller (`remember_member`),
 from the answer `CURRENT_USER` already read, so the error path never queries
 the database that may be what failed.
@@ -31,8 +32,8 @@ _MEMBER = "reportable_member"
 class ErrorContext:
     request_id: str | None
     #: The matched route's template (`/sessions/{session_id}`), never the raw
-    #: path, whose ids would name records; ``None`` when nothing matched.
-    route: str | None
+    #: path, whose ids would name records; `/(other)` when nothing matched.
+    route: str
     #: `users.id`, only when that member accepted analytics consent.
     member_id: UUID | None
 
@@ -40,11 +41,13 @@ class ErrorContext:
 _current: ContextVar[ErrorContext | None] = ContextVar("error_context", default=None)
 
 
-def remember_member(state: object, user_id: UUID, *, consented: bool) -> None:
+def remember_member(state: object, user_id: UUID, *, granted: bool | None, sendable: bool) -> None:
     """**The one consent rule for error identity**: the caller's id is kept on
-    the request only when they accepted analytics; declined or unanswered keeps
+    the request only when they accepted analytics (``granted`` is true) and
+    analytics may name them (``sendable``: live and not internal,
+    `analytics_scope.sendable`). Declined, unanswered or unsendable keeps
     nothing. ``state`` is the request's `request.state`."""
-    setattr(state, _MEMBER, user_id if consented else None)
+    setattr(state, _MEMBER, user_id if granted is True and sendable else None)
 
 
 def member_on(state: object) -> UUID | None:

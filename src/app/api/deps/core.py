@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -17,7 +18,9 @@ import httpx
 from fastapi import Depends, Header, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from app.core.config import MIN_BOOKING_WINDOW_DAYS, Settings, get_settings
 from app.core.errors import (
@@ -40,9 +43,11 @@ from app.domain.idempotency import request_fingerprint
 from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
 from app.infra.db import preview_store
+from app.infra.db.analytics_scope import sendable
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in, record_auth_method
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
+from app.infra.db.models.user import User
 from app.infra.db.preview_store import Owner
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -195,10 +200,18 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # only: primary-key joins off the caller's own profile row, so they add no
 # query and widen no scope.
 #
-# `analytics_consented` is the caller's analytics answer (`granted`, unique per
-# user, so one indexed join), read here so an error report can follow consent
-# without querying a database that may be what failed (decision 339).
-CURRENT_USER = text("""
+# `analytics_consent_*` is the caller's analytics answer (unique per user, so
+# one indexed join): `/me` returns it (`analytics_consent_of`), and an error
+# report follows it without querying a database that may be what failed,
+# together with `analytics_sendable`, `analytics_scope.sendable` itself
+# compiled onto `u` (decision 339).
+_SENDABLE = sendable(aliased(User, name="u")).compile(
+    dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
+    compile_kwargs={"literal_binds": True},
+)
+# S608: the only interpolation is `_SENDABLE`, our own predicate compiled at
+# import with no bound values; nothing from a request reaches this text.
+CURRENT_USER = text(f"""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at, u.auth_method,
            (u.signup_source = :migrated) AS is_migrated,
@@ -211,7 +224,10 @@ CURRENT_USER = text("""
            (p.user_id IS NOT NULL) AS has_profile,
            COALESCE(a.roles, ARRAY[]::text[]) AS admin_roles,
            (a.roles IS NOT NULL) AS is_admin,
-           COALESCE(ac.granted, FALSE) AS analytics_consented
+           ac.granted AS analytics_consent_granted,
+           ac.version AS analytics_consent_version,
+           ac.updated_at AS analytics_consent_updated_at,
+           ({_SENDABLE}) AS analytics_sendable
     FROM users u
     LEFT JOIN user_profiles p ON p.user_id = u.id
     LEFT JOIN analytics_consents ac ON ac.user_id = u.id
@@ -223,7 +239,20 @@ CURRENT_USER = text("""
         WHERE g.user_id = u.id AND g.revoked_at IS NULL
     ) a ON TRUE
     WHERE (u.auth_id = :auth_id OR u.id = :user_id) AND u.deleted_at IS NULL
-""")
+""")  # noqa: S608  # nosec B608
+
+
+def analytics_consent_of(user: dict[str, Any]) -> Any | None:
+    """The caller's analytics answer (`granted`, `version`, `updated_at`) from
+    their `CURRENT_USER` row, or ``None`` when they never gave one: what `/me`
+    returns, read with the caller rather than by a second query."""
+    if user["analytics_consent_version"] is None:
+        return None
+    return SimpleNamespace(
+        granted=user["analytics_consent_granted"],
+        version=user["analytics_consent_version"],
+        updated_at=user["analytics_consent_updated_at"],
+    )
 
 
 async def _user_row(
@@ -372,7 +401,12 @@ async def _resolve(
 ) -> dict[str, Any]:
     user = await _signed_in_user(claims, session)
     if header is None:
-        remember_member(request.state, user["id"], consented=user["analytics_consented"])
+        remember_member(
+            request.state,
+            user["id"],
+            granted=user["analytics_consent_granted"],
+            sendable=user["analytics_sendable"],
+        )
         return user
     # In a preview no id is kept, the previewed user's or the admin's: an
     # error there is the admin's view, not either member's (decision 339).
