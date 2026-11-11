@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import UUID
@@ -307,17 +308,137 @@ def test_hogql_reads_carry_their_window_as_values_never_in_the_text() -> None:
     assert "login_code_failed" not in query["query"]
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "LOGIN_QUERY",
-        "CARDS_QUERY",
-        "SOURCES_QUERY",
-        "ROUTES_QUERY",
-        "EXPLORE_QUERY",
-        "BOOKED_QUERY",
-    ],
+#: Every HogQL text the reader sends, found by name so a new one is covered.
+HOGQL_QUERIES = sorted(
+    name
+    for name, value in vars(queries).items()
+    if name.endswith("_QUERY") and isinstance(value, str)
 )
+
+#: HogQL keywords a ``{placeholder}`` must not be: the parser reads one as the
+#: keyword, not a value (``{within}`` failed every Explore read, 2026-11-11).
+HOGQL_KEYWORDS = frozenset(
+    [
+        "all",
+        "and",
+        "any",
+        "array",
+        "as",
+        "asc",
+        "between",
+        "by",
+        "case",
+        "cohort",
+        "cross",
+        "current",
+        "date",
+        "default",
+        "desc",
+        "distinct",
+        "else",
+        "end",
+        "false",
+        "final",
+        "following",
+        "format",
+        "from",
+        "full",
+        "group",
+        "having",
+        "ilike",
+        "in",
+        "inner",
+        "interval",
+        "is",
+        "join",
+        "left",
+        "like",
+        "limit",
+        "not",
+        "null",
+        "offset",
+        "on",
+        "or",
+        "order",
+        "outer",
+        "over",
+        "partition",
+        "preceding",
+        "prewhere",
+        "range",
+        "right",
+        "row",
+        "rows",
+        "sample",
+        "select",
+        "settings",
+        "then",
+        "ties",
+        "timestamp",
+        "to",
+        "true",
+        "union",
+        "using",
+        "when",
+        "where",
+        "window",
+        "with",
+        "within",
+        # Also reserved or keyword-like in HogQL and ClickHouse.
+        "anti",
+        "asof",
+        "cast",
+        "collate",
+        "day",
+        "except",
+        "extract",
+        "first",
+        "global",
+        "hour",
+        "id",
+        "if",
+        "key",
+        "last",
+        "minute",
+        "month",
+        "nulls",
+        "quarter",
+        "second",
+        "semi",
+        "top",
+        "totals",
+        "trim",
+        "unbounded",
+        "week",
+        "year",
+    ]
+)
+
+#: The `events` columns the queries read: an alias named like one hides it.
+EVENT_COLUMNS = frozenset(["event", "timestamp", "person_id", "distinct_id", "properties"])
+
+
+def test_the_queries_are_found_by_name() -> None:
+    assert {"EXPLORE_QUERY", "BOOKED_QUERY", "LOGIN_QUERY"} <= set(HOGQL_QUERIES)
+
+
+@pytest.mark.parametrize("name", HOGQL_QUERIES)
+def test_no_placeholder_is_a_hogql_keyword(name: str) -> None:
+    placeholders = set(queries._PLACEHOLDER.findall(getattr(queries, name)))
+    assert placeholders.isdisjoint(HOGQL_KEYWORDS)
+
+
+@pytest.mark.parametrize("name", HOGQL_QUERIES)
+def test_no_alias_hides_a_column_it_reads(name: str) -> None:
+    # An outer `countIf(x) AS x` over an inner column `x` reads as an aggregate
+    # inside an aggregate, which PostHog refuses (Explore, 2026-11-11). Every
+    # query here is one statement, so an alias named twice is that mistake.
+    aliases = [a.lower() for a in re.findall(r"\bAS\s+(\w+)", getattr(queries, name), re.I)]
+    assert len(aliases) == len(set(aliases)), aliases
+    assert EVENT_COLUMNS.isdisjoint(aliases), aliases
+
+
+@pytest.mark.parametrize("name", HOGQL_QUERIES)
 def test_every_hogql_read_leaves_internal_accounts_out(name: str) -> None:
     text = getattr(queries, name)
     assert "NOT has({internal}, distinct_id)" in text
@@ -399,7 +520,7 @@ def test_explore_reads_searchers_per_window_and_bookings_after() -> None:
         "since": SINCE,
         "until": UNTIL,
         "booked_until": UNTIL + 7 * 86400,
-        "within": 7 * 86400,
+        "within_seconds": 7 * 86400,
     }
 
 
@@ -483,6 +604,20 @@ def test_a_refusal_that_echoes_the_key_never_reaches_the_log(
     for record in caplog.records:
         assert KEY not in record.getMessage()
         assert all(KEY not in str(value) for value in vars(record).values())
+
+
+@pytest.mark.parametrize("status", [400, 504])
+def test_a_failed_read_logs_what_posthog_said(
+    status: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    said = {"type": "validation_error", "code": "hogql_syntax_error", "detail": "bad token"}
+    read, _ = posthog_reader(_status(status, json=said))
+    with caplog.at_level(logging.WARNING), pytest.raises(AnalyticsUpstreamError):
+        read.login_codes(WINDOW, INTERNAL)
+    (record,) = (r for r in caplog.records if r.getMessage() == "analytics read failed")
+    assert vars(record)["status"] == status
+    assert "hogql_syntax_error" in vars(record)["reason"]
+    assert "bad token" in vars(record)["reason"]
 
 
 def settings(**values: object) -> Settings:

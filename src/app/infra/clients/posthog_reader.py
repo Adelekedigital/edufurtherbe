@@ -49,7 +49,7 @@ from app.domain.analytics_behaviour import (
 from app.domain.mentor_stats import Window
 from app.domain.ports import AnalyticsReader
 from app.infra.http.client import shared
-from app.infra.http.upstream import trim_origin
+from app.infra.http.upstream import trim_origin, why
 
 __all__ = ["NullAnalyticsReader", "PostHogReader", "analytics_reader_for", "replay_url_for"]
 
@@ -201,13 +201,13 @@ LIMIT 20
 #: ``{ends}``, Unix seconds): a person who searched, and whether they viewed a
 #: profile or started a booking after their first search in that window.
 EXPLORE_QUERY = _written("""
-SELECT g, countIf(searched) AS searched, countIf(searched AND led) AS led
+SELECT g, countIf(did_search) AS searched, countIf(did_search AND went_on) AS led
 FROM (
     SELECT
         person_id,
         g,
-        countIf(event = {search}) > 0 AS searched,
-        maxIf(timestamp, event != {search}) > minIf(timestamp, event = {search}) AS led
+        countIf(event = {search}) > 0 AS did_search,
+        maxIf(timestamp, event != {search}) > minIf(timestamp, event = {search}) AS went_on
     FROM (
         SELECT
             person_id,
@@ -230,11 +230,11 @@ ORDER BY g
 """)
 
 #: Searchers of ``[since, until)`` who requested a booking (the server's
-#: event, which carries the session) within ``{within}`` seconds of their
-#: first search in it; events read up to ``{booked_until}``.
+#: event, which carries the session) within ``{within_seconds}`` seconds of
+#: their first search in it; events read up to ``{booked_until}``.
 BOOKED_QUERY = _written("""
 SELECT countIf(searched AND arrayExists(
-    b -> b > first_search AND b <= first_search + {within}, booked_at
+    b -> b > first_search AND b <= first_search + {within_seconds}, booked_at
 )) AS booked
 FROM (
     SELECT
@@ -451,8 +451,9 @@ class PostHogReader:
         self._client = client or shared(TAB_TIMEOUT)
 
     def _ask(self, query: dict[str, Any], timeout: httpx.Timeout) -> Any:
-        """The answer's body, or `AnalyticsUpstreamError` for any failure. Only the
-        status and failure kind are logged: an error body can echo the key."""
+        """The answer's body, or `AnalyticsUpstreamError` for any failure. The status,
+        the failure kind and what PostHog said are logged, the key cut out of
+        the last: an error body can echo it."""
         response: httpx.Response | None = None
         try:
             response = self._client.post(
@@ -470,6 +471,7 @@ class PostHogReader:
                     "query_kind": query.get("kind"),
                     "failure": type(exc).__name__,
                     "status": None if response is None else response.status_code,
+                    "reason": why(exc, response, secret=self._key),
                 },
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc
@@ -565,7 +567,7 @@ class PostHogReader:
                 {
                     **_since_until(first),
                     "booked_until": int((first.until + BOOKED_WITHIN).timestamp()),
-                    "within": int(BOOKED_WITHIN.total_seconds()),
+                    "within_seconds": int(BOOKED_WITHIN.total_seconds()),
                     "internal": values["internal"],
                 },
             ),
