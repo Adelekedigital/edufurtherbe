@@ -15,6 +15,7 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError, NotFoundError
 from app.domain.analytics import (
+    PLATFORM_TZ,
     Alert,
     AlertLink,
     Feature,
@@ -26,6 +27,7 @@ from app.domain.analytics import (
     spark_buckets,
 )
 from app.domain.analytics_events import AnalyticsEvent
+from app.domain.availability import local_day_start
 from app.domain.enums import EntryPoint, PrimaryRole, ProfileViewSource, SignupSource
 from app.domain.mentor_stats import Window
 
@@ -482,5 +484,5 @@ def login_alert(codes: LoginCodes, today: dt.date) -> Alert | None:
         title="Log-in codes failing",
         body=body,
         link=AlertLink(tab="funnels", funnel="signup", by=SignupSource.MIGRATED.value),
-        raised_at=dt.datetime(today.year, today.month, today.day, tzinfo=dt.UTC),
+        raised_at=local_day_start(today, PLATFORM_TZ),
     )

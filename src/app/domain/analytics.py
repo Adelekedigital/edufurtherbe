@@ -5,11 +5,13 @@ alert copy.
 Pure: no I/O. The stores in `infra/db/analytics_*.py` count; this module says
 what a window is, how a count becomes a rate, and what an alert reads.
 
-**A window is whole UTC days, inclusive** (PRD 31, *Window rules*): the presets
-end today, a custom range is the admin's `from` and `to`, and the previous
-period is the same number of days ending the day before. As instants it is the
-half-open ``[first 00:00, last + 1 00:00)``, so `predicates.during` reads it
-like every other dashboard window.
+**A window is whole days in the viewer's zone, inclusive** (PRD 31, *Window
+rules*; decision 335): the presets end today there, a custom range is the
+admin's `from` and `to`, and the previous period is the same number of days
+ending the day before. As instants it is the half-open ``[first 00:00,
+last + 1 00:00)`` at local midnights (`local_day_start`, so a DST day is 23 or
+25 hours), and `predicates.during` reads it like every other dashboard window.
+No zone asked is `UTC`.
 """
 
 from __future__ import annotations
@@ -26,6 +28,12 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
 from app.domain.accounts import UNLISTED_ON_DELETION
+from app.domain.availability import (
+    UnknownTimezoneError,
+    local_date,
+    local_day_start,
+    normalise_timezone,
+)
 from app.domain.enums import ApplicationStage, CreditSource, MissedReason, UnlistedReason
 from app.domain.mentor_stats import Window
 
@@ -39,6 +47,12 @@ EARLIEST_DAY = dt.date(2024, 6, 1)
 DAILY_UP_TO_DAYS = 14
 #: Points in a feature card's sparkline: the window in this many equal parts.
 SPARK_POINTS = 8
+#: The zone a request without `tz` reads its days in.
+DEFAULT_TZ = "UTC"
+#: The zone the platform-wide alerts read "yesterday" in, whoever is looking:
+#: one banner for every admin (decision 335). Its own name, so changing
+#: `DEFAULT_TZ` can never move the alerts.
+PLATFORM_TZ = "UTC"
 #: How a custom range's dates must be written.
 _ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -47,10 +61,11 @@ SeriesUnit = Literal["day", "week"]
 
 @dataclass(frozen=True, slots=True)
 class Period:
-    """Whole UTC days, ``first`` to ``last`` inclusive."""
+    """Whole days in ``tz`` (an IANA name), ``first`` to ``last`` inclusive."""
 
     first: dt.date
     last: dt.date
+    tz: str = DEFAULT_TZ
 
     @property
     def days(self) -> int:
@@ -58,19 +73,24 @@ class Period:
 
     @property
     def window(self) -> Window:
-        """The period as instants: ``[first 00:00 UTC, last + 1 day 00:00 UTC)``."""
-        return Window(
-            since=_midnight(self.first), until=_midnight(self.last) + dt.timedelta(days=1)
-        )
+        """The period as instants: ``[first 00:00, last + 1 day 00:00)`` in ``tz``."""
+        return self.between(self.first, self.last + dt.timedelta(days=1))
+
+    def between(self, first: dt.date, after: dt.date) -> Window:
+        """``[first 00:00, after 00:00)`` in ``tz``, as instants."""
+        return Window(since=local_day_start(first, self.tz), until=local_day_start(after, self.tz))
 
     def previous(self) -> Period:
         """Same number of days, ending the day before this one starts."""
-        last = self.first - dt.timedelta(days=1)
-        return Period(first=last - dt.timedelta(days=self.days - 1), last=last)
+        return self.ending(self.first - dt.timedelta(days=1), self.days)
 
+    def ending(self, last: dt.date, days: int) -> Period:
+        """``days`` whole days ending with ``last``, in the same zone."""
+        return Period(first=last - dt.timedelta(days=days - 1), last=last, tz=self.tz)
 
-def _midnight(day: dt.date) -> dt.datetime:
-    return dt.datetime(day.year, day.month, day.day, tzinfo=dt.UTC)
+    def day_of(self, moment: dt.datetime) -> dt.date:
+        """The date ``moment`` falls on in ``tz``."""
+        return local_date(self.tz, moment)
 
 
 def _refuse(pointer: str, message: str) -> AnalyticsWindowError:
@@ -88,10 +108,27 @@ def _day(value: str, pointer: str) -> dt.date:
         raise _refuse(pointer, "must be a date, YYYY-MM-DD") from None
 
 
+def resolve_tz(value: str | None) -> str:
+    """``tz``: an IANA zone name (`normalise_timezone`, trimmed), `DEFAULT_TZ`
+    when absent, else `AnalyticsWindowError` on ``/query/tz``."""
+    if value is None:
+        return DEFAULT_TZ
+    try:
+        return normalise_timezone(value)
+    except UnknownTimezoneError:
+        raise _refuse("/query/tz", "must be an IANA time zone, e.g. Africa/Lagos") from None
+
+
 def resolve_period(
-    today: dt.date, *, preset: str | None, first: str | None, last: str | None
+    today: dt.date,
+    *,
+    preset: str | None,
+    first: str | None,
+    last: str | None,
+    tz: str = DEFAULT_TZ,
 ) -> Period:
-    """The period a request asks for, or `AnalyticsWindowError` naming why not.
+    """The period a request asks for, in ``tz`` (resolved, with ``today`` the
+    date there), or `AnalyticsWindowError` naming why not.
 
     A preset **or** a range, never both; a range needs both ends (one day sends
     the same date twice); ``from`` no earlier than `EARLIEST_DAY`, ``to`` no
@@ -104,7 +141,7 @@ def resolve_period(
         days = PRESETS.get(preset if preset is not None else DEFAULT_PRESET)
         if days is None:
             raise _refuse("/query/window", "must be one of " + ", ".join(PRESETS))
-        return Period(first=today - dt.timedelta(days=days - 1), last=today)
+        return Period(first=today - dt.timedelta(days=days - 1), last=today, tz=tz)
     if first is None or last is None:
         missing = "/query/from" if first is None else "/query/to"
         raise _refuse(missing, "a range needs both from and to")
@@ -115,7 +152,7 @@ def resolve_period(
         raise _refuse("/query/to", "must be today or earlier")
     if start > end:
         raise _refuse("/query/from", "must not be after to")
-    return Period(first=start, last=end)
+    return Period(first=start, last=end, tz=tz)
 
 
 def resolve_compare(value: str | None) -> bool:
@@ -134,16 +171,13 @@ def series_unit(period: Period) -> SeriesUnit:
 def series_buckets(period: Period) -> list[Window]:
     """The North Star's points: one per day, or one per 7 days counted from
     the window's first day (the last may be shorter), so the current and the
-    previous period match point by point. Not ISO weeks, by design."""
-    step = 1 if series_unit(period) == "day" else 7
-    window = period.window
-    buckets: list[Window] = []
-    since = window.since
-    while since < window.until:
-        until = min(since + dt.timedelta(days=step), window.until)
-        buckets.append(Window(since=since, until=until))
-        since = until
-    return buckets
+    previous period match point by point. Not ISO weeks, by design. Each edge
+    is a local midnight in the period's zone."""
+    every = 1 if series_unit(period) == "day" else 7
+    after = period.last + dt.timedelta(days=1)
+    starts = [period.first + dt.timedelta(days=d) for d in range(0, period.days, every)]
+    ends = [*starts[1:], after]
+    return [period.between(a, b) for a, b in zip(starts, ends, strict=True)]
 
 
 def spark_buckets(window: Window) -> list[Window]:
@@ -331,9 +365,9 @@ def quiet_alert(
 
 
 def yesterday(today: dt.date) -> Period:
-    """The UTC day before ``today``: the delivery alert's window."""
+    """The `PLATFORM_TZ` day before ``today``: the delivery alert's window."""
     day = today - dt.timedelta(days=1)
-    return Period(first=day, last=day)
+    return Period(first=day, last=day, tz=PLATFORM_TZ)
 
 
 def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
@@ -347,7 +381,7 @@ def delivery_alert(failed_yesterday: int, today: dt.date) -> Alert | None:
         title="Messages not going out",
         body=f"{failed_yesterday} emails, notifications or analytics events failed yesterday.",
         link=None,
-        raised_at=_midnight(today),
+        raised_at=local_day_start(today, PLATFORM_TZ),
     )
 
 
@@ -521,7 +555,7 @@ CACHE_SIZE = 64
 
 
 class TabCache:
-    """A tab's figures by (tab, first day, last day, compare), each kept until
+    """A tab's figures by (tab, first day, last day, zone, compare), each kept until
     `CACHE_FOR` after it was computed. In-process and per app, so a figure is
     at most `CACHE_FOR` old and each instance warms its own."""
 

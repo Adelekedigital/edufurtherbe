@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.analytics import (
     CREDIT_GROUPS,
+    DEFAULT_TZ,
     Alert,
     AlertKey,
     AnalyticsTab,
@@ -37,8 +38,8 @@ from app.domain.enums import MissedReason, ProfileViewSource
 
 
 class WindowRead(BaseModel):
-    """The window read, and the previous period it compares with: UTC dates,
-    both ends inclusive."""
+    """The window read, and the previous period it compares with: dates in
+    `tz`, both ends inclusive."""
 
     model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
 
@@ -46,6 +47,14 @@ class WindowRead(BaseModel):
     to: date
     previous_from: date
     previous_to: date
+    tz: str = Field(
+        default=DEFAULT_TZ,
+        description=(
+            "The IANA time zone every date and day boundary here was read in: the "
+            "request's `tz`, or `UTC` when none was sent."
+        ),
+        examples=["Africa/Lagos"],
+    )
 
     @classmethod
     def of(cls, period: Period) -> WindowRead:
@@ -56,6 +65,7 @@ class WindowRead(BaseModel):
                 "to": period.last,
                 "previous_from": before.first,
                 "previous_to": before.last,
+                "tz": period.tz,
             }
         )
 
