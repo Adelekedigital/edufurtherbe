@@ -41,7 +41,6 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Protocol
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +53,7 @@ from app.domain.availability import (
     UtcInterval,
     WeeklyWindow,
     bookable,
+    local_date,
 )
 from app.domain.enums import AvailabilityExceptionType
 from app.infra.db.booking_rules import (
@@ -206,7 +206,7 @@ def mentor_today(timezone: str, now: dt.datetime) -> dt.date:
     `list_slots` answers, and a second copy of where that range starts is the
     one that drifts: the card would search days `/slots` never offers.
     """
-    return now.astimezone(ZoneInfo(timezone)).date()
+    return local_date(timezone, now)
 
 
 async def list_slots(

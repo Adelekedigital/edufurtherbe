@@ -4,7 +4,6 @@ this module reads them for the right windows and turns counts into rates."""
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any
 
 from sqlalchemy import select
@@ -32,7 +31,7 @@ from app.domain.analytics import (
 )
 from app.domain.availability import BookingWindow
 from app.domain.enums import MissedReason, SessionStatus
-from app.domain.mentor_stats import Window, window_ending
+from app.domain.mentor_stats import Window
 from app.infra.db import analytics_features as f
 from app.infra.db import analytics_sessions as s
 from app.infra.db.analytics_credits import credits_tab
@@ -41,11 +40,6 @@ from app.infra.db.models.sessions import Session
 
 #: The repeat-booking look-back, ending at the window's end.
 REPEAT_DAYS = 60
-
-
-def _shift(window: Window, days: int) -> Window:
-    step = dt.timedelta(days=days)
-    return Window(since=window.since - step, until=window.until - step)
 
 
 async def _rates(
@@ -77,10 +71,12 @@ async def overview_tab(
     session: AsyncSession, period: Period, compare: bool, booking_window: BookingWindow
 ) -> OverviewTab:
     current, previous = period.window, period.previous().window
+    # The previous period's points are its own buckets, so each edge is a
+    # local midnight there too (a fixed shift drifts an hour across DST).
     buckets = series_buckets(period)
     done = await per_window(
         session,
-        [current, previous, *buckets, *(_shift(b, period.days) for b in buckets)],
+        [current, previous, *buckets, *series_buckets(period.previous())],
         s.completed_in,
     )
     mentees, mentors = await per_window_each(
@@ -92,7 +88,7 @@ async def overview_tab(
     count = len(buckets)
     series = [
         SeriesPoint(
-            start=bucket.since.date(),
+            start=period.day_of(bucket.since),
             value=int(done[2 + i]),
             previous=int(done[2 + count + i]) if compare else None,
         )
@@ -151,8 +147,9 @@ async def overview_tab(
 
 
 async def sessions_tab(session: AsyncSession, period: Period, compare: bool) -> SessionsTab:
-    windows = [period.window, period.previous().window]
-    repeat = [window_ending(w.until, REPEAT_DAYS) for w in windows]
+    periods = [period, period.previous()]
+    windows = [p.window for p in periods]
+    repeat = [p.ending(p.last, REPEAT_DAYS).window for p in periods]
 
     (
         asked,

@@ -59,6 +59,7 @@ __all__ = [
     "WeeklyWindow",
     "bookable",
     "booking_window",
+    "local_date",
     "local_day_start",
     "normalise_timezone",
     "project",
@@ -414,6 +415,11 @@ def local_day_start(day: dt.date, timezone: str) -> dt.datetime:
     rule included), so a date range a person picks means their own midnights.
     """
     return _resolve(day, dt.time(0), ZoneInfo(timezone))
+
+
+def local_date(timezone: str, moment: dt.datetime) -> dt.date:
+    """The calendar date ``moment`` falls on in a zone: `local_day_start`'s inverse."""
+    return moment.astimezone(ZoneInfo(timezone)).date()
 
 
 @dataclass(frozen=True, slots=True)
