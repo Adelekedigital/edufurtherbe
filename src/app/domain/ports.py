@@ -13,10 +13,20 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
+from app.core.reporting import ErrorContext
 from app.domain.analytics_behaviour import BehaviourFigures, ExploreFigures, Funnel, LoginCodes
 from app.domain.mentor_stats import Window
 
-__all__ = ["AnalyticsReader", "AnalyticsSink"]
+__all__ = ["AnalyticsReader", "AnalyticsSink", "ErrorReporter"]
+
+
+class ErrorReporter(Protocol):
+    """Where an unhandled request error is reported besides Sentry (decision 339)."""
+
+    def report(self, exc: BaseException, context: ErrorContext) -> None:
+        """Report ``exc`` with ``context``. **Never raises and never waits on
+        the vendor**: the error handler calls it before answering the 500."""
+        ...
 
 
 class AnalyticsSink(Protocol):

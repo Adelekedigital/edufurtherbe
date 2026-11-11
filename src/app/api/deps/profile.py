@@ -19,6 +19,7 @@ from app.api.deps.core import (
     SessionDep,
     TargetUserDep,
     _configured,
+    analytics_consent_of,
     get_storage,
     refuse_window_out_of_range,
     window_out_of_range,
@@ -57,7 +58,6 @@ from app.domain.assets import AssetKind
 from app.domain.images import MAX_UPLOAD_BYTES
 from app.domain.referrals import claim_window
 from app.domain.writing_assist import provenance_problem
-from app.infra.db.analytics_consent_store import consent_of
 from app.infra.db.application_guards import (
     refuse_clearing_help_areas,
     refuse_declined_booking_rules,
@@ -234,7 +234,7 @@ async def own_attributes(
         # Completion's own facts, so `/me` and the `409` cannot disagree.
         "onboarding": await onboarding_state(session, user_id),
         # The cookie answer, null until given (PRD 30).
-        "analytics_consent": await consent_of(session, user_id),
+        "analytics_consent": analytics_consent_of(user),
     }
 
 

@@ -14,18 +14,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, ClassVar
 
 import asyncpg
 import httpx
 import pytest
 import pytest_asyncio
+import sentry_sdk
+import structlog
 import uvicorn
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from PIL import Image
 from pydantic import SecretStr
+from sentry_sdk.envelope import Envelope
+from sentry_sdk.transport import Transport
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from starlette.types import ASGIApp
@@ -1183,3 +1187,28 @@ def outbound_calls_stay_off_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
         plain(self, key, guarded(key, value) if key in ADAPTER_SEAMS else value)
 
     monkeypatch.setattr(State, "__setattr__", guarding)
+
+
+# --------------------------------------------------------------------------
+# Sentry, recorded instead of sent: the observability and error-trial suites
+# --------------------------------------------------------------------------
+
+
+class Recording(Transport):
+    """A Sentry transport that keeps each event instead of sending it."""
+
+    events: ClassVar[list[dict[str, Any]]] = []
+
+    def capture_envelope(self, envelope: Envelope) -> None:
+        event = envelope.get_event()
+        if event is not None:
+            Recording.events.append(event)
+
+
+@pytest.fixture
+def recording() -> Iterator[list[dict[str, Any]]]:
+    Recording.events = []
+    yield Recording.events
+    sentry_sdk.get_client().close()
+    sentry_sdk.init()  # no DSN: reporting off again for every later test
+    structlog.contextvars.clear_contextvars()

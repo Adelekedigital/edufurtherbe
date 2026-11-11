@@ -79,6 +79,8 @@ from app.core.errors import (
     WritingAssistUnavailableError,
 )
 from app.core.errors import ValidationError as DomainValidationError
+from app.core.reporting import UNMATCHED_ROUTE, ErrorContext, member_on, reporting
+from app.domain.ports import ErrorReporter
 
 CONTENT_TYPE = "application/problem+json"
 
@@ -298,15 +300,24 @@ def _problem_type(exc: Exception) -> str:
     return "about:blank"
 
 
-async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
-    """Map a deliberate domain error to its response.
+async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
+    """Map a deliberate domain error to its response; **a 500 among them is
+    reported** like any unhandled error (`report_server_error`). A 4xx, and a
+    deliberate 502 or 503 (an upstream or a switched-off feature answering as
+    designed), never are."""
+    response = _app_error_response(exc)
+    if response.status_code == OPERATOR_ERROR:
+        report_server_error(request, exc)
+    return response
+
+
+def _app_error_response(exc: Exception) -> JSONResponse:
+    """The response a deliberate domain error maps to.
 
     ``ConfigurationError`` is handled apart from the table and **its detail is
     withheld**: it names settings, and a message like "SUPABASE_JWKS_URL
     is unset" tells an anonymous caller what this service is wired to.
     """
-    # `request` is unused but required: FastAPI calls every exception handler
-    # with it, and dropping the parameter changes the signature it dispatches to.
     if isinstance(exc, ConfigurationError):
         return problem(
             status_code=OPERATOR_ERROR,
@@ -358,7 +369,7 @@ async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:  #
     return problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
 
 
-async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:  # noqa: ARG001
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
     """Anything nobody anticipated, still in the one shape.
 
     **Without this, an unhandled exception leaves as `text/plain`
@@ -377,18 +388,60 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     caller *and* nothing to the operator is worse than the plain-text one it
     replaces. Stdlib logging, which `infra/observability.py` renders as JSON with
     the request's id, scrubbed, and reports to Sentry when a DSN is set.
+
+    **The one reporting point (decision 339).** Sentry and, with
+    `ANALYTICS_ERRORS_ENABLED`, PostHog get the same error with the same
+    `ErrorContext`: the request id, the route template (never the raw path,
+    whose ids name records) and the member's id only with analytics consent.
+    A deliberate 4xx never reaches this handler, so neither tool sees one.
     """
-    # `exc` is unused: it is logged through `.exception()`, which reads the active
-    # exception, and it must never reach the response body.
-    logging.getLogger(__name__).exception(
-        "unhandled error serving %s %s", request.method, request.url.path
-    )
+    context = report_server_error(request, exc)
     response = problem(status_code=OPERATOR_ERROR, title="Internal Server Error")
     # Set here because this handler runs outside every middleware, where
     # `RequestIdMiddleware` cannot add it: the id a user quotes for a 500.
-    if request_id := structlog.contextvars.get_contextvars().get("request_id"):
-        response.headers[REQUEST_ID_HEADER] = request_id
+    if context.request_id:
+        response.headers[REQUEST_ID_HEADER] = context.request_id
     return response
+
+
+def report_server_error(request: Request, exc: Exception) -> ErrorContext:
+    """**The one reporting point** for every 500 (decision 339): logged with
+    its traceback, which Sentry captures inside `reporting(context)`, and handed
+    to PostHog's reporter with the same context. `exc` never reaches a body."""
+    context = ErrorContext(
+        request_id=structlog.contextvars.get_contextvars().get("request_id"),
+        route=route_template(request),
+        member_id=member_on(request.state),
+    )
+    with reporting(context):
+        logging.getLogger(__name__).error(
+            "unhandled error serving %s %s",
+            request.method,
+            context.route,
+            exc_info=exc,
+        )
+    reporter: ErrorReporter | None = getattr(request.app.state, "error_reporter", None)
+    if reporter is not None:
+        reporter.report(exc, context)
+    return context
+
+
+def route_template(request: Request) -> str:
+    """The matched route's template, such as `/api/v1/sessions/{session_id}`,
+    or `UNMATCHED_ROUTE`.
+
+    **The router's prefix is on FastAPI's effective route context**, not on
+    `scope["route"]`, whose `path` is the router-relative original (FastAPI
+    0.137 onwards); Sentry's FastAPI integration reads it the same way.
+    """
+    effective = request.scope.get("fastapi", {}).get("effective_route_context")
+    for path in (
+        getattr(effective, "path", None),
+        getattr(request.scope.get("route"), "path", None),
+    ):
+        if isinstance(path, str) and path:
+            return path
+    return UNMATCHED_ROUTE
 
 
 async def handle_request_validation_error(
