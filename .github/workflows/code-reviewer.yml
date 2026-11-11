@@ -42,7 +42,7 @@ env:
   MOONSHOT_BASE_URL: "https://api.moonshot.ai/anthropic"
   # Per Claude run, in Anthropic's prices. The CLI cannot price a Kimi model,
   # so a Kimi run is bounded by the job's timeout instead.
-  CLAUDE_MAX_BUDGET_USD: "3"
+  CLAUDE_MAX_BUDGET_USD: ${{ vars.CLAUDE_MAX_BUDGET_USD || '3' }}
 
 jobs:
   review:
@@ -276,26 +276,29 @@ jobs:
             return "$rc"
           }
 
-          # Why a leg did not complete, in a few words. Never the review or the
-          # prompt: only the exit code, a kind matched against stderr and the
-          # last line of stdout (where the CLI prints its own errors), and
-          # stderr's last line with anything token-like scrubbed.
+          # Why a leg did not complete, as a category only: the CLI's output is
+          # matched, never printed. The same patterns, in the same order, as the
+          # frontend repository's reviewer (FE #545); stderr is matched too,
+          # because here it is captured apart from the review.
           why() {
-            seen=$( { cat code-review/stderr.txt; tail -1 code-review/result.md; } 2>/dev/null || true)
-            match() { printf '%s\n' "$seen" | grep -qiE "$1"; }
-            case "$rc" in 124|137|143) kind="timeout or killed" ;; *) kind="" ;; esac
-            if [ -n "$kind" ]; then :
-            elif match 'budget'; then kind="budget stop (--max-budget-usd)"
-            elif match 'credit balance|billing|quota|insufficient'; then kind="API: credit or quota"
-            elif match 'not_found_error|model.*(not found|not exist|invalid|unknown)'; then kind="API: unknown model"
-            elif match 'timed? ?out|timeout'; then kind="timeout"
-            elif match 'api error|authentication|x-api-key|rate.?limit|overloaded|[45][0-9][0-9] '; then kind="API error"
-            elif [ "$rc" -eq 0 ]; then kind="exit 0 but no review in the output"
-            else kind="unrecognised error"
+            # No pipe: under pipefail, `grep -q` closing early would fail `cat`.
+            match() { grep -qsiE "$1" code-review/result.md code-review/stderr.txt; }
+            if match 'credit balance|insufficient (credit|balance|quota)|billing|quota exceeded|payment'; then
+              reason="out of credit"
+            elif match 'model.{0,40}(not found|does not exist|invalid|not available)|not_found_error|unknown model'; then
+              reason="model not available"
+            elif match 'max.?budget|budget (exceeded|reached)'; then
+              reason="hit the budget cap ($CLAUDE_MAX_BUDGET_USD USD)"
+            elif match 'rate.?limit|overloaded|429|529'; then
+              reason="rate limited or overloaded"
+            elif match 'authentication|invalid (x-)?api.?key|401|unauthori[sz]ed'; then
+              reason="key rejected"
+            elif [ "$rc" -ne 0 ]; then
+              reason="exit $rc"
+            else
+              reason="no review in its output"
             fi
-            last=$(grep -v '^[[:space:]]*$' code-review/stderr.txt 2>/dev/null | tail -1 | cut -c1-200 |
-              sed -E 's/(sk-|Bearer )[^ ]*/[scrubbed]/g; s/[A-Za-z0-9+\/=_.-]{24,}/[scrubbed]/g; s/::/: /g' || true)
-            echo "::warning::The $p review did not complete: exit $rc, $kind.${last:+ Last stderr line: $last}"
+            echo "::warning::The $p review did not complete: $reason"
           }
 
           used=""
