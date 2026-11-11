@@ -483,14 +483,14 @@ async def test_a_stopped_run_resumes_after_what_it_sent(
 
     with pytest.raises(UpstreamError):
         await backfill_analytics(
-            db_engine, sink=stopped, cursor=cursor, until=CUTOFF, target=TARGET, batch=2
+            db_engine, sink=stopped, cursor=cursor, until=CUTOFF, target=TARGET, batch=3
         )
     assert len(stopped.batches) == 2
     assert json.loads(cursor.read_text())["kind"] == "session_events"
 
     resumed = FakeSink()
     await backfill_analytics(
-        db_engine, sink=resumed, cursor=cursor, until=CUTOFF, target=TARGET, batch=2
+        db_engine, sink=resumed, cursor=cursor, until=CUTOFF, target=TARGET, batch=3
     )
 
     # Nothing sent twice, nothing missed.

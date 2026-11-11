@@ -31,8 +31,11 @@ from app.domain.analytics_events import (
 )
 from app.domain.enums import SessionStatus
 from app.infra.analytics_backfill import (
+    CURSOR_FORMAT,
+    MAX_EVENTS_PER_FACT,
     BackfillRefusedError,
     _session_events,
+    backfill_analytics,
     historical_sink,
     read_cursor,
     target_fingerprint,
@@ -170,7 +173,7 @@ def a_fact(
     return {
         "id": uuid4(),
         "at": AT,
-        "user_id": uuid4(),
+        "mentee_id": uuid4(),
         "mentor_id": uuid4(),
         "mentee_counted": True,
         "mentor_counted": True,
@@ -200,7 +203,7 @@ def test_a_request_and_a_completion_carry_the_mentors_side() -> None:
         (requested, received, made),
         (completed, delivered, held),
     ]:
-        assert mentee_side["distinct_id"] == str(fact["user_id"])
+        assert mentee_side["distinct_id"] == str(fact["mentee_id"])
         assert mentor_side["distinct_id"] == str(fact["mentor_id"])
         assert mentor_side["properties"] == mentee_side["properties"]
         assert mentor_side["timestamp"] == mentee_side["timestamp"]
@@ -233,7 +236,7 @@ def test_each_side_is_sent_only_when_its_person_is_counted(
 
 def test_a_no_show_or_a_confirmation_has_no_mentor_side() -> None:
     for fact in [a_fact(S.CONFIRMED, S.NO_SHOW), a_fact(S.PENDING_MENTOR_APPROVAL, S.CONFIRMED)]:
-        assert [e["distinct_id"] for e in _session_events(fact)] == [str(fact["user_id"])]
+        assert [e["distinct_id"] for e in _session_events(fact)] == [str(fact["mentee_id"])]
 
 
 def test_a_legacy_confirmation_is_the_mentees_only() -> None:
@@ -315,6 +318,7 @@ def a_cursor(path: Path, **values: object) -> Path:
                 "id": str(uuid4()),
                 "until": UNTIL.isoformat(),
                 "target": "a" * 64,
+                "format": CURSOR_FORMAT,
                 **values,
             }
         ),
@@ -422,3 +426,37 @@ def test_a_failed_run_exits_non_zero_with_one_line(
     assert out[-1].endswith(str(raised))
     assert "Traceback" not in "\n".join(out)
     assert not any("phc_test" in line for line in out)
+
+
+def test_a_cursor_from_before_the_mentors_side_is_refused(tmp_path: Path) -> None:
+    """Resuming it would skip the mentor-side events of every fact it passed."""
+    path = a_cursor(tmp_path / "c.json")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    del saved["format"]
+    path.write_text(json.dumps(saved), encoding="utf-8")
+
+    with pytest.raises(BackfillRefusedError, match=r"predates mentor-side events \(decision 337\)"):
+        read_cursor(path, until=UNTIL, target="a" * 64)
+    assert read_cursor(a_cursor(tmp_path / "ok.json"), until=UNTIL, target="a" * 64) is not None
+
+
+def test_a_fact_reports_at_most_three_events() -> None:
+    worst = a_fact(None, S.CONFIRMED)
+    legacy = a_fact(S.CONFIRMED, S.COMPLETED, confirmed_at=AT)
+    assert MAX_EVENTS_PER_FACT == 3
+    assert len(_session_events(worst)) == len(_session_events(legacy)) == MAX_EVENTS_PER_FACT
+
+
+@pytest.mark.parametrize("batch", [0, 1, 2])
+def test_a_batch_smaller_than_one_facts_events_is_refused(tmp_path: Path, batch: int) -> None:
+    with pytest.raises(ValueError, match="batch"):
+        asyncio.run(
+            backfill_analytics(
+                None,  # type: ignore[arg-type]
+                sink=None,
+                cursor=tmp_path / "c.json",
+                until=UNTIL,
+                target=None,
+                batch=batch,
+            )
+        )

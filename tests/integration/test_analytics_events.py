@@ -268,7 +268,7 @@ async def test_each_side_of_a_session_event_is_skipped_only_for_its_own_internal
     """The one helper both session writers queue through (decision 337)."""
     demo = await make_public_mentor(db_engine, "ev-side-demo", listed=False)
     real = await make_public_mentor(db_engine, "ev-side-real", listed=False)
-    mentee, session_id = uuid4(), uuid4()
+    mentee, session_id = await a_user(db_engine), uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
             text("UPDATE users SET email = :e WHERE id = :u"),
@@ -454,9 +454,43 @@ async def test_a_demo_accounts_fact_queues_nothing(db_engine: AsyncEngine) -> No
     assert [p["distinct_id"] for p in await events(db_engine, "mentor_listed")] == [str(real)]
 
 
+async def test_a_deleted_or_unknown_persons_fact_queues_nothing(db_engine: AsyncEngine) -> None:
+    """Nothing about a person who asked to go leaves for the vendor, live or
+    in the backfill (PRD 30 section 8): a soft-deleted account, whose session
+    may still settle before the purge, gets no row; nor does an id no account has."""
+    gone = await a_user(db_engine, deleted=True)
+    here = await a_user(db_engine)
+    async with async_sessionmaker(db_engine)() as session:
+        await enqueue_analytics_each(
+            session,
+            AnalyticsEvent.CREDIT_GRANTED,
+            [(person, {"amount": 1, "source": "admin_grant"}) for person in (gone, here, uuid4())],
+            at=AT,
+        )
+        await session.commit()
+
+    assert [p["distinct_id"] for p in await events(db_engine)] == [str(here)]
+
+
+async def test_a_deleted_mentors_completion_is_the_mentees_only(db_engine: AsyncEngine) -> None:
+    mentor = await make_public_mentor(db_engine, "ev-settle-gone")
+    held = await add_session(db_engine, mentor, status="confirmed", mentee_attendance="attended")
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": mentor})
+
+    async with async_sessionmaker(db_engine)() as session:
+        assert await settle_attendance(session, now=AT, ladder=default_ladder()) == 1
+        await session.commit()
+
+    assert [p["properties"] for p in await events(db_engine, "session_completed")] == [
+        {"session_id": str(held)}
+    ]
+    assert await events(db_engine, "session_delivered") == []
+
+
 async def test_many_facts_in_one_statement_keep_their_own_people(db_engine: AsyncEngine) -> None:
     """Many facts in one statement each keep their own person and properties."""
-    people = [uuid4() for _ in range(3)]
+    people = [await a_user(db_engine) for _ in range(3)]
     async with async_sessionmaker(db_engine)() as session:
         await enqueue_analytics_each(
             session,
@@ -475,7 +509,7 @@ async def test_many_facts_span_chunks_without_losing_one(
 ) -> None:
     """Five facts in chunks of two: three statements, every row written."""
     monkeypatch.setattr(outbox, "ANALYTICS_CHUNK", 2)
-    people = [uuid4() for _ in range(5)]
+    people = [await a_user(db_engine) for _ in range(5)]
     async with async_sessionmaker(db_engine)() as session:
         await enqueue_analytics_each(
             session,

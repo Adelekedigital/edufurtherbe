@@ -213,8 +213,9 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
                     "Video connected (bookable)",
                     (CONFERENCING_CONNECTED,),
                 ),
-                # `session_completed` is the mentee's event: nothing tells
-                # analytics a mentor delivered one yet.
+                # Untracked for now: `session_completed` is the mentee's event.
+                # `SESSION_DELIVERED` is the mentor's (decision 337), and the
+                # funnel is restructured around it in the next PR (decision 338).
                 Step("first_session", "First session (30 days)", ()),
             ),
             window_days=30,
