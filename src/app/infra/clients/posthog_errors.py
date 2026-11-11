@@ -10,7 +10,8 @@ https://posthog.com/docs/error-tracking/installation/manual ("Make a request"):
 ``function``, ``filename``, ``lineno`` and ``in_app``. Frames are oldest first,
 as Sentry orders them.
 
-**Only the exception's type, scrubbed message and frames leave**: no request
+**Only the exception's type, scrubbed message and frames leave**, the message
+cut before any SQL statement (`without_statement`): no request
 or response body, header, cookie, source line or frame local. The whole event
 then passes through `observability.scrub`, the one rule for logs and Sentry.
 
@@ -45,7 +46,7 @@ from app.domain.analytics_events import GEOIP_DISABLE
 from app.domain.ports import AnalyticsSink
 from app.infra.clients.posthog import NullAnalyticsSink, analytics_sink_for
 from app.infra.http.client import shared
-from app.infra.observability import scrub
+from app.infra.observability import scrub, without_statement
 
 __all__ = [
     "ERROR_TIMEOUT",
@@ -100,7 +101,7 @@ def exception_event(
         "$exception_list": [
             {
                 "type": type(exc).__name__,
-                "value": str(exc)[:MAX_MESSAGE],
+                "value": without_statement(str(exc))[:MAX_MESSAGE],
                 "mechanism": {"handled": False, "synthetic": False},
                 "stacktrace": {
                     "type": "raw",

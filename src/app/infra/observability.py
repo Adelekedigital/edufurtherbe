@@ -94,6 +94,35 @@ def _is_sensitive(key: object) -> bool:
     )
 
 
+#: Where SQLAlchemy starts quoting the statement; its `[parameters: ...]`,
+#: which hold the row's values, follow it.
+SQL_MARKER = "[SQL:"
+
+
+def without_statement(message: str) -> str:
+    """A database error's message cut to its first line, before SQLAlchemy's
+    `[SQL:` and everything after it (the statement, its parameters and a
+    driver's `DETAIL` line, which quote names and values). Any other message
+    is returned unchanged. Applied before `scrub`, for Sentry and PostHog alike
+    (decision 339)."""
+    if SQL_MARKER not in message:
+        return message
+    return message.split(SQL_MARKER, 1)[0].partition("\n")[0].rstrip()
+
+
+def _cut_statements(event: Any) -> None:
+    """`without_statement` on a Sentry event's exception values and log message."""
+    for value in (event.get("exception") or {}).get("values") or []:
+        if isinstance(value.get("value"), str):
+            value["value"] = without_statement(value["value"])
+    entry = event.get("logentry") or {}
+    for key in ("message", "formatted"):
+        if isinstance(entry.get(key), str):
+            entry[key] = without_statement(entry[key])
+    if isinstance(event.get("message"), str):
+        event["message"] = without_statement(event["message"])
+
+
 def scrub(value: Any) -> Any:
     """`value` with every address and bearer token masked, and every
     sensitive key's value replaced. The one rule for logs and Sentry alike."""
@@ -174,7 +203,7 @@ def _before_send(event: Any, _hint: Any) -> Any:
 
     An unhandled request error also carries its route template and, only with
     analytics consent, the member's id: the `ErrorContext` PostHog gets too
-    (decision 339).
+    (decision 339). A database error's statement and parameters are cut first.
     """
     request_id = structlog.contextvars.get_contextvars().get("request_id")
     if request_id:
@@ -184,6 +213,7 @@ def _before_send(event: Any, _hint: Any) -> Any:
             event.setdefault("tags", {})["route"] = context.route
         if context.member_id:
             event["user"] = {"id": str(context.member_id)}
+    _cut_statements(event)
     return scrub(event)
 
 

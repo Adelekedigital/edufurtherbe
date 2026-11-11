@@ -14,6 +14,7 @@ import pytest
 import sentry_sdk
 from fastapi import Depends, Request
 from pydantic import SecretStr
+from sqlalchemy.exc import ProgrammingError
 from tests.posthog_fakes import recording_client
 
 from app.api.deps import core as deps
@@ -27,7 +28,7 @@ from app.infra.clients.posthog_errors import (
     error_reporter_for,
     exception_event,
 )
-from app.infra.observability import REDACTED, configure_sentry
+from app.infra.observability import REDACTED, configure_sentry, without_statement
 from app.main import create_app
 from conftest import Recording
 
@@ -314,3 +315,58 @@ async def test_a_burst_past_the_in_flight_bound_is_dropped_not_queued() -> None:
     await reporter.drain()
 
     assert len(sent) == MAX_IN_FLIGHT
+
+
+# --------------------------------------------------------------------------
+# A database error's statement and parameters reach neither tool
+
+
+def a_database_error() -> ProgrammingError:
+    return ProgrammingError(
+        "SELECT id FROM users WHERE first_name = $1",
+        ("Amaka Obi",),
+        # A driver's DETAIL line quotes values too, before the statement.
+        Exception('relation "users" does not exist\nDETAIL:  Key (slug)=(amaka-obi) exists.'),
+    )
+
+
+async def test_a_statement_and_its_parameters_reach_neither_tool(
+    recording: list[dict[str, Any]],
+) -> None:
+    with_sentry()
+    seen: list[httpx.Request] = []
+    sink = PostHogSink(host=HOST, project_token=TOKEN, client=recording_client(seen))
+    reporter = PostHogErrorReporter(sink, release=None, environment="ci")
+    app = an_app(reporter)
+
+    @app.get("/db")
+    async def db() -> None:
+        raise a_database_error()
+
+    response = await get(app, "/db")
+    await reporter.drain()
+    sentry_sdk.flush()
+
+    assert response.status_code == 500
+    (request,) = seen
+    (event,) = json.loads(request.content)["batch"]
+    (sentry_event,) = recording
+    for sent in (json.dumps(event), json.dumps(sentry_event)):
+        assert "Amaka" not in sent
+        assert "amaka-obi" not in sent
+        assert "first_name" not in sent
+    (exception,) = event["properties"]["$exception_list"]
+    assert exception["type"] == "ProgrammingError"
+    assert exception["value"] == str(a_database_error()).partition("\n")[0]
+    assert 'relation "users" does not exist' in exception["value"]
+    assert sentry_event["exception"]["values"][-1]["value"] == exception["value"]
+
+
+async def test_any_other_message_is_left_whole() -> None:
+    message = "two lines\nboth kept for amy@mail.example.ng"
+
+    assert without_statement(message) == message
+    context = ErrorContext(request_id="req-whole-123", route="/x", member_id=None)
+    event = exception_event(RuntimeError(message), context, release=None, environment="ci")
+    (exception,) = event["properties"]["$exception_list"]
+    assert exception["value"] == f"two lines\nboth kept for {REDACTED}"
