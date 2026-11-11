@@ -504,8 +504,9 @@ async def _push(
         if recipient == found.mentor_id
         else ("mentee", found.mentor_id, "mentor")
     )
+    notification = Notification(str(row["event_type"]))
     spec = session_push_spec(
-        Notification(str(row["event_type"])),
+        notification,
         recipient_role=role,
         moved=found.rescheduled_from_session_id is not None,
     )
@@ -522,6 +523,7 @@ async def _push(
     named = (await _names_for(session, (other,))).get(other)
     push = session_push(
         spec,
+        notification=notification,
         session_id=row["entity_id"],
         # A party who has since left is "your mentor", as in the email (#288).
         other_name=(
