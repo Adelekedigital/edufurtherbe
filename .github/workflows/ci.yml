@@ -41,13 +41,91 @@ jobs:
       - name: Format, lint, types, layers, size
         run: uv run python scripts/check.py --only format,lint,types,layers,size
 
+  # Decides whether the test shards run. A pull request whose every file is
+  # docs/ or markdown skips them, and `Tests` below still reports a status, so
+  # nothing waits on a check that never comes. Not `paths-ignore`, which would
+  # make the checks vanish instead. Anything else, a push or a manual run
+  # included, runs the shards.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+
+      - name: Docs only?
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Both sides of a rename, so moving code into docs/ is not "docs only".
+          files=$(git diff --name-only --no-renames "$BASE...$HEAD")
+          printf '%s\n' "$files"
+          # An empty diff runs the shards: "nothing changed" is not "docs only".
+          if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "Docs only: the test shards are skipped; Tests runs the unit tier."
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # A feature PR whose diff /code-reviewer would refuse fails here in seconds,
+  # instead of after the review is asked for. Counted by the same script the
+  # reviewer uses. A release PR (base `main`) is the sum of many reviewed PRs
+  # and is never reviewed whole, so it is not checked.
+  review-size:
+    name: Review size
+    if: github.event_name == 'pull_request' && github.base_ref == 'development'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Count the reviewed diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The whole PR, as the first /code-reviewer run sees it.
+          from=$(git merge-base "$BASE" "$HEAD")
+          size=$(bash scripts/review_diff.sh "$from" "$HEAD" "$RUNNER_TEMP/pr.diff")
+          lines=$(printf '%s\n' "$size" | sed -n 's/^lines=//p')
+          max=$(printf '%s\n' "$size" | sed -n 's/^max=//p')
+          echo "$lines reviewed lines (limit $max)."
+          if [ "$lines" -gt "$max" ]; then
+            echo "::error::$lines reviewed lines, over the $max-line limit /code-reviewer accepts. Split this PR into smaller ones."
+            exit 1
+          fi
+
   # No interpreter matrix. A matrix earns its keep for a library consumed on many
   # Python versions; this is an application deployed on exactly one, pinned by
   # .python-version. A second job would double the minutes to test a
   # configuration that never runs anywhere.
-  test:
-    name: Tests
+  #
+  # Three shards, each a deterministic third of the test files balanced by
+  # scripts/test_durations.json (`check.py --shard`). Each writes coverage data
+  # without the floor; `Tests` combines them and enforces it.
+  test-shard:
+    name: Tests (shard ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      # Every shard reports, so one run shows every failure.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
 
     # A service container rather than testcontainers. The library would pull the
     # Docker SDK and its requests/urllib3 chain into `uv export`, which feeds
@@ -82,11 +160,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      # PYTEST_ADDOPTS carries the reporting flags that only CI needs, so the
-      # coverage thresholds themselves stay defined in scripts/check.py.
-      - name: Run tests with coverage
+      # PYTEST_ADDOPTS carries the reporting flag that only CI needs, so the
+      # test command itself stays defined in scripts/check.py. A shard that
+      # collects no tests fails: pytest exits 5, and check.py refuses a shard
+      # with no files rather than letting a bare `pytest` run everything.
+      - name: Run shard ${{ matrix.shard }} with coverage
         env:
-          PYTEST_ADDOPTS: --cov-report=xml --junitxml=junit.xml
+          PYTEST_ADDOPTS: --junitxml=junit-shard-${{ matrix.shard }}.xml
+          COVERAGE_FILE: .coverage.shard-${{ matrix.shard }}
           TEST_DATABASE_URL: postgresql://edufurther:edufurther@localhost:5432/edufurther
           # Turns "no database, so skip" into "no database, so fail". Locally a
           # skip is the right answer — not every machine runs Docker. Here it is
@@ -94,14 +175,76 @@ jobs:
           # summary, so without this the entire database tier could vanish and
           # the check would still be green.
           REQUIRE_DB_TESTS: "1"
-        run: uv run python scripts/check.py --only tests
+        run: uv run python scripts/check.py --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: |
+            .coverage.shard-${{ matrix.shard }}
+            junit-shard-${{ matrix.shard }}.xml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  # The check that stands for the whole suite, under the name the single job
+  # had. It fails unless every shard passed and their combined coverage meets
+  # the floor in scripts/check.py. On a docs-only PR it runs the unit tier,
+  # which checks the ADRs, the settled decisions and docs/e2e, in seconds.
+  test:
+    name: Tests
+    needs: [changes, test-shard]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard passed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          SHARDS: ${{ needs.test-shard.result }}
+        run: |
+          echo "changes=$CHANGES code=$CODE shards=$SHARDS"
+          [ "$CHANGES" = success ] || exit 1
+          if [ "$CODE" = true ]; then
+            [ "$SHARDS" = success ]
+          else
+            [ "$CODE" = false ] && [ "$SHARDS" = skipped ]
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Download coverage data
+        if: needs.changes.outputs.code == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-shard-*
+          merge-multiple: true
+
+      - name: Combine coverage
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check.py --combine-coverage
+
+      - name: Unit tests (docs only)
+        if: needs.changes.outputs.code == 'false'
+        run: uv run python scripts/check.py --fast
 
       - name: Upload coverage
-        if: always()
+        if: always() && needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: coverage.xml
+          path: |
+            coverage.xml
+            junit-shard-*.xml
           if-no-files-found: ignore
 
   build:

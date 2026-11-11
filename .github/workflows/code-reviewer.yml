@@ -34,8 +34,6 @@ permissions:
   contents: read
 
 env:
-  # A diff larger than this is refused with a note rather than reviewed.
-  MAX_DIFF_LINES: "3000"
   # Pinned: the step running it holds the keys. Its flags were checked against
   # this version (2026-10-12).
   CLAUDE_CODE_VERSION: "2.1.296"
@@ -81,6 +79,7 @@ jobs:
       head: ${{ steps.pr.outputs.head }}
       scope: ${{ steps.prepare.outputs.scope }}
       lines: ${{ steps.prepare.outputs.lines }}
+      max: ${{ steps.prepare.outputs.max }}
       missing: ${{ steps.choose.outputs.missing }}
       reviewer: ${{ steps.claude.outputs.reviewer || (steps.codex.outcome == 'success' && 'Codex' || '') }}
       result: ${{ steps.claude.outputs.result || steps.codex.outputs.final-message }}
@@ -190,12 +189,19 @@ jobs:
             echo "Whole pull request." > code-review/range.txt
           fi
 
-          git diff "$from" "$HEAD" -- . \
-            ':(exclude)uv.lock' ':(exclude)docs/**' ':(exclude)**/*.md' \
-            ':(exclude).claude/**' ':(exclude).github/**' > code-review/pr.diff
-          # The rulebook is markdown, so the filter above drops it; a change to
-          # the rules is exactly what must be reviewed, so it goes back in.
-          git diff "$from" "$HEAD" -- AGENTS.md >> code-review/pr.diff
+          # What is reviewed, and the size limit, are scripts/review_diff.sh,
+          # which ci.yml's review-size check runs too. Taken from the base
+          # branch like the prompt: this job's later steps hold the keys, so
+          # nothing from the pull request itself is ever executed here.
+          if ! git show "origin/$BASE_REF:scripts/review_diff.sh" > code-review/review_diff.sh 2>/dev/null; then
+            echo "::error::scripts/review_diff.sh is not on $BASE_REF."
+            exit 1
+          fi
+          bash code-review/review_diff.sh "$from" "$HEAD" code-review/pr.diff > code-review/size.txt
+          rm code-review/review_diff.sh
+          lines=$(sed -n 's/^lines=//p' code-review/size.txt)
+          max=$(sed -n 's/^max=//p' code-review/size.txt)
+          rm code-review/size.txt
 
           # The rules the reviewer applies come from the base branch too:
           # AGENTS.md in the checkout is the pull request's own, and Codex loads
@@ -219,11 +225,11 @@ jobs:
             code-review/comments.jsonl | tail -c 20000 > code-review/answered.md
           rm code-review/comments.jsonl
 
-          lines=$(wc -l < code-review/pr.diff)
           echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "max=$max" >> "$GITHUB_OUTPUT"
           if [ "$lines" -eq 0 ]; then
             echo "verdict=empty" >> "$GITHUB_OUTPUT"
-          elif [ "$lines" -gt "$MAX_DIFF_LINES" ]; then
+          elif [ "$lines" -gt "$max" ]; then
             echo "verdict=too-large" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=review" >> "$GITHUB_OUTPUT"
@@ -336,6 +342,7 @@ jobs:
       HEAD: ${{ needs.review.outputs.head }}
       SCOPE: ${{ needs.review.outputs.scope }}
       LINES: ${{ needs.review.outputs.lines }}
+      MAX_DIFF_LINES: ${{ needs.review.outputs.max }}
       MISSING: ${{ needs.review.outputs.missing }}
       REVIEWER: ${{ needs.review.outputs.reviewer }}
       RESULT: ${{ needs.review.outputs.result }}
@@ -356,7 +363,7 @@ jobs:
               # No text, no marker: these commits stay unreviewed.
               echo "**Code review returned nothing** (GitHub drops an output it takes for a secret). [Run log]($RUN_URL)"
             elif [ "$VERDICT" = "too-large" ]; then
-              echo "**Code review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` deliberately."
+              echo "**Code review skipped:** $LINES changed lines in $SCOPE, over the $MAX_DIFF_LINES-line limit. Split the PR, or raise \`MAX_DIFF_LINES\` in \`scripts/review_diff.sh\` deliberately."
             else
               echo "**Code review by ${REVIEWER:-the reviewer}** of $SCOPE"
               echo
