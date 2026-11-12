@@ -51,8 +51,9 @@ from app.domain.analytics_behaviour import (
 )
 from app.domain.mentor_stats import Window
 from app.domain.ports import AnalyticsReader
+from app.infra.clients.posthog_private import PrivateApi, PrivateApiError
 from app.infra.http.client import shared
-from app.infra.http.upstream import trim_origin, why
+from app.infra.http.upstream import trim_origin
 
 __all__ = ["NullAnalyticsReader", "PostHogReader", "analytics_reader_for", "replay_url_for"]
 
@@ -327,13 +328,18 @@ def funnel_body(funnel: Funnel, by: str) -> dict[str, Any]:
     }
 
 
+def not_internal(internal: Sequence[UUID]) -> dict[str, Any]:
+    """The property filter leaving ``internal`` out, the ids written as a list."""
+    listed = "[" + ", ".join(f"'{user}'" for user in _ids(internal)) + "]"
+    return {"type": "hogql", "key": NOT_INTERNAL.replace("{internal}", listed)}
+
+
 def funnel_query(
     funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
 ) -> dict[str, Any]:
     """`funnel_body` over ``window``, leaving out ``internal``. ``filterTestAccounts``
     stays off: `NOT_INTERNAL` excludes, not a project setting nobody reviews."""
     body = funnel_body(funnel, by)
-    listed = "[" + ", ".join(f"'{user}'" for user in _ids(internal)) + "]"
     return {
         **body,
         "dateRange": {
@@ -343,7 +349,7 @@ def funnel_query(
         },
         "filterTestAccounts": False,
         "properties": [
-            {"type": "hogql", "key": NOT_INTERNAL.replace("{internal}", listed)},
+            not_internal(internal),
             *body["properties"],
         ],
     }
@@ -496,32 +502,29 @@ class PostHogReader:
         api_key: str,
         client: httpx.Client | None = None,
     ) -> None:
-        self._url = f"{trim_origin(api_host)}/api/projects/{project_id}/query/"
-        self._key = api_key
-        self._client = client or shared(TAB_TIMEOUT)
+        self._api = PrivateApi(
+            api_host=api_host,
+            project_id=project_id,
+            api_key=api_key,
+            client=client or shared(TAB_TIMEOUT),
+        )
 
     def _ask(self, query: dict[str, Any], timeout: httpx.Timeout) -> Any:
         """The answer's body, or `AnalyticsUpstreamError` for any failure. The status,
         the failure kind and what PostHog said are logged, the key cut out of
         the last: an error body can echo it."""
-        response: httpx.Response | None = None
         try:
-            response = self._client.post(
-                self._url,
-                json={"query": query, "refresh": "blocking"},
-                headers={"Authorization": f"Bearer {self._key}"},
-                timeout=timeout,
+            return self._api.call(
+                "POST", "/query/", body={"query": query, "refresh": "blocking"}, timeout=timeout
             )
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except PrivateApiError as exc:
             logger.warning(
                 "analytics read failed",
                 extra={
                     "query_kind": query.get("kind"),
-                    "failure": type(exc).__name__,
-                    "status": None if response is None else response.status_code,
-                    "reason": why(exc, response, secret=self._key),
+                    "failure": exc.failure,
+                    "status": exc.status,
+                    "reason": exc.reason,
                 },
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc

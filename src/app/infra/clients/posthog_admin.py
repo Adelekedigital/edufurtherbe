@@ -1,82 +1,80 @@
 """PostHog's private API for the dashboard sync (decision 341), with the
-personal key `ANALYTICS_API_KEY` (cohort, insight and dashboard read and write,
-person read). Each call is one documented operation:
+personal key `ANALYTICS_API_KEY` (insight and dashboard read and write).
+Each call is one documented operation:
 
 - insights: https://posthog.com/docs/api/insights (`name`, `query`, `dashboards`,
-  `description`, `tags`; an insight leaves a dashboard when it leaves `dashboards`)
-- dashboards: https://posthog.com/docs/api/dashboards (`name`, `description`, `tags`)
-- cohorts: https://posthog.com/docs/api/cohorts; members by person UUID, "not
-  distinct IDs" (https://posthog.com/docs/open-api-spec/cohorts_add_persons_to_static_cohort_partial_update.md),
-  so a distinct id is looked up first (https://posthog.com/docs/api/persons, `distinct_id`).
-
-The key travels per request and is cut out of any error (`why`).
+  `description`, `tags`, `deleted`; an insight leaves a dashboard when it leaves
+  `dashboards`; "Hard delete of this model is not allowed. Use a patch API call
+  to set "deleted" to true")
+- dashboards: https://posthog.com/docs/api/dashboards (`name`, `description`,
+  `tags`, `deleted`)
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError, UpstreamError
+from app.infra.clients.posthog_private import PrivateApi, PrivateApiError
 from app.infra.clients.posthog_reader import private_api
 from app.infra.http.client import shared
-from app.infra.http.upstream import trim_origin, why
 
-__all__ = ["PAGE", "PostHogAdmin", "posthog_admin_for"]
+__all__ = ["PostHogAdmin", "posthog_admin_for"]
 
 TIMEOUT = httpx.Timeout(30.0, connect=5.0)
-#: Rows per list request.
-PAGE = 100
-#: The most person ids one add takes.
-ADD_LIMIT = 1000
 
 
 class PostHogAdmin:
-    """One project's cohorts, insights and dashboards."""
+    """One project's insights and dashboards. ``written`` counts the writes
+    that landed, per kind, so a failed run can say what it already changed."""
 
     def __init__(
         self, *, api_host: str, project_id: str, api_key: str, client: httpx.Client | None = None
     ) -> None:
-        self._base = f"{trim_origin(api_host)}/api/projects/{project_id}"
-        self._key = api_key
-        self._client = client or shared(TIMEOUT)
+        self._api = PrivateApi(
+            api_host=api_host,
+            project_id=project_id,
+            api_key=api_key,
+            client=client or shared(TIMEOUT),
+        )
+        self._project = project_id
+        self.written: Counter[str] = Counter()
 
     def _call(
         self,
         method: str,
         path: str,
-        *,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
     ) -> Any:
-        response: httpx.Response | None = None
         try:
-            response = self._client.request(
-                method,
-                f"{self._base}{path}",
-                params=params,
-                json=body,
-                headers={"Authorization": f"Bearer {self._key}"},
-            )
-            response.raise_for_status()
-            return response.json() if response.content else None
-        except (httpx.HTTPError, ValueError) as exc:
-            reason = why(exc, response, secret=self._key)
-            raise UpstreamError(f"PostHog {method} {path} failed: {reason}") from exc
+            answer = self._api.call(method, path, params=params, body=body)
+        except PrivateApiError as exc:
+            raise UpstreamError(f"PostHog {method} {path} failed: {exc.reason}") from exc
+        if method != "GET":
+            self.written[path.strip("/").split("/")[0]] += 1
+        return answer
 
-    def _list(self, path: str, **params: Any) -> Iterator[dict[str, Any]]:
-        """Every row, a page at a time by offset (never the answer's `next` URL)."""
-        offset = 0
+    def _list(self, path: str) -> Iterator[dict[str, Any]]:
+        """Every row, following each page's `next`. Only its query is used,
+        and only when it names this same list: the key goes nowhere else."""
+        params: dict[str, Any] | None = None
         while True:
-            page = self._call("GET", path, params={**params, "limit": PAGE, "offset": offset})
-            rows = page.get("results") or []
-            yield from rows
-            if len(rows) < PAGE:
+            page = self._call("GET", path, params)
+            yield from page["results"]
+            following = page.get("next")
+            if not following:
                 return
-            offset += PAGE
+            parts = urlsplit(following)
+            if parts.path != f"/api/projects/{self._project}{path}":
+                raise UpstreamError(f"PostHog named a next page elsewhere: {parts.path}")
+            params = dict(parse_qsl(parts.query))
 
     def insights(self) -> list[dict[str, Any]]:
         return list(self._list("/insights/"))
@@ -85,7 +83,8 @@ class PostHogAdmin:
         return self._call("POST", "/insights/", body=body)  # type: ignore[no-any-return]
 
     def update_insight(self, insight_id: int, body: dict[str, Any]) -> dict[str, Any]:
-        return self._call("PATCH", f"/insights/{int(insight_id)}/", body=body)  # type: ignore[no-any-return]
+        path = f"/insights/{int(insight_id)}/"
+        return self._call("PATCH", path, body=body)  # type: ignore[no-any-return]
 
     def dashboards(self) -> list[dict[str, Any]]:
         return list(self._list("/dashboards/"))
@@ -94,38 +93,8 @@ class PostHogAdmin:
         return self._call("POST", "/dashboards/", body=body)  # type: ignore[no-any-return]
 
     def update_dashboard(self, dashboard_id: int, body: dict[str, Any]) -> dict[str, Any]:
-        return self._call("PATCH", f"/dashboards/{int(dashboard_id)}/", body=body)  # type: ignore[no-any-return]
-
-    def cohorts(self) -> list[dict[str, Any]]:
-        return list(self._list("/cohorts/", type="static"))
-
-    def create_cohort(self, body: dict[str, Any]) -> dict[str, Any]:
-        return self._call("POST", "/cohorts/", body=body)  # type: ignore[no-any-return]
-
-    def members(self, cohort_id: int) -> list[dict[str, Any]]:
-        """The cohort's persons, each with its `uuid` and `distinct_ids`."""
-        return list(self._list(f"/cohorts/{int(cohort_id)}/persons/", format="json"))
-
-    def person_uuid(self, distinct_id: str) -> str | None:
-        """The person PostHog knows ``distinct_id`` as, or ``None`` before any event."""
-        rows = self._call("GET", "/persons/", params={"distinct_id": distinct_id})
-        found = rows.get("results") or []
-        return str(found[0]["uuid"]) if found else None
-
-    def add_members(self, cohort_id: int, person_uuids: list[str]) -> None:
-        for at in range(0, len(person_uuids), ADD_LIMIT):
-            self._call(
-                "PATCH",
-                f"/cohorts/{int(cohort_id)}/add_persons_to_static_cohort/",
-                body={"person_ids": person_uuids[at : at + ADD_LIMIT]},
-            )
-
-    def remove_member(self, cohort_id: int, person_uuid: str) -> None:
-        self._call(
-            "PATCH",
-            f"/cohorts/{int(cohort_id)}/remove_person_from_static_cohort/",
-            body={"person_id": person_uuid},
-        )
+        path = f"/dashboards/{int(dashboard_id)}/"
+        return self._call("PATCH", path, body=body)  # type: ignore[no-any-return]
 
 
 def posthog_admin_for(settings: Settings, client: httpx.Client | None = None) -> PostHogAdmin:

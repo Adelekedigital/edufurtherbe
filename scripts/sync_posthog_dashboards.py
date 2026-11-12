@@ -4,10 +4,12 @@
     railway run uv run python scripts/sync_posthog_dashboards.py --apply   # write
 
 A dry run reads PostHog and the internal accounts and prints the plan: create,
-update or unchanged per cohort, dashboard and insight, and the internal count.
-``--apply`` makes it so. Needs `ANALYTICS_API_HOST`, `ANALYTICS_PROJECT_ID` and
-`ANALYTICS_API_KEY`. A failure is one line and a non-zero exit. The rules are in
-`app.infra.posthog_dashboards`; this only wires them up.
+update or remove per dashboard and insight, and the internal count.
+``--apply`` makes it so, rewriting every managed item from the repo. Rerun
+it after an account becomes internal or stops being so: the ids are refreshed.
+Needs `ANALYTICS_API_HOST`, `ANALYTICS_PROJECT_ID` and `ANALYTICS_API_KEY`. A
+failure prints what was already written, then one line, and exits non-zero.
+The rules are in `app.infra.posthog_dashboards`; this only wires them up.
 """
 
 from __future__ import annotations
@@ -39,18 +41,35 @@ async def read_internal() -> list[UUID]:
 
 def report(plan: Plan, apply: bool) -> list[str]:
     lines = [f"{c.kind} {c.action}: {c.name}" for c in plan.changes]
-    lines.append(f"internal accounts: {plan.internal} ({plan.not_in_posthog} not in PostHog yet)")
+    lines.append(f"internal accounts left out of every insight: {plan.internal}")
     lines.append("applied" if apply else "dry run: nothing written")
     return lines
+
+
+#: What a run reports as one line: a refusal, a database or network failure,
+#: or an answer not shaped as documented.
+FAILURES = (
+    ConfigurationError,
+    UpstreamError,
+    SQLAlchemyError,
+    OSError,
+    AttributeError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
 
 
 def run(apply: bool, admin: PostHogAdmin | None = None) -> int:
     try:
         admin = admin or posthog_admin_for(get_settings())
         plan = sync(admin, asyncio.run(read_internal()), apply=apply)
-    except (ConfigurationError, UpstreamError, SQLAlchemyError, OSError) as exc:
+    except FAILURES as exc:
+        written = admin.written if admin is not None else {}
+        done = ", ".join(f"{kind} {n}" for kind, n in sorted(written.items())) or "nothing"
+        print(f"written before the failure: {done}")
         # One line: httpx puts a "for more information" line in its message.
-        print("failed: " + " ".join(str(exc).split()))
+        print(f"failed: {type(exc).__name__}: " + " ".join(str(exc).split()))
         return EXIT_REFUSED
     for line in report(plan, apply):
         print(line)
