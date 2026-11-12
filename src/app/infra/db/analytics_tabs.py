@@ -11,8 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics import (
     FEATURES,
-    MONTHLY_ACTIVE_DAYS,
-    WEEKLY_ACTIVE_DAYS,
+    ActiveMembers,
     Feature,
     FeatureKey,
     Metric,
@@ -23,9 +22,12 @@ from app.domain.analytics import (
     SessionsTab,
     SubTracks,
     TopReason,
-    active_spans,
+    active_metrics,
+    active_series,
     active_tracks,
     compared,
+    everybody,
+    history_from,
     rate,
     ratio,
     rounded,
@@ -34,14 +36,14 @@ from app.domain.analytics import (
     spark_buckets,
 )
 from app.domain.availability import BookingWindow
-from app.domain.enums import MissedReason, SessionStatus
+from app.domain.enums import MissedReason, PrimaryRole, SessionStatus
 from app.domain.mentor_stats import Window
 from app.infra.db import analytics_features as f
 from app.infra.db import analytics_sessions as s
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_scope import Measure, per_window, per_window_each
 from app.infra.db.models.sessions import Session
-from app.infra.db.user_activity import active_users
+from app.infra.db.user_activity import activity
 
 #: The repeat-booking look-back, ending at the window's end.
 REPEAT_DAYS = 60
@@ -104,11 +106,8 @@ async def overview_tab(
         unit=series_unit(period),
         series=series,
     )
-    active_now, active_before = await active_users(
-        session,
-        active_spans(period, WEEKLY_ACTIVE_DAYS),
-        active_spans(period, MONTHLY_ACTIVE_DAYS),
-    )
+    active = await activity(session, period, compare)
+    active_now, active_before = everybody(active.now.users), everybody(active.before.users)
     sub_tracks = SubTracks(
         unique_mentees=compared(int(mentees[0]), int(mentees[1]), compare),
         mentors_delivered=compared(int(mentors[0]), int(mentors[1]), compare),
@@ -154,6 +153,16 @@ async def overview_tab(
         north_star=north_star,
         sub_tracks=sub_tracks,
         features=[features[key] for key in FEATURES],
+        active_members=ActiveMembers(
+            by_role={
+                role: active_metrics(active.now.users[role], active.before.users[role], compare)
+                for role in PrimaryRole
+            },
+            series=active_series(
+                period, active.now.weekly, active.before.weekly, active.earliest, compare
+            ),
+            history_from=history_from(active.earliest),
+        ),
     )
 
 

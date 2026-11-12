@@ -35,7 +35,13 @@ from app.domain.availability import (
     local_day_start,
     normalise_timezone,
 )
-from app.domain.enums import ApplicationStage, CreditSource, MissedReason, UnlistedReason
+from app.domain.enums import (
+    ApplicationStage,
+    CreditSource,
+    MissedReason,
+    PrimaryRole,
+    UnlistedReason,
+)
 from app.domain.mentor_stats import Window
 
 #: The presets the window control offers, in days ending today.
@@ -169,16 +175,20 @@ def series_unit(period: Period) -> SeriesUnit:
     return "day" if period.days <= DAILY_UP_TO_DAYS else "week"
 
 
+def _bucket_days(period: Period) -> list[tuple[dt.date, dt.date]]:
+    """Each North Star bucket's first day and the day after its last."""
+    every = 1 if series_unit(period) == "day" else 7
+    after = period.last + dt.timedelta(days=1)
+    starts = [period.first + dt.timedelta(days=d) for d in range(0, period.days, every)]
+    return list(zip(starts, [*starts[1:], after], strict=True))
+
+
 def series_buckets(period: Period) -> list[Window]:
     """The North Star's points: one per day, or one per 7 days counted from
     the window's first day (the last may be shorter), so the current and the
     previous period match point by point. Not ISO weeks, by design. Each edge
     is a local midnight in the period's zone."""
-    every = 1 if series_unit(period) == "day" else 7
-    after = period.last + dt.timedelta(days=1)
-    starts = [period.first + dt.timedelta(days=d) for d in range(0, period.days, every)]
-    ends = [*starts[1:], after]
-    return [period.between(a, b) for a, b in zip(starts, ends, strict=True)]
+    return [period.between(a, b) for a, b in _bucket_days(period)]
 
 
 def spark_buckets(window: Window) -> list[Window]:
@@ -481,13 +491,134 @@ class ActiveUsers:
         return rate(self.weekly, self.monthly)
 
 
+@dataclass(frozen=True, slots=True)
+class ActiveMetrics:
+    """Weekly, monthly and stickiness, each against the previous period."""
+
+    weekly: Metric
+    monthly: Metric
+    stickiness: Metric
+
+
+def active_metrics(now: ActiveUsers, before: ActiveUsers, compare: bool) -> ActiveMetrics:
+    return ActiveMetrics(
+        weekly=compared(now.weekly, before.weekly, compare),
+        monthly=compared(now.monthly, before.monthly, compare),
+        stickiness=compared(now.stickiness, before.stickiness, compare),
+    )
+
+
 def active_tracks(now: ActiveUsers, before: ActiveUsers, compare: bool) -> dict[str, Metric]:
     """The three active-user sub-tracks, by their wire names."""
+    figures = active_metrics(now, before, compare)
     return {
-        "weekly_active_users": compared(now.weekly, before.weekly, compare),
-        "monthly_active_users": compared(now.monthly, before.monthly, compare),
-        "stickiness": compared(now.stickiness, before.stickiness, compare),
+        "weekly_active_users": figures.weekly,
+        "monthly_active_users": figures.monthly,
+        "stickiness": figures.stickiness,
     }
+
+
+def bucket_weeks(period: Period) -> list[tuple[dt.date, Period]]:
+    """Each North Star bucket's first day, and the `WEEKLY_ACTIVE_DAYS` days
+    ending with its last day: the span the weekly-active trend reads there
+    (decision 343)."""
+    return [
+        (first, period.ending(after - dt.timedelta(days=1), WEEKLY_ACTIVE_DAYS))
+        for first, after in _bucket_days(period)
+    ]
+
+
+#: A count per trend point, for each primary role.
+RoleCounts = Mapping[PrimaryRole, list[int]]
+
+
+def everybody(by_role: Mapping[PrimaryRole, ActiveUsers]) -> ActiveUsers:
+    """Everybody active: the roles added up. Exact because `primary_role` is
+    NOT NULL and has only these members, so each person is in one role."""
+    return ActiveUsers(
+        weekly=sum(users.weekly for users in by_role.values()),
+        monthly=sum(users.monthly for users in by_role.values()),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyActive:
+    """Weekly actives at one trend point and its previous-period match; null
+    where the span was not fully recorded (and ``previous`` without compare)."""
+
+    value: int | None
+    previous: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ActivePoint:
+    """One point of the weekly-active trend, in total and by primary role."""
+
+    start: dt.date
+    total: WeeklyActive
+    by_role: dict[PrimaryRole, WeeklyActive]
+
+
+def history_from(earliest: dt.date | None) -> dt.date | None:
+    """The first full day of recorded activity: the day after ``earliest``,
+    the first day recorded, which recording began part-way through. ``None``
+    with nothing recorded."""
+    return None if earliest is None else earliest + dt.timedelta(days=1)
+
+
+def _recorded(span: Period, earliest: dt.date | None) -> bool:
+    """Every day of ``span`` was recorded in full: its first activity day (a
+    UTC date, `activity_days`) is on or after `history_from`. Nothing
+    recorded is never."""
+    first_full = history_from(earliest)
+    return first_full is not None and activity_days(span)[0] >= first_full
+
+
+def active_series(
+    period: Period,
+    now: RoleCounts,
+    before: RoleCounts,
+    earliest: dt.date | None,
+    compare: bool,
+) -> list[ActivePoint]:
+    """The weekly-active trend on the North Star's points: ``now`` and
+    ``before`` count each `bucket_weeks` span of the period and of the
+    previous one, point by point, per role (``before`` unread without
+    compare); ``earliest`` is the first activity day. The total is the roles
+    added up (`everybody`); a role is null wherever its point is."""
+
+    def weekly(
+        roles: tuple[PrimaryRole, ...], i: int, shown: bool, before_shown: bool
+    ) -> WeeklyActive:
+        return WeeklyActive(
+            value=sum(now[role][i] for role in roles) if shown else None,
+            previous=sum(before[role][i] for role in roles) if before_shown else None,
+        )
+
+    points = []
+    for i, ((start, span), (_, span_before)) in enumerate(
+        zip(bucket_weeks(period), bucket_weeks(period.previous()), strict=True)
+    ):
+        seen = (_recorded(span, earliest), compare and _recorded(span_before, earliest))
+        points.append(
+            ActivePoint(
+                start=start,
+                total=weekly(tuple(PrimaryRole), i, *seen),
+                by_role={role: weekly((role,), i, *seen) for role in PrimaryRole},
+            )
+        )
+    return points
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveMembers:
+    """The Overview's active members (decision 343): the sub-tracks' three
+    figures for each primary role, and the weekly-active trend."""
+
+    by_role: dict[PrimaryRole, ActiveMetrics]
+    series: list[ActivePoint]
+    #: `history_from`: the day the series' null rule starts counting from.
+    history_from: dt.date | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,6 +634,7 @@ class OverviewTab:
     north_star: NorthStar
     sub_tracks: SubTracks
     features: list[Feature]
+    active_members: ActiveMembers
 
 
 @dataclass(frozen=True, slots=True)
