@@ -19,6 +19,7 @@ from sqlalchemy import (
     TIMESTAMP,
     Boolean,
     CheckConstraint,
+    Date,
     ForeignKey,
     Index,
     Text,
@@ -350,4 +351,33 @@ class NotificationChannelPreference(TimestampMixin, Base):
             check_is_known("notification_type", NotificationPreferenceType),
             name="notification_type_is_known",
         ),
+    )
+
+
+class UserActivityDay(Base):
+    """One day a person used the platform signed in (decision 342): the
+    weekly and monthly active users the admin Overview counts. Insert only.
+
+    ``day`` is the UTC date of the request. ``UNIQUE (user_id, day)`` keeps one
+    row a day, so recording is ``ON CONFLICT DO NOTHING``; ``(day, user_id)``
+    serves counting a range of days. Goes with the person: cascades on delete,
+    and the account purge deletes it (``account_purge._OWN_ROWS``).
+    """
+
+    __tablename__ = "user_activity_days"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    day: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "day", name="uq_user_activity_days_user_day"),
+        Index("ix_user_activity_days_day_user_id", "day", "user_id"),
     )

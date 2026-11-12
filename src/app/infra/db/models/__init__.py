@@ -60,6 +60,7 @@ from app.infra.db.models.platform import (
     IdempotencyKey,
     NotificationChannelPreference,
     OutboxEvent,
+    UserActivityDay,
 )
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
 from app.infra.db.models.push import PushSubscription
@@ -162,6 +163,7 @@ __all__ = [
     "SessionTypeSchedulingWindow",
     "SessionTypeStage",
     "User",
+    "UserActivityDay",
     "UserAward",
     "UserLanguage",
     "UserLegalConsent",
