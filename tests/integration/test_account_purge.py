@@ -122,6 +122,7 @@ async def a_full_account(engine: AsyncEngine, tag: str) -> tuple[UUID, UUID]:
             "INSERT INTO user_links (user_id, kind, platform, url) "
             "VALUES (:u, 'social', 'x', 'https://x.com/ada')",
             "INSERT INTO user_onboarding (user_id) VALUES (:u)",
+            "INSERT INTO user_activity_days (user_id, day) VALUES (:u, current_date)",
             "INSERT INTO legal_documents (type, version, content_url, effective_from) "
             "VALUES ('terms_of_service', :a, 'https://example.com/terms', now())",
             "INSERT INTO user_legal_consents (user_id, legal_document_id, ip_address) "
@@ -146,6 +147,7 @@ PURGED_TABLES = (
     ("feature_interest", "user_id"),
     ("user_onboarding", "user_id"),
     ("user_links", "user_id"),
+    ("user_activity_days", "user_id"),
 )
 
 

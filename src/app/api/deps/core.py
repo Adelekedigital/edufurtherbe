@@ -6,9 +6,9 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -35,6 +35,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.core.reporting import remember_member
+from app.domain.activity import SeenToday, activity_day
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
@@ -50,6 +51,7 @@ from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
 from app.infra.db.models.user import User
 from app.infra.db.predicates import migrated
 from app.infra.db.preview_store import Owner
+from app.infra.db.user_activity import record_active_day
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -405,11 +407,42 @@ async def _previewed_user(
     return target | {"is_admin": False, "admin_roles": []}
 
 
+#: Who this process recorded active today (decision 342): one write a day each.
+SEEN_TODAY = SeenToday()
+
+
+async def _record_activity(session: AsyncSession, user_id: UUID) -> None:
+    """Record that ``user_id`` used the platform today, once a day per process.
+
+    **A short transaction on the request's own session: insert, commit.**
+    Here the session holds only the caller's reads (a first sign-in and the
+    auth method commit their own writes), so the commit carries the activity
+    row alone, on one connection: a second per request could starve the pool
+    when everybody's first request of the day lands at once. **Never fails
+    the request**: a failure is logged, rolled back (only reads are lost) and
+    retried on a later request.
+    """
+    day = activity_day(datetime.now(UTC))
+    if SEEN_TODAY.has(user_id, day):
+        return
+    try:
+        await record_active_day(session, user_id, day)
+        await session.commit()
+    except Exception:
+        logger.warning("activity not recorded", extra={"user_id": str(user_id)}, exc_info=True)
+        with suppress(Exception):  # a dead connection fails the next statement, not this
+            await session.rollback()
+        return
+    SEEN_TODAY.add(user_id, day)
+
+
 async def _resolve(
     request: Request, claims: TokenClaims, session: AsyncSession, header: str | None
 ) -> dict[str, Any]:
     user = await _signed_in_user(claims, session)
     if header is None:
+        # Only here: a preview is the admin's view, not the member's activity.
+        await _record_activity(session, user["id"])
         remember_member(
             request.state,
             user["id"],

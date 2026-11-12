@@ -200,6 +200,25 @@ class SubTracksRead(BaseModel):
     unique_mentees: MetricRead
     mentors_delivered: MetricRead
     sessions_per_mentee: MetricRead
+    weekly_active_users: MetricRead | None = Field(
+        default=None,
+        description=(
+            "Distinct people, internal accounts left out, who made a signed-in request "
+            "in the 7 days ending with the window's last day (decision 342). Days are "
+            "UTC dates. `previous` ends with the previous period's last day. Counted "
+            "from deploy on: nothing before it is known."
+        ),
+    )
+    monthly_active_users: MetricRead | None = Field(
+        default=None, description="The same over the 30 days ending with the window's last day."
+    )
+    stickiness: MetricRead | None = Field(
+        default=None,
+        description=(
+            "Weekly over monthly active users, a percentage with one decimal; "
+            "null with nobody active in the 30 days."
+        ),
+    )
 
 
 class FeatureRead(BaseModel):
@@ -248,6 +267,9 @@ class AnalyticsOverviewRead(SectionRead):
                 unique_mentees=MetricRead.of(tab.sub_tracks.unique_mentees),
                 mentors_delivered=MetricRead.of(tab.sub_tracks.mentors_delivered),
                 sessions_per_mentee=MetricRead.of(tab.sub_tracks.sessions_per_mentee),
+                weekly_active_users=MetricRead.of(tab.sub_tracks.weekly_active_users),
+                monthly_active_users=MetricRead.of(tab.sub_tracks.monthly_active_users),
+                stickiness=MetricRead.of(tab.sub_tracks.stickiness),
             ),
             features=[
                 FeatureRead(
