@@ -25,9 +25,24 @@ from app.infra.clients.posthog_private import PrivateApi, PrivateApiError
 from app.infra.clients.posthog_reader import private_api
 from app.infra.http.client import shared
 
-__all__ = ["PostHogAdmin", "posthog_admin_for"]
+__all__ = ["PostHogAdmin", "PostHogAnswerError", "posthog_admin_for"]
 
 TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+#: More pages than any list here has: past it, the paging is broken.
+MAX_PAGES = 100
+
+
+class PostHogAnswerError(UpstreamError):
+    """PostHog answered, but not in the shape its docs give."""
+
+
+def _row(value: Any, what: str) -> dict[str, Any]:
+    """An item as documented: an object with an integer `id`."""
+    if not isinstance(value, dict) or isinstance(value.get("id"), bool):
+        raise PostHogAnswerError(f"PostHog sent {what} that is not an item")
+    if not isinstance(value.get("id"), int):
+        raise PostHogAnswerError(f"PostHog sent {what} without an id")
+    return value
 
 
 class PostHogAdmin:
@@ -43,7 +58,6 @@ class PostHogAdmin:
             api_key=api_key,
             client=client or shared(TIMEOUT),
         )
-        self._project = project_id
         self.written: Counter[str] = Counter()
 
     def _call(
@@ -61,40 +75,52 @@ class PostHogAdmin:
             self.written[path.strip("/").split("/")[0]] += 1
         return answer
 
+    def _write(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        return _row(self._call(method, path, body=body), f"a {method} answer")
+
     def _list(self, path: str) -> Iterator[dict[str, Any]]:
-        """Every row, following each page's `next`. Only its query is used,
-        and only when it names this same list: the key goes nowhere else."""
-        params: dict[str, Any] | None = None
-        while True:
-            page = self._call("GET", path, params)
-            yield from page["results"]
+        """Every row, following each page's `next`. Only its query (offset,
+        limit, cursor) is used, always against this project's own path, so
+        the key goes nowhere an answer names. A repeated query or more than
+        `MAX_PAGES` pages stops the list."""
+        params: dict[str, str] = {}
+        asked: set[tuple[tuple[str, str], ...]] = set()
+        for _ in range(MAX_PAGES):
+            asked.add(tuple(sorted(params.items())))
+            page = self._call("GET", path, params or None)
+            if not isinstance(page, dict) or not isinstance(page.get("results"), list):
+                raise PostHogAnswerError(f"PostHog sent a {path} page without results")
+            for row in page["results"]:
+                yield _row(row, f"a {path} row")
             following = page.get("next")
             if not following:
                 return
-            parts = urlsplit(following)
-            if parts.path != f"/api/projects/{self._project}{path}":
-                raise UpstreamError(f"PostHog named a next page elsewhere: {parts.path}")
-            params = dict(parse_qsl(parts.query))
+            if not isinstance(following, str):
+                raise PostHogAnswerError(f"PostHog sent a {path} page with a broken next")
+            params = dict(parse_qsl(urlsplit(following).query))
+            if tuple(sorted(params.items())) in asked:
+                raise PostHogAnswerError(f"PostHog repeated a {path} page")
+        raise PostHogAnswerError(f"PostHog listed {path} past {MAX_PAGES} pages")
 
     def insights(self) -> list[dict[str, Any]]:
         return list(self._list("/insights/"))
 
     def create_insight(self, body: dict[str, Any]) -> dict[str, Any]:
-        return self._call("POST", "/insights/", body=body)  # type: ignore[no-any-return]
+        return self._write("POST", "/insights/", body)
 
     def update_insight(self, insight_id: int, body: dict[str, Any]) -> dict[str, Any]:
         path = f"/insights/{int(insight_id)}/"
-        return self._call("PATCH", path, body=body)  # type: ignore[no-any-return]
+        return self._write("PATCH", path, body)
 
     def dashboards(self) -> list[dict[str, Any]]:
         return list(self._list("/dashboards/"))
 
     def create_dashboard(self, body: dict[str, Any]) -> dict[str, Any]:
-        return self._call("POST", "/dashboards/", body=body)  # type: ignore[no-any-return]
+        return self._write("POST", "/dashboards/", body)
 
     def update_dashboard(self, dashboard_id: int, body: dict[str, Any]) -> dict[str, Any]:
         path = f"/dashboards/{int(dashboard_id)}/"
-        return self._call("PATCH", path, body=body)  # type: ignore[no-any-return]
+        return self._write("PATCH", path, body)
 
 
 def posthog_admin_for(settings: Settings, client: httpx.Client | None = None) -> PostHogAdmin:

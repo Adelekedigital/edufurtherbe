@@ -42,22 +42,18 @@ async def read_internal() -> list[UUID]:
 def report(plan: Plan, apply: bool) -> list[str]:
     lines = [f"{c.kind} {c.action}: {c.name}" for c in plan.changes]
     lines.append(f"internal accounts left out of every insight: {plan.internal}")
-    lines.append("applied" if apply else "dry run: nothing written")
+    if apply:
+        lines.append("applied")
+    else:
+        lines.append("--apply rewrites every managed item from the repo, hand edits included")
+        lines.append("dry run: nothing written")
     return lines
 
 
 #: What a run reports as one line: a refusal, a database or network failure,
-#: or an answer not shaped as documented.
-FAILURES = (
-    ConfigurationError,
-    UpstreamError,
-    SQLAlchemyError,
-    OSError,
-    AttributeError,
-    KeyError,
-    TypeError,
-    ValueError,
-)
+#: or an answer not shaped as documented (`PostHogAnswerError`, an
+#: `UpstreamError`). A bug in this code keeps its traceback.
+FAILURES = (ConfigurationError, UpstreamError, SQLAlchemyError, OSError)
 
 
 def run(apply: bool, admin: PostHogAdmin | None = None) -> int:

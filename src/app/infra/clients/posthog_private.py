@@ -40,10 +40,11 @@ class PrivateApi:
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
         timeout: httpx.Timeout | None = None,
+        parse: bool = True,
     ) -> Any:
-        """``path`` under the project: the answer's JSON, ``None`` for an
-        empty or non-JSON one. Never a URL an answer gave, so the key goes
-        nowhere else."""
+        """``path`` under the project, never a URL an answer gave, so the key
+        goes nowhere else. With ``parse`` the answer's JSON, a body that is
+        not JSON failing like a refusal; without, ``None`` on any 2xx."""
         url = f"{self.base}{path}"
         response: httpx.Response | None = None
         try:
@@ -56,10 +57,7 @@ class PrivateApi:
                 timeout=timeout if timeout is not None else self._client.timeout,
             )
             response.raise_for_status()
-            # A body that does not say it is JSON is no answer, not a failure:
-            # the erase only needs the 2xx.
-            is_json = "json" in response.headers.get("content-type", "")
-            return response.json() if response.content and is_json else None
+            return response.json() if parse else None
         except (httpx.HTTPError, ValueError) as exc:
             raise PrivateApiError(
                 why(exc, response, secret=self._key),

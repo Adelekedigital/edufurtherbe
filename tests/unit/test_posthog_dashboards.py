@@ -21,7 +21,7 @@ from tests.posthog_fakes import HOST, KEY
 from app.core.errors import UpstreamError
 from app.domain.analytics_behaviour import EVERYONE, FUNNELS
 from app.domain.mentor_stats import Window
-from app.infra.clients.posthog_admin import PostHogAdmin
+from app.infra.clients.posthog_admin import MAX_PAGES, PostHogAdmin, PostHogAnswerError
 from app.infra.clients.posthog_reader import funnel_query, not_internal
 from app.infra.posthog_dashboards.definitions import (
     ACTIVE_USERS,
@@ -31,7 +31,7 @@ from app.infra.posthog_dashboards.definitions import (
     WEEKLY_RETENTION,
     insight_query,
 )
-from app.infra.posthog_dashboards.sync import described, sync
+from app.infra.posthog_dashboards.sync import described, managed_key, sync
 
 PREFIX = "/api/projects/42"
 INSIGHTS = sum(len(d.insights) for d in DASHBOARDS)
@@ -47,8 +47,11 @@ class FakePostHog:
         self.ids = itertools.count(1)
         self.page = page
         self.keep_tags = True
+        self.keep_keys = True
         #: PostHog's `next` names its own host, which need not be ours.
         self.next_host = "https://app.posthog.example.test"
+        #: A whole other list URL for `next`, when set.
+        self.next_url: str | None = None
 
     def add(self, kind: str, **row: Any) -> dict[str, Any]:
         row = {"id": next(self.ids), "deleted": False, **row}
@@ -65,13 +68,16 @@ class FakePostHog:
             offset = int(parse_qs(url.query).get("offset", ["0"])[0])
             rows = self.rows[kind][offset : offset + self.page]
             more = offset + self.page < len(self.rows[kind])
-            following = f"{self.next_host}{url.path}?limit={self.page}&offset={offset + self.page}"
+            at = self.next_url or f"{self.next_host}{url.path}"
+            following = f"{at}?limit={self.page}&offset={offset + self.page}"
             return httpx.Response(200, json={"results": rows, "next": following if more else None})
         self.writes.append((request.method, url.path, body))
         if len(parts) == 1:
             created = self.add(kind, **body)
             if not self.keep_tags:
                 created["tags"] = []
+            if not self.keep_keys:
+                created["description"] = "managed-key lost"
             return httpx.Response(201, json=created)
         row = next(r for r in self.rows[kind] if r["id"] == int(parts[1]))
         row.update(body)
@@ -246,7 +252,7 @@ def test_first_apply_creates_everything_and_a_second_rewrites_in_place(
 
     second = sync(posthog.admin(), internal, apply=True)
 
-    assert {c.action for c in second.changes} == {"update"}
+    assert {c.action for c in second.changes} == {"rewrite"}
     assert len(second.changes) == len(first.changes) == 5 + INSIGHTS
     assert len(posthog.rows["dashboards"]) == 5
     assert len(posthog.rows["insights"]) == INSIGHTS
@@ -313,10 +319,10 @@ def test_a_dry_run_writes_nothing(posthog: FakePostHog, internal: list[UUID]) ->
     writes = len(posthog.writes)
     again = sync(posthog.admin(), internal, apply=False)
     assert len(posthog.writes) == writes
-    assert {c.action for c in again.changes} == {"update"}
+    assert {c.action for c in again.changes} == {"rewrite"}
 
 
-def test_only_tagged_keyed_items_are_matched_and_a_dropped_insight_leaves_the_dashboard(
+def test_only_tagged_keyed_items_are_matched_and_retired_or_duplicate_ones_are_deleted(
     posthog: FakePostHog, internal: list[UUID]
 ) -> None:
     # Made by hand first, with our names and even our key line, but untagged.
@@ -334,20 +340,71 @@ def test_only_tagged_keyed_items_are_matched_and_a_dropped_insight_leaves_the_da
     assert len(posthog.rows["dashboards"]) == 6
     ours = posthog.rows["dashboards"][1]["id"]
     retired = posthog.add(
+        "insights", name="Old", tags=[MANAGED_TAG], description=described("x", "retired")
+    )
+    duplicate = posthog.add(
         "insights",
-        name="Old",
+        name="App installs again",
         tags=[MANAGED_TAG],
-        description=described("x", "retired"),
-        dashboards=[ours, 999],
+        description=described("x", "app_installs"),
+        dashboards=[ours],
     )
 
     plan = sync(posthog.admin(), internal, apply=True)
 
-    assert retired["dashboards"] == [999]
-    assert [c.name for c in plan.changes if c.action == "remove"] == ["Old"]
+    assert (retired["deleted"], duplicate["deleted"]) == (True, True)
+    deleted = [c.name for c in plan.changes if c.action == "delete"]
+    assert deleted == ["Old", "App installs again"]
+    assert lookalike["deleted"] is False
     assert lookalike["dashboards"] == [someone_elses["id"]]
     assert someone_elses["description"] == described("x", "reliability")
-    assert len(posthog.rows["insights"]) == INSIGHTS + 2
+    assert someone_elses["deleted"] is False
+
+
+def test_a_duplicate_managed_dashboard_is_deleted_and_the_oldest_kept(
+    posthog: FakePostHog, internal: list[UUID]
+) -> None:
+    sync(posthog.admin(), internal, apply=True)
+    oldest = next(d for d in posthog.rows["dashboards"] if d["name"] == "Reliability")
+    copy = posthog.add(
+        "dashboards", name="Reliability", tags=[MANAGED_TAG], description=oldest["description"]
+    )
+
+    plan = sync(posthog.admin(), internal, apply=True)
+
+    assert (oldest["deleted"], copy["deleted"]) == (False, True)
+    assert [(c.kind, c.action) for c in plan.changes if c.action == "delete"] == [
+        ("dashboard", "delete")
+    ]
+    installs = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
+    assert installs["dashboards"] == [oldest["id"]]
+
+
+def test_a_dry_run_plans_exactly_what_an_apply_then_does(
+    posthog: FakePostHog, internal: list[UUID]
+) -> None:
+    sync(posthog.admin(), internal, apply=True)
+    gone = next(d for d in posthog.rows["dashboards"] if d["name"] == "Reliability")
+    gone["deleted"] = True
+
+    planned = sync(posthog.admin(), internal, apply=False)
+    applied = sync(posthog.admin(), internal, apply=True)
+
+    assert planned.changes == applied.changes
+    assert ("dashboard", "Reliability", "create") in [
+        (c.kind, c.name, c.action) for c in planned.changes
+    ]
+    reliability = next(
+        d for d in posthog.rows["dashboards"] if d["name"] == "Reliability" and not d["deleted"]
+    )
+    installs = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
+    assert reliability["id"] in installs["dashboards"]
+
+
+def test_a_key_line_with_windows_line_ends_still_matches() -> None:
+    row = {"tags": [MANAGED_TAG], "description": described("note", "app_installs")}
+    row["description"] = row["description"].replace("\n", "\r\n") + "\r"
+    assert managed_key(row) == "app_installs"
 
 
 def test_an_insight_moved_by_hand_goes_back_to_its_one_managed_dashboard(
@@ -363,10 +420,14 @@ def test_an_insight_moved_by_hand_goes_back_to_its_one_managed_dashboard(
     assert sorted(row["dashboards"]) == sorted([dashboards["Reliability"], 999])
 
 
-def test_an_item_that_lost_its_tag_is_deleted_and_the_run_stops(
-    posthog: FakePostHog, internal: list[UUID]
+@pytest.mark.parametrize("lost", ["tag", "key"])
+def test_an_item_that_lost_its_tag_or_key_is_deleted_and_the_run_stops(
+    posthog: FakePostHog, internal: list[UUID], lost: str
 ) -> None:
-    posthog.keep_tags = False
+    if lost == "tag":
+        posthog.keep_tags = False
+    else:
+        posthog.keep_keys = False
     with pytest.raises(UpstreamError, match="did not keep"):
         sync(posthog.admin(), internal, apply=True)
     (made,) = posthog.rows["dashboards"]
@@ -374,25 +435,59 @@ def test_an_item_that_lost_its_tag_is_deleted_and_the_run_stops(
     assert posthog.writes[-1] == ("PATCH", f"{PREFIX}/dashboards/{made['id']}/", {"deleted": True})
 
 
-def test_lists_follow_next_across_pages(posthog: FakePostHog) -> None:
+def _asked(posthog: FakePostHog, seen: list[httpx.Request]) -> PostHogAdmin:
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return posthog(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(record))
+    return PostHogAdmin(api_host=HOST, project_id="42", api_key=KEY, client=client)
+
+
+def test_lists_follow_next_but_only_ever_ask_this_project(posthog: FakePostHog) -> None:
     for i in range(9):
         posthog.add("insights", name=f"i{i}", tags=[])
-    assert [r["name"] for r in posthog.admin().insights()] == [f"i{i}" for i in range(9)]
+    # Another host and PostHog's newer environments path: only the query is used.
+    posthog.next_url = "https://elsewhere.example.test/api/environments/42/insights/"
+    seen: list[httpx.Request] = []
+
+    rows = _asked(posthog, seen).insights()
+
+    assert [r["name"] for r in rows] == [f"i{i}" for i in range(9)]
+    assert len(seen) == 3
+    assert {(r.url.host, r.url.path) for r in seen} == {
+        ("posthog.example.test", f"{PREFIX}/insights/")
+    }
+    assert [r.url.params.get("offset") for r in seen] == [None, "4", "8"]
 
 
-def test_a_next_page_for_another_list_is_refused(posthog: FakePostHog) -> None:
-    for i in range(5):
+def test_a_next_that_repeats_a_page_stops_the_list(posthog: FakePostHog) -> None:
+    for i in range(9):
         posthog.add("insights", name=f"i{i}", tags=[])
 
-    def elsewhere(request: httpx.Request) -> httpx.Response:
+    def stuck(request: httpx.Request) -> httpx.Response:
         body = json.loads(posthog(request).content)
-        body["next"] = f"{HOST}/api/projects/43/insights/?offset=4"
+        body["next"] = f"{HOST}{PREFIX}/insights/?limit=4&offset=4"
         return httpx.Response(200, json=body)
 
-    client = httpx.Client(transport=httpx.MockTransport(elsewhere))
+    client = httpx.Client(transport=httpx.MockTransport(stuck))
     admin = PostHogAdmin(api_host=HOST, project_id="42", api_key=KEY, client=client)
-    with pytest.raises(UpstreamError, match="next page elsewhere"):
+    with pytest.raises(PostHogAnswerError, match="repeated"):
         admin.insights()
+
+
+def test_a_list_past_the_page_cap_stops() -> None:
+    pages = itertools.count(1)
+
+    def endless(_: httpx.Request) -> httpx.Response:
+        following = f"{HOST}{PREFIX}/insights/?offset={next(pages)}"
+        return httpx.Response(200, json={"results": [], "next": following})
+
+    client = httpx.Client(transport=httpx.MockTransport(endless))
+    admin = PostHogAdmin(api_host=HOST, project_id="42", api_key=KEY, client=client)
+    with pytest.raises(PostHogAnswerError, match=f"past {MAX_PAGES} pages"):
+        admin.insights()
+    assert next(pages) == MAX_PAGES + 1
 
 
 # --- The script -------------------------------------------------------------
@@ -426,8 +521,10 @@ def test_the_script_prints_the_plan(
     out = capsys.readouterr().out.splitlines()
     assert "dashboard create: Reliability" in out
     assert "insight create: Server errors" in out
-    assert out[-2:] == [
+    assert "insight create: Weekly retention" in out
+    assert out[-3:] == [
         "internal accounts left out of every insight: 2",
+        "--apply rewrites every managed item from the repo, hand edits included",
         "dry run: nothing written",
     ]
 
@@ -481,6 +578,20 @@ def test_a_malformed_answer_is_one_line_and_a_non_zero_exit(
 
     out = capsys.readouterr().out
     assert [line for line in out.splitlines() if line.startswith("failed:")] == [
-        "failed: KeyError: 'results'"
+        "failed: PostHogAnswerError: PostHog sent a /dashboards/ page without results"
     ]
     assert "written before the failure: nothing" in out
+
+
+def test_a_bug_keeps_its_traceback(
+    posthog: FakePostHog, internal: list[UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = _script()
+    _reading(monkeypatch, script, internal)
+
+    def broken(*_: Any, **__: Any) -> None:
+        raise KeyError("a bug, not PostHog")
+
+    monkeypatch.setattr(script, "sync", broken)
+    with pytest.raises(KeyError):
+        script.run(False, posthog.admin())
