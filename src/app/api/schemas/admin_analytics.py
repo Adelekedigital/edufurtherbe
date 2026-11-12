@@ -798,7 +798,13 @@ class WritingAssistCardRead(BaseModel):
 
 
 class AppCardRead(BaseModel):
-    installed: int = Field(description="App installs in the window.")
+    installed: int = Field(
+        description=(
+            "Devices that first opened the installed app in the window, on every "
+            "platform, iPhone included (`pwa_installed`, once per device, since "
+            "2026-11-12). Earlier events are Chromium installs only."
+        )
+    )
     push_allowed_rate: float | None = Field(description="Who allowed push over who was active, %.")
 
 
