@@ -11,18 +11,18 @@ import logging
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from tests.posthog_fakes import HOST, KEY
+from tests.posthog_fakes import HOST, KEY, PREFIX, FakePostHog, FakeSession, stub_reads
 
 from app.core.errors import UpstreamError
 from app.domain.analytics_behaviour import EVERYONE, FUNNELS
 from app.domain.mentor_stats import Window
 from app.infra.clients.posthog_admin import MAX_PAGES, PostHogAdmin, PostHogAnswerError
 from app.infra.clients.posthog_reader import funnel_query, not_internal
+from app.infra.posthog_dashboards import run as sync_run
 from app.infra.posthog_dashboards.definitions import (
     ACTIVE_USERS,
     DASHBOARDS,
@@ -33,59 +33,7 @@ from app.infra.posthog_dashboards.definitions import (
 )
 from app.infra.posthog_dashboards.sync import described, managed_key, sync
 
-PREFIX = "/api/projects/42"
 INSIGHTS = sum(len(d.insights) for d in DASHBOARDS)
-
-
-class FakePostHog:
-    """In-memory insights and dashboards behind a MockTransport, listed a
-    few rows a page with a `next` link, as PostHog pages."""
-
-    def __init__(self, page: int = 4) -> None:
-        self.rows: dict[str, list[dict[str, Any]]] = {"insights": [], "dashboards": []}
-        self.writes: list[tuple[str, str, Any]] = []
-        self.ids = itertools.count(1)
-        self.page = page
-        self.keep_tags = True
-        self.keep_keys = True
-        #: PostHog's `next` names its own host, which need not be ours.
-        self.next_host = "https://app.posthog.example.test"
-        #: A whole other list URL for `next`, when set.
-        self.next_url: str | None = None
-
-    def add(self, kind: str, **row: Any) -> dict[str, Any]:
-        row = {"id": next(self.ids), "deleted": False, **row}
-        self.rows[kind].append(row)
-        return row
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        assert request.headers["Authorization"] == f"Bearer {KEY}"
-        url = urlparse(str(request.url))
-        parts = url.path.removeprefix(PREFIX).strip("/").split("/")
-        body = json.loads(request.content) if request.content else None
-        kind = parts[0]
-        if request.method == "GET":
-            offset = int(parse_qs(url.query).get("offset", ["0"])[0])
-            rows = self.rows[kind][offset : offset + self.page]
-            more = offset + self.page < len(self.rows[kind])
-            at = self.next_url or f"{self.next_host}{url.path}"
-            following = f"{at}?limit={self.page}&offset={offset + self.page}"
-            return httpx.Response(200, json={"results": rows, "next": following if more else None})
-        self.writes.append((request.method, url.path, body))
-        if len(parts) == 1:
-            created = self.add(kind, **body)
-            if not self.keep_tags:
-                created["tags"] = []
-            if not self.keep_keys:
-                created["description"] = "managed-key lost"
-            return httpx.Response(201, json=created)
-        row = next(r for r in self.rows[kind] if r["id"] == int(parts[1]))
-        row.update(body)
-        return httpx.Response(200, json=row)
-
-    def admin(self) -> PostHogAdmin:
-        client = httpx.Client(transport=httpx.MockTransport(self))
-        return PostHogAdmin(api_host=HOST + "/", project_id="42", api_key=KEY, client=client)
 
 
 def _all_insights() -> list[Any]:
@@ -241,9 +189,11 @@ def posthog() -> FakePostHog:
     return FakePostHog()
 
 
-def test_first_apply_creates_everything_and_a_second_rewrites_in_place(
+def test_first_apply_creates_everything_and_a_second_writes_nothing(
     posthog: FakePostHog, internal: list[UUID]
 ) -> None:
+    """An item already as the repo defines it is left alone (decision 344):
+    the daily run writes only what changed."""
     first = sync(posthog.admin(), internal, apply=True)
     assert {c.action for c in first.changes} == {"create"}
     assert len(posthog.rows["dashboards"]) == 5
@@ -252,12 +202,18 @@ def test_first_apply_creates_everything_and_a_second_rewrites_in_place(
 
     second = sync(posthog.admin(), internal, apply=True)
 
-    assert {c.action for c in second.changes} == {"rewrite"}
+    assert {c.action for c in second.changes} == {"unchanged"}
     assert len(second.changes) == len(first.changes) == 5 + INSIGHTS
     assert len(posthog.rows["dashboards"]) == 5
     assert len(posthog.rows["insights"]) == INSIGHTS
-    rewritten = {path for method, path, _ in posthog.writes[before:] if method == "PATCH"}
-    assert len(rewritten) == len(posthog.writes[before:]) == 5 + INSIGHTS
+    assert posthog.writes[before:] == []
+    assert second.counts() == {
+        "created": 0,
+        "rewritten": 0,
+        "deleted": 0,
+        "unchanged": 5 + INSIGHTS,
+        "internal": 2,
+    }
 
 
 def test_insights_land_on_their_dashboard_with_the_internal_ids(
@@ -277,9 +233,14 @@ def test_a_new_internal_account_is_left_out_on_the_next_run(
 ) -> None:
     sync(posthog.admin(), internal, apply=True)
     newcomer = uuid4()
-    sync(posthog.admin(), [*internal, newcomer], apply=True)
+    plan = sync(posthog.admin(), [*internal, newcomer], apply=True)
     for insight in posthog.rows["insights"]:
         assert str(newcomer) in insight["query"]["source"]["properties"][0]["key"]
+    # Every insight lists the ids; the dashboards do not.
+    assert {(c.kind, c.action) for c in plan.changes} == {
+        ("insight", "rewrite"),
+        ("dashboard", "unchanged"),
+    }
 
 
 def test_hand_edits_are_overwritten_from_the_repo(
@@ -289,10 +250,15 @@ def test_hand_edits_are_overwritten_from_the_repo(
     row = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
     original = row["query"]
     row["query"] = {"kind": "InsightVizNode", "source": {"kind": "TrendsQuery"}}
+    other = next(i for i in posthog.rows["insights"] if i["name"] == "Server errors")
+    other["tags"] = [MANAGED_TAG, "added by hand"]
 
-    sync(posthog.admin(), internal, apply=True)
+    plan = sync(posthog.admin(), internal, apply=True)
 
     assert row["query"] == original
+    assert other["tags"] == [MANAGED_TAG]
+    rewritten = [c.name for c in plan.changes if c.action == "rewrite"]
+    assert sorted(rewritten) == ["App installs", "Server errors"]
 
 
 def test_a_renamed_definition_updates_in_place(posthog: FakePostHog, internal: list[UUID]) -> None:
@@ -319,7 +285,7 @@ def test_a_dry_run_writes_nothing(posthog: FakePostHog, internal: list[UUID]) ->
     writes = len(posthog.writes)
     again = sync(posthog.admin(), internal, apply=False)
     assert len(posthog.writes) == writes
-    assert {c.action for c in again.changes} == {"rewrite"}
+    assert {c.action for c in again.changes} == {"unchanged"}
 
 
 def test_only_tagged_keyed_items_are_matched_and_retired_or_duplicate_ones_are_deleted(
@@ -502,11 +468,18 @@ def _script() -> ModuleType:
     return module
 
 
-def _reading(monkeypatch: pytest.MonkeyPatch, script: ModuleType, internal: list[UUID]) -> None:
-    async def read() -> list[UUID]:
-        return internal
+class _Engine:
+    async def dispose(self) -> None:
+        return None
 
-    monkeypatch.setattr(script, "read_internal", read)
+
+def _reading(
+    monkeypatch: pytest.MonkeyPatch, script: ModuleType, internal: list[UUID], *, free: bool = True
+) -> None:
+    """The script's own engine, stubbed: its reads return ``internal``."""
+    monkeypatch.setattr(script, "create_database_engine", lambda _settings: _Engine())
+    monkeypatch.setattr(script, "create_session_factory", lambda _engine: FakeSession)
+    stub_reads(monkeypatch, internal, free=free)
 
 
 def test_the_script_prints_the_plan(
@@ -592,6 +565,65 @@ def test_a_bug_keeps_its_traceback(
     def broken(*_: Any, **__: Any) -> None:
         raise KeyError("a bug, not PostHog")
 
-    monkeypatch.setattr(script, "sync", broken)
+    monkeypatch.setattr(sync_run, "sync", broken)
     with pytest.raises(KeyError):
         script.run(False, posthog.admin())
+
+
+def test_the_script_lists_only_real_changes(
+    posthog: FakePostHog,
+    internal: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _script()
+    _reading(monkeypatch, script, internal)
+    sync(posthog.admin(), internal, apply=True)
+    row = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
+    row["name"] = "Renamed by hand"
+    capsys.readouterr()
+
+    assert script.run(False, posthog.admin()) == 0
+
+    out = capsys.readouterr().out.splitlines()
+    # Only the plan: the reads' own log lines are not the script's.
+    assert [line for line in out if "HTTP Request" not in line] == [
+        "insight rewrite: App installs",
+        f"unchanged: {5 + INSIGHTS - 1}",
+        "internal accounts left out of every insight: 2",
+        "--apply rewrites every managed item from the repo, hand edits included",
+        "dry run: nothing written",
+    ]
+
+
+def test_the_script_refuses_while_another_sync_runs(
+    posthog: FakePostHog,
+    internal: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _script()
+    _reading(monkeypatch, script, internal, free=False)
+
+    assert script.run(True, posthog.admin()) == 1
+
+    assert capsys.readouterr().out.splitlines() == [
+        "another PostHog dashboard sync is running: nothing written"
+    ]
+    assert posthog.writes == []
+
+
+def test_an_item_listed_in_another_order_is_unchanged(
+    posthog: FakePostHog, internal: list[UUID]
+) -> None:
+    """PostHog keeps no order of tags or dashboards that this relies on."""
+    sync(posthog.admin(), internal, apply=True)
+    reliability = next(d["id"] for d in posthog.rows["dashboards"] if d["name"] == "Reliability")
+    row = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
+    row["dashboards"] = [999, reliability]
+    sync(posthog.admin(), internal, apply=True)
+    row["dashboards"] = [999, reliability]
+
+    plan = sync(posthog.admin(), internal, apply=True)
+
+    assert {c.action for c in plan.changes} == {"unchanged"}

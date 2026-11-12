@@ -1,9 +1,11 @@
 """Make PostHog match `definitions` (decision 341): the dashboards and their
 insights, matched by `MANAGED_TAG` plus the ``managed-key`` line in their
 description, so a rename updates in place and nothing is duplicated. The repo
-is the source of truth: with ``apply`` every managed item is rewritten, hand
-edits included, and a duplicate or one no longer defined is deleted (PostHog
-deletes by `deleted`). A dry run reads and plans only, the same plan.
+is the source of truth: with ``apply`` every managed item that differs from
+its definition is rewritten, hand edits included, one that already matches is
+left alone (``unchanged``, decision 344), and a duplicate or one no longer
+defined is deleted (PostHog deletes by `deleted`). A dry run reads and plans
+only, the same plan.
 
 Internal accounts are left out of every insight by the ids listed in it, read
 on each run: a run after an account becomes internal (or stops) refreshes them.
@@ -22,11 +24,20 @@ from app.infra.clients.posthog_admin import PostHogAdmin
 from app.infra.posthog_dashboards.definitions import DASHBOARDS, MANAGED_TAG, insight_query
 
 Kind = Literal["dashboard", "insight"]
-Action = Literal["create", "rewrite", "delete"]
+Action = Literal["create", "rewrite", "delete", "unchanged"]
 
 INSIGHT_NOTE = "Defined in the backend repo; edits here are overwritten by the next sync."
 _KEY_LINE = re.compile(r"^managed-key: (\S+)\s*$", re.MULTILINE)
 _GONE = {"deleted": True}
+_COUNTED: dict[Action, str] = {
+    "create": "created",
+    "rewrite": "rewritten",
+    "delete": "deleted",
+    "unchanged": "unchanged",
+}
+#: Counts that describe a run rather than count its writes: a run with only
+#: these is a no-op.
+NOT_WORK = frozenset({"unchanged", "internal"})
 
 Write = Callable[[int, dict[str, Any]], Any]
 
@@ -44,6 +55,14 @@ class Plan:
     #: The internal accounts each insight leaves out.
     internal: int = 0
 
+    def counts(self) -> dict[str, int]:
+        """What a job run reports (decision 344): planned changes per action,
+        what a dry run would do, and how many ids each insight lists."""
+        done = dict.fromkeys(_COUNTED.values(), 0)
+        for change in self.changes:
+            done[_COUNTED[change.action]] += 1
+        return {**done, "internal": self.internal}
+
 
 def described(text: str, key: str) -> str:
     return f"{text}\n\nmanaged-key: {key}"
@@ -56,6 +75,21 @@ def managed_key(row: dict[str, Any]) -> str | None:
         return None
     found = _KEY_LINE.search(str(row.get("description") or ""))
     return found.group(1) if found else None
+
+
+def _normal(field_name: str, value: Any) -> Any:
+    """A field as compared: lists as sets of their items (PostHog keeps no
+    order we rely on), text with Unix line ends (as `managed_key` reads it)."""
+    if field_name in {"tags", "dashboards"}:
+        return sorted(value or [], key=str)
+    if isinstance(value, str):
+        return value.replace("\r\n", "\n")
+    return value
+
+
+def _same(row: dict[str, Any], body: dict[str, Any]) -> bool:
+    """``row`` already reads as ``body`` would write it: every field sent."""
+    return all(_normal(k, row.get(k)) == _normal(k, v) for k, v in body.items())
 
 
 def _by_key(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
@@ -103,9 +137,8 @@ def _dashboards(admin: PostHogAdmin, apply: bool, plan: Plan) -> dict[str, int |
             "tags": [MANAGED_TAG],
         }
         row = found.pop(dashboard.key, None)
-        plan.changes.append(
-            Change("dashboard", dashboard.name, "create" if row is None else "rewrite")
-        )
+        action: Action = "create" if row is None else "unchanged" if _same(row, body) else "rewrite"
+        plan.changes.append(Change("dashboard", dashboard.name, action))
         if not apply:
             placed[dashboard.key] = None if row is None else int(row["id"])
         elif row is None:
@@ -114,7 +147,8 @@ def _dashboards(admin: PostHogAdmin, apply: bool, plan: Plan) -> dict[str, int |
                 _created(made, dashboard.name, dashboard.key, admin.update_dashboard)["id"]
             )
         else:
-            admin.update_dashboard(int(row["id"]), body)
+            if action == "rewrite":
+                admin.update_dashboard(int(row["id"]), body)
             placed[dashboard.key] = int(row["id"])
     _delete([*found.values(), *extra], "dashboard", admin.update_dashboard, apply, plan)
     return placed
@@ -139,18 +173,20 @@ def _insights(
                 "tags": [MANAGED_TAG],
             }
             row = found.pop(insight.key, None)
-            plan.changes.append(
-                Change("insight", insight.name, "create" if row is None else "rewrite")
-            )
-            if not apply or target is None:
-                continue
             if row is None:
-                made = admin.create_insight({**body, "dashboards": [target]})
-                _created(made, insight.name, insight.key, admin.update_insight)
-            else:
-                current = set(row.get("dashboards") or [])
-                on = sorted((current - ours) | {target})
-                admin.update_insight(int(row["id"]), {**body, "dashboards": on})
+                plan.changes.append(Change("insight", insight.name, "create"))
+                if apply and target is not None:
+                    made = admin.create_insight({**body, "dashboards": [target]})
+                    _created(made, insight.name, insight.key, admin.update_insight)
+                continue
+            # A dashboard a dry run has yet to create is a change of placement.
+            current = set(row.get("dashboards") or [])
+            on = sorted((current - ours) | ({target} if target is not None else set()))
+            body["dashboards"] = on
+            same = target is not None and _same(row, body)
+            plan.changes.append(Change("insight", insight.name, "unchanged" if same else "rewrite"))
+            if apply and not same and target is not None:
+                admin.update_insight(int(row["id"]), body)
     _delete([*found.values(), *extra], "insight", admin.update_insight, apply, plan)
 
 
