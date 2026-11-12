@@ -611,3 +611,19 @@ def test_the_script_refuses_while_another_sync_runs(
         "another PostHog dashboard sync is running: nothing written"
     ]
     assert posthog.writes == []
+
+
+def test_an_item_listed_in_another_order_is_unchanged(
+    posthog: FakePostHog, internal: list[UUID]
+) -> None:
+    """PostHog keeps no order of tags or dashboards that this relies on."""
+    sync(posthog.admin(), internal, apply=True)
+    reliability = next(d["id"] for d in posthog.rows["dashboards"] if d["name"] == "Reliability")
+    row = next(i for i in posthog.rows["insights"] if i["name"] == "App installs")
+    row["dashboards"] = [999, reliability]
+    sync(posthog.admin(), internal, apply=True)
+    row["dashboards"] = [999, reliability]
+
+    plan = sync(posthog.admin(), internal, apply=True)
+
+    assert {c.action for c in plan.changes} == {"unchanged"}
