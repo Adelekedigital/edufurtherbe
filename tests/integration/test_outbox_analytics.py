@@ -13,8 +13,9 @@ from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from tests.integration.factories import make_public_mentor
 from tests.integration.test_api_admin_credits import a_user
 from tests.integration.test_api_notifications import Recorder
 from tests.integration.test_api_push_messages import FakePush
@@ -23,6 +24,7 @@ from app.core.config import Settings
 from app.core.errors import UpstreamError
 from app.domain.analytics_events import AnalyticsEvent, analytics_event
 from app.domain.notifications import Channel, Notification
+from app.infra.db import outbox
 from app.infra.db.outbox import (
     BATCH,
     MAX_ATTEMPTS,
@@ -277,6 +279,29 @@ async def test_a_refused_batch_is_retried_and_stops_the_run(db_engine: AsyncEngi
     assert await run(db_engine, sink) == {"sent": BATCH + 1, "failed": 0}
 
 
+async def test_a_person_read_that_fails_fails_the_batch_and_ends_the_run(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The person read is part of the send: its failure counts an attempt and
+    keeps the error, as a refusal does, rather than stall the queue."""
+
+    async def broken(*_args: Any) -> list[dict[str, Any]]:
+        raise RuntimeError("person read failed")
+
+    await queue(db_engine, 2)
+    monkeypatch.setattr(outbox, "with_person_properties", broken)
+    sink = FakeSink()
+
+    counts = await run(db_engine, sink)
+
+    assert counts == {"sent": 0, "failed": 2}
+    assert sink.batches == []
+    found = await rows(db_engine)
+    assert {(r["status"], r["attempts"], r["error_detail"]) for r in found} == {
+        ("pending", 1, "person read failed")
+    }
+
+
 async def test_an_event_refused_max_attempts_times_stays_failed_with_its_error(
     db_engine: AsyncEngine,
 ) -> None:
@@ -330,3 +355,87 @@ async def test_with_analytics_off_the_hourly_sweep_leaves_events_waiting(
     assert result.counts["analytics_sent"] == 0
     (row,) = await rows(db_engine)
     assert (row["status"], row["attempts"]) == ("pending", 0)
+
+
+# --------------------------------------------------------------------------
+# Who each event is about: PostHog person properties (decision 340)
+# --------------------------------------------------------------------------
+
+
+def users_read(engine: AsyncEngine) -> list[str]:
+    """Every statement ``engine`` runs that reads ``users``, as it runs."""
+    seen: list[str] = []
+
+    def record(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        if statement.lstrip().upper().startswith("SELECT") and "FROM users" in statement:
+            seen.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    return seen
+
+
+async def test_each_event_carries_its_persons_properties_read_once_per_batch(
+    db_engine: AsyncEngine,
+) -> None:
+    mentees = [await a_user(db_engine) for _ in range(3)]
+    mentor = await make_public_mentor(db_engine, "person-props")
+    for person in [*mentees, mentor]:
+        await queue(db_engine, 2, user=person)
+    reads = users_read(db_engine)
+
+    sink = FakeSink()
+    await run(db_engine, sink)
+
+    (batch,) = sink.batches
+    assert len(reads) == 1
+    by_person = {event["distinct_id"]: event["properties"] for event in batch}
+    assert len(batch) == 8
+    assert by_person[str(mentees[0])]["$set"] == {
+        "user_id": str(mentees[0]),
+        "role": "mentee",
+        "is_migrated": False,
+        "signup_source": "direct",
+        "signup_channel": None,
+    }
+    assert by_person[str(mentor)]["$set"]["mentor_status"] == "listed"
+    assert by_person[str(mentor)]["$set"]["role"] == "mentor"
+    assert by_person[str(mentees[0])]["$unset"] == ["mentor_status"]
+    assert "$unset" not in by_person[str(mentor)]
+    month = dt.datetime.now(dt.UTC).strftime("%Y-%m")
+    assert {e["properties"]["$set_once"]["account_created_month"] for e in batch} == {month}
+    assert all("$set" not in row["payload"]["properties"] for row in await rows(db_engine))
+
+
+async def test_a_person_deleted_after_queueing_is_sent_bare(db_engine: AsyncEngine) -> None:
+    """The drain still sends what was queued, as it always has, but never with
+    properties read from a deleted account (the purge drops the rest)."""
+    gone, kept = await a_user(db_engine), await a_user(db_engine)
+    await queue(db_engine, user=gone)
+    await queue(db_engine, user=kept)
+    async with db_engine.begin() as conn:
+        await conn.execute(text("UPDATE users SET deleted_at = now() WHERE id = :u"), {"u": gone})
+    sink = FakeSink()
+
+    await run(db_engine, sink)
+
+    (batch,) = sink.batches
+    by_person = {event["distinct_id"]: event["properties"] for event in batch}
+    assert "$set" not in by_person[str(gone)] and "$set_once" not in by_person[str(gone)]
+    assert by_person[str(gone)]["amount"] == 0
+    assert by_person[str(kept)]["$set"]["user_id"] == str(kept)
+
+
+async def test_an_internal_person_is_sent_bare(db_engine: AsyncEngine) -> None:
+    person = await a_user(db_engine)
+    await queue(db_engine, user=person)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO admin_users (user_id, admin_role) VALUES (:u, 'limited_access')"),
+            {"u": person},
+        )
+    sink = FakeSink()
+
+    await run(db_engine, sink)
+
+    ((sent,),) = sink.batches
+    assert "$set" not in sent["properties"]

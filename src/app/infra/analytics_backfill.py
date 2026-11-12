@@ -68,6 +68,7 @@ from app.domain.enums import CreditReason
 from app.domain.ports import AnalyticsSink
 from app.infra.clients.posthog import PostHogSink
 from app.infra.db import analytics_backfill as facts
+from app.infra.db.analytics_persons import with_person_properties
 from app.infra.http.upstream import trim_origin
 
 __all__ = [
@@ -81,6 +82,7 @@ __all__ = [
     "backfill_analytics",
     "historical_sink",
     "read_cursor",
+    "sending_sink",
     "target_fingerprint",
 ]
 
@@ -239,8 +241,15 @@ class BackfillReport:
 
 
 def historical_sink(settings: Settings, *, client: httpx.Client | None = None) -> AnalyticsSink:
-    """PostHog, marked as a historical migration, or a refusal naming what is
-    missing: analytics off, or `analytics_gaps`."""
+    """`sending_sink` marked as a historical migration."""
+    return sending_sink(settings, historical_migration=True, client=client)
+
+
+def sending_sink(
+    settings: Settings, *, historical_migration: bool, client: httpx.Client | None = None
+) -> AnalyticsSink:
+    """PostHog for a one-off run, or a refusal naming what is missing:
+    analytics off, or `analytics_gaps`."""
     if not settings.analytics_enabled:
         raise BackfillRefusedError(f"{env_key('analytics_enabled')} is off")
     if gaps := analytics_gaps(settings):
@@ -248,7 +257,9 @@ def historical_sink(settings: Settings, *, client: httpx.Client | None = None) -
     host, token = settings.analytics_host, settings.analytics_project_token
     if not (host and token):  # `analytics_gaps` decided; this narrows the types.
         raise BackfillRefusedError("analytics is not configured")
-    return PostHogSink(host=host, project_token=token, historical_migration=True, client=client)
+    return PostHogSink(
+        host=host, project_token=token, historical_migration=historical_migration, client=client
+    )
 
 
 def target_fingerprint(settings: Settings) -> str | None:
@@ -363,7 +374,8 @@ async def backfill_analytics(
             async for row in read(session, until=until, after=after):
                 built = build(row)
                 if pending and len(pending) + len(built) > batch:
-                    await _send(sink, pending, report, Position(cursor, kind, last, until, target))
+                    position = Position(cursor, kind, last, until, target)
+                    await _send(session, sink, pending, report, position)
                     pending = []
                 for event in built:
                     counts[event["event"]] += 1
@@ -372,21 +384,24 @@ async def backfill_analytics(
                 pending.extend(built)
                 last = row
             if pending:
-                await _send(sink, pending, report, Position(cursor, kind, last, until, target))
+                position = Position(cursor, kind, last, until, target)
+                await _send(session, sink, pending, report, position)
 
     report.counts = {event.value: counts[event.value] for event in AnalyticsEvent}
     return report
 
 
 async def _send(
+    session: AsyncSession,
     sink: AnalyticsSink | None,
     events: list[Event],
     report: BackfillReport,
     position: Position,
 ) -> None:
-    """One batch out, then the cursor past it. Nothing at all on a dry run."""
+    """One batch out, with each person's properties (decision 340), then the
+    cursor past it. Nothing at all on a dry run."""
     if sink is None or position.last is None or position.target is None:
         return
-    await asyncio.to_thread(sink.capture, events)
+    await asyncio.to_thread(sink.capture, await with_person_properties(session, events))
     _write_cursor(position, position.last)
     report.sent += len(events)

@@ -20,7 +20,7 @@ from enum import Enum, StrEnum
 from typing import Any
 from uuid import UUID, uuid5
 
-from app.domain.enums import SessionStatus
+from app.domain.enums import ApprovalStatus, ListingStatus, SessionStatus
 
 __all__ = [
     "HISTORY_NAMESPACE",
@@ -35,11 +35,15 @@ __all__ = [
     "granted_properties",
     "historical_event",
     "history_event_id",
+    "mentor_status",
+    "person_properties",
+    "person_update",
     "requested_properties",
     "review_properties",
     "session_event_names",
     "session_properties",
     "spent_properties",
+    "with_person",
 ]
 
 
@@ -80,6 +84,15 @@ PERSONAL_KEYS = frozenset({"body", "about_me", "invite_code", "referral_code"})
 #: anything longer are what a name, an address or free text would need.
 PLAIN_VALUE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
+#: The only keys that hold a mapping: PostHog's person updates (decision
+#: 340), whose every key and value is guarded like the event's own.
+PERSON_UPDATES = ("$set", "$set_once")
+
+#: The person keys to clear (a list of property names, PostHog's "`$unset`
+#: array of property keys": https://posthog.com/docs/product-analytics/person-properties,
+#: "How to remove person properties"). Each name must be plain and impersonal.
+PERSON_UNSET = "$unset"
+
 #: PostHog would place a server-sent event at the server's address: "To skip
 #: it for a single event, set the `$geoip_disable` property to `true` on that
 #: event" (https://posthog.com/docs/privacy/data-collection, "Location data
@@ -107,17 +120,24 @@ def analytics_event(
         "event": event.value,
         "distinct_id": str(user_id),
         "timestamp": at.astimezone(dt.UTC).isoformat(),
-        "properties": {
-            **{key: _plain(key, value) for key, value in (properties or {}).items()},
-            GEOIP_DISABLE: True,
-        },
+        "properties": {**_guarded(properties or {}), GEOIP_DISABLE: True},
     }
 
 
-def _plain(key: str, value: object) -> str | int | bool | None:
+def _guarded(properties: Mapping[str, object], *, top: bool = True) -> dict[str, Any]:
+    """Every key and value through `_plain`: the one personal-data guard.
+    Only the event's own ``top`` level may hold a `PERSON_UPDATES` mapping."""
+    return {key: _plain(key, value, top=top) for key, value in properties.items()}
+
+
+def _plain(key: str, value: object, *, top: bool = True) -> Any:
     lowered = key.lower()
     if lowered in PERSONAL_KEYS or any(word in lowered for word in PERSONAL_WORDS):
         raise ValueError(f"analytics property {key!r} would carry personal data")
+    if isinstance(value, Mapping) and top and key in PERSON_UPDATES:
+        return _guarded(value, top=False)
+    if isinstance(value, list) and top and key == PERSON_UNSET:
+        return [_unset_name(name) for name in value]
     if isinstance(value, Enum):
         value = value.value
     if isinstance(value, UUID):
@@ -127,6 +147,78 @@ def _plain(key: str, value: object) -> str | int | bool | None:
     if value is None or isinstance(value, str | int | bool):
         return value
     raise ValueError(f"analytics property {key!r} must be an id, enum, count or code")
+
+
+def _unset_name(name: object) -> str:
+    """A property name to clear: a plain, impersonal key, as `_plain` checks one."""
+    if not isinstance(name, str):
+        raise ValueError(f"{PERSON_UNSET} must list property names")
+    return str(_plain(name, name, top=False))
+
+
+# --------------------------------------------------------------------------
+# Who an event is about: the PostHog person's properties (decision 340)
+# --------------------------------------------------------------------------
+
+
+def mentor_status(approval: ApprovalStatus | str, listing: ListingStatus | str) -> str:
+    """One mentor status: the listing (`listed`, `unlisted`) once approved,
+    else the approval (`pending`, `declined`)."""
+    approval = ApprovalStatus(approval)
+    return ListingStatus(listing).value if approval == ApprovalStatus.APPROVED else approval.value
+
+
+def person_properties(
+    *,
+    user_id: UUID,
+    role: object,
+    is_migrated: bool,
+    signup_source: object,
+    signup_channel: object,
+    created_at: dt.datetime,
+    approval_status: ApprovalStatus | str | None,
+    listing_status: ListingStatus | str | None,
+) -> dict[str, Any]:
+    """What a person page shows, merged into each of their events: current
+    state under `$set`, the creation month (UTC, ``YYYY-MM``) under
+    `$set_once` (https://posthog.com/docs/product-analytics/person-properties).
+    The names are the frontend's on identify. ``mentor_status`` only for a
+    mentor, one with a live `mentor_profiles` row (``approval_status`` set)."""
+    if created_at.tzinfo is None:
+        raise ValueError("an account's creation time must carry its zone")
+    current: dict[str, object] = {
+        "user_id": user_id,
+        "role": role,
+        "is_migrated": is_migrated,
+        "signup_source": signup_source,
+        "signup_channel": signup_channel,
+    }
+    person: dict[str, object] = {"$set": current}
+    if approval_status is not None and listing_status is not None:
+        current["mentor_status"] = mentor_status(approval_status, listing_status)
+    else:
+        # Cleared, not left: a mentor whose profile went keeps no stale status.
+        person[PERSON_UNSET] = ["mentor_status"]
+    person["$set_once"] = {"account_created_month": created_at.astimezone(dt.UTC).strftime("%Y-%m")}
+    # **Guarded here, once**: the merges below take this output as it is.
+    return _guarded(person)
+
+
+def with_person(event: Mapping[str, Any], person: Mapping[str, object]) -> dict[str, Any]:
+    """``event`` with ``person`` (`person_properties`, already guarded)
+    beside its own properties."""
+    return {**event, "properties": {**event["properties"], **person}}
+
+
+def person_update(user_id: UUID, person: Mapping[str, object]) -> dict[str, Any]:
+    """PostHog's own way to update a person with no product event: a `$set`
+    event carrying ``person`` (https://posthog.com/docs/product-analytics/person-properties,
+    "How to set person properties"). Safe to repeat."""
+    return {
+        "event": "$set",
+        "distinct_id": str(user_id),
+        "properties": {**person, GEOIP_DISABLE: True},
+    }
 
 
 # --------------------------------------------------------------------------

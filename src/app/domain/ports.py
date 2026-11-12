@@ -78,3 +78,8 @@ class AnalyticsReader(Protocol):
         shared their own profile link within `MENTOR_ACTIVATED_WITHIN` of it.
         One failure fails the whole read."""
         ...
+
+    def known_persons(self, user_ids: Sequence[UUID], internal: Sequence[UUID]) -> set[UUID]:
+        """Which of ``user_ids`` the vendor already has events for (decision
+        340): the one-off person sync updates only those, never creating one."""
+        ...

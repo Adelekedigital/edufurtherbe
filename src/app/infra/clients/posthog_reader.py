@@ -347,6 +347,12 @@ def hogql(name: str, query: str, values: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "HogQLQuery", "query": query, "values": filled, "name": name}
 
 
+#: The distinct ids among ``{ids}`` PostHog has any event for (decision 340).
+KNOWN_QUERY = _written(
+    "SELECT DISTINCT distinct_id FROM events WHERE has({ids}, distinct_id) AND {not_internal}"
+)
+
+
 class _MalformedError(ValueError):
     """The answer was not the shape the query asks for."""
 
@@ -464,6 +470,10 @@ class NullAnalyticsReader:
         del cohorts, internal
         raise self._refuse()
 
+    def known_persons(self, user_ids: Sequence[UUID], internal: Sequence[UUID]) -> set[UUID]:
+        del user_ids, internal
+        raise self._refuse()
+
 
 class PostHogReader:
     """Reads one PostHog project through its Query API."""
@@ -569,6 +579,20 @@ class PostHogReader:
             lambda body: _int(_one(body, ("shared",))["shared"]),
             OPTIONAL_TIMEOUT,
         )
+
+    def known_persons(self, user_ids: Sequence[UUID], internal: Sequence[UUID]) -> set[UUID]:
+        if not user_ids:
+            return set()
+        asked = {str(user): user for user in user_ids}
+
+        def parse(body: Any) -> set[UUID]:
+            # Matched back to the ids asked about: nothing else is kept.
+            found = _rows(body, ("distinct_id",))
+            return {asked[r["distinct_id"]] for r in found if r["distinct_id"] in asked}
+
+        values = {"ids": _ids(list(asked.values())), "internal": _ids(internal)}
+        query = hogql("person_sync_known", KNOWN_QUERY, values)
+        return self._read(query, parse)
 
     def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:
         values = {**_since_until(window), "internal": _ids(internal)}
