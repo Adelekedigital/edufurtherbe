@@ -26,6 +26,8 @@ from app.domain.analytics import (
     active_series,
     active_tracks,
     compared,
+    everybody,
+    history_from,
     rate,
     ratio,
     rounded,
@@ -104,8 +106,8 @@ async def overview_tab(
         unit=series_unit(period),
         series=series,
     )
-    active = await activity(session, period)
-    active_now, active_before = active.users[None]
+    active = await activity(session, period, compare)
+    active_now, active_before = everybody(active.now.users), everybody(active.before.users)
     sub_tracks = SubTracks(
         unique_mentees=compared(int(mentees[0]), int(mentees[1]), compare),
         mentors_delivered=compared(int(mentors[0]), int(mentors[1]), compare),
@@ -152,10 +154,14 @@ async def overview_tab(
         sub_tracks=sub_tracks,
         features=[features[key] for key in FEATURES],
         active_members=ActiveMembers(
-            by_role={role: active_metrics(*active.users[role], compare) for role in PrimaryRole},
+            by_role={
+                role: active_metrics(active.now.users[role], active.before.users[role], compare)
+                for role in PrimaryRole
+            },
             series=active_series(
-                period, active.weekly_now, active.weekly_before, active.earliest, compare
+                period, active.now.weekly, active.before.weekly, active.earliest, compare
             ),
+            history_from=history_from(active.earliest),
         ),
     )
 

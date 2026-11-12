@@ -14,15 +14,17 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.test_api_admin_analytics_tabs import person, read
 from tests.integration.test_api_preview_sessions import app_client
 from tests.integration.test_api_preview_swap import live_preview, previewing
 
 from app.api.deps import core
 from app.domain.activity import SeenToday
+from app.domain.analytics import EARLIEST_DAY, Period, history_from
 from app.infra.db.demo_seed import DEMO_DOMAIN
+from app.infra.db.user_activity import activity
 from app.infra.storage.supabase import SupabaseStorage
 from conftest import add_user, api_token, bearer
 
@@ -317,6 +319,14 @@ async def test_the_trend_is_7_day_actives_on_the_north_stars_points(
                 roles = p["by_role"]
                 assert roles["mentee"][side] + roles["mentor"][side] == p[side]
 
+    # The first full day, from the same first day the null rule reads; the
+    # first shown point's week starts on it.
+    members = body["active_members"]
+    assert members["history_from"] == "2025-02-21"
+    first_shown = next(p["start"] for p in series if p["value"] is not None)
+    week_start = dt.date.fromisoformat(first_shown) - dt.timedelta(days=6)
+    assert week_start >= dt.date.fromisoformat(members["history_from"])
+
     flat = (await read(db_engine, api_storage, "overview", **window, compare="false"))[
         "active_members"
     ]["series"]
@@ -342,3 +352,71 @@ async def test_weekly_points_before_recording_began_are_null(
     assert all(p["value"] is None and p["previous"] is None for p in series)
     nothing = {"value": None, "previous": None}
     assert all(p["by_role"] == {"mentee": nothing, "mentor": nothing} for p in series)
+
+
+async def test_a_range_from_the_first_allowed_day_reads_every_week(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    async with db_engine.begin() as conn:
+        x = await person(conn)
+        y = await add_user(conn, f"{uuid4()}@example.test", primary_role="mentor")
+    # Recording "began" on 1 June 2024, the first day a range may start.
+    await active_on(db_engine, EARLIEST_DAY, x)
+    await active_on(db_engine, dt.date(2024, 6, 20), x, y)
+    today = utc_today()
+    window = {"from": EARLIEST_DAY.isoformat(), "to": today.isoformat(), "tz": "UTC"}
+
+    body = await read(db_engine, api_storage, "overview", **window)
+    series = body["active_members"]["series"]
+
+    days = (today - EARLIEST_DAY).days + 1
+    assert len(series) == -(-days // 7)
+    assert [p["start"] for p in series] == [p["start"] for p in body["north_star"]["series"]]
+    # Week 1 starts on the partial first day; weeks 2-4 are 8-14, 15-21, 22-28 June.
+    assert [p["value"] for p in series[:4]] == [None, 0, 2, 0]
+    assert series[2]["by_role"] == {
+        "mentee": {"value": 1, "previous": None},
+        "mentor": {"value": 1, "previous": None},
+    }
+    # The previous period is all before recording began.
+    assert all(p["previous"] is None for p in series)
+
+
+async def statements_of(engine: AsyncEngine, period: Period, compare: bool) -> list[str]:
+    statements: list[str] = []
+
+    def record(*args: Any) -> None:
+        statements.append(args[2])
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            await activity(session, period, compare)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    return statements
+
+
+async def test_the_activity_read_does_not_grow_with_the_window(db_engine: AsyncEngine) -> None:
+    last = dt.date(2026, 11, 12)
+    periods = [Period(first=last - dt.timedelta(days=d - 1), last=last) for d in (14, 90, 895)]
+
+    compared_ = [await statements_of(db_engine, p, compare=True) for p in periods]
+    alone = [await statements_of(db_engine, p, compare=False) for p in periods]
+
+    # One grouped read per period: the window's, and the previous one's only
+    # when it is compared. The same text whatever the window.
+    assert [len(s) for s in compared_] == [2, 2, 2]
+    assert [len(s) for s in alone] == [1, 1, 1]
+    assert compared_[0] == compared_[1] == compared_[2]
+    assert alone[0] == alone[1] == alone[2]
+
+
+async def test_nothing_recorded_has_no_history(db_engine: AsyncEngine) -> None:
+    async with db_engine.connect() as conn:
+        assert (await conn.execute(text("SELECT count(*) FROM user_activity_days"))).scalar() == 0
+    period = Period(first=dt.date(2025, 3, 1), last=dt.date(2025, 3, 14))
+    async with async_sessionmaker(db_engine)() as session:
+        read_back = await activity(session, period, compare=True)
+    assert read_back.earliest is None
+    assert history_from(read_back.earliest) is None

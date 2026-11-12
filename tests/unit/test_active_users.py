@@ -7,6 +7,7 @@ import datetime as dt
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from app.api.schemas.admin_analytics import ActivePointRead, WeeklyActiveRead
 from app.domain.activity import SeenToday, activity_day
 from app.domain.analytics import (
     MONTHLY_ACTIVE_DAYS,
@@ -14,9 +15,9 @@ from app.domain.analytics import (
     ActiveMetrics,
     ActivePoint,
     ActiveUsers,
-    CountsByGroup,
     Metric,
     Period,
+    RoleCounts,
     WeeklyActive,
     active_metrics,
     active_series,
@@ -24,6 +25,8 @@ from app.domain.analytics import (
     active_tracks,
     activity_days,
     bucket_weeks,
+    everybody,
+    history_from,
     series_buckets,
 )
 from app.domain.enums import PrimaryRole
@@ -164,9 +167,10 @@ def test_each_weekly_point_reads_the_7_days_ending_its_last_day() -> None:
 Pair = tuple[int | None, int | None]
 
 
-def counts(total: list[int], mentee: list[int], mentor: list[int]) -> CountsByGroup:
-    """Per-point counts for everybody and each role, as the store reads them."""
-    return {None: total, PrimaryRole.MENTEE: mentee, PrimaryRole.MENTOR: mentor}
+def counts(_total: list[int], mentee: list[int], mentor: list[int]) -> RoleCounts:
+    """Per-point counts for each role, as the store reads them; the total is
+    written beside them for the reader, and derived (decision 343)."""
+    return {PrimaryRole.MENTEE: mentee, PrimaryRole.MENTOR: mentor}
 
 
 def point(day: dt.date, total: Pair, mentee: Pair, mentor: Pair) -> ActivePoint:
@@ -228,3 +232,45 @@ def test_the_null_rule_reads_the_weeks_first_utc_date() -> None:
     # In New York the 21st starts at 05:00 UTC on the 21st: already full.
     york = Period(first=dt.date(2025, 2, 27), last=dt.date(2025, 2, 28), tz="America/New_York")
     assert [p.total.value for p in active_series(york, now, before, earliest, True)] == [1, 1]
+
+
+def test_everybody_is_mentees_plus_mentors() -> None:
+    by_role = {
+        PrimaryRole.MENTEE: ActiveUsers(weekly=2, monthly=5),
+        PrimaryRole.MENTOR: ActiveUsers(weekly=1, monthly=3),
+    }
+    assert everybody(by_role) == ActiveUsers(weekly=3, monthly=8)
+
+
+def test_a_point_reads_its_own_fields_and_not_a_role_pairs() -> None:
+    assert not issubclass(ActivePointRead, WeeklyActiveRead)
+    day = dt.date(2025, 3, 10)
+    read = ActivePointRead.of(point(day, (5, None), (3, None), (2, None)))
+    assert read.model_dump(mode="json") == {
+        "start": "2025-03-10",
+        "value": 5,
+        "previous": None,
+        "by_role": {
+            "mentee": {"value": 3, "previous": None},
+            "mentor": {"value": 2, "previous": None},
+        },
+    }
+
+
+def test_history_starts_the_day_after_the_first_recorded_day() -> None:
+    assert history_from(None) is None
+    assert history_from(dt.date(2025, 2, 20)) == dt.date(2025, 2, 21)
+
+
+def test_the_first_shown_point_starts_on_or_after_history_from() -> None:
+    earliest = dt.date(2025, 2, 20)
+    period = Period(first=dt.date(2025, 2, 20), last=dt.date(2025, 3, 5))
+    ones = counts([], [1] * period.days, [0] * period.days)
+    points = active_series(period, ones, ones, earliest, compare=True)
+    spans = dict(bucket_weeks(period))
+    shown = [p.start for p in points if p.total.value is not None]
+    first_full = history_from(earliest)
+    assert first_full is not None
+    assert spans[shown[0]].first == first_full
+    # The point before it reads a week starting on the partial day.
+    assert spans[shown[0] - dt.timedelta(days=1)].first < first_full

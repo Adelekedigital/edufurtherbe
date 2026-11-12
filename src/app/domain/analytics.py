@@ -528,8 +528,17 @@ def bucket_weeks(period: Period) -> list[tuple[dt.date, Period]]:
     ]
 
 
-#: A count per trend point, for everybody (``None``) and for each primary role.
-CountsByGroup = Mapping[PrimaryRole | None, list[int]]
+#: A count per trend point, for each primary role.
+RoleCounts = Mapping[PrimaryRole, list[int]]
+
+
+def everybody(by_role: Mapping[PrimaryRole, ActiveUsers]) -> ActiveUsers:
+    """Everybody active: the roles added up. Exact because `primary_role` is
+    NOT NULL and has only these members, so each person is in one role."""
+    return ActiveUsers(
+        weekly=sum(users.weekly for users in by_role.values()),
+        monthly=sum(users.monthly for users in by_role.values()),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,29 +559,40 @@ class ActivePoint:
     by_role: dict[PrimaryRole, WeeklyActive]
 
 
+def history_from(earliest: dt.date | None) -> dt.date | None:
+    """The first full day of recorded activity: the day after ``earliest``,
+    the first day recorded, which recording began part-way through. ``None``
+    with nothing recorded."""
+    return None if earliest is None else earliest + dt.timedelta(days=1)
+
+
 def _recorded(span: Period, earliest: dt.date | None) -> bool:
     """Every day of ``span`` was recorded in full: its first activity day (a
-    UTC date, `activity_days`) is after ``earliest``, the first day recorded,
-    which recording began part-way through. Nothing recorded is never."""
-    return earliest is not None and activity_days(span)[0] > earliest
+    UTC date, `activity_days`) is on or after `history_from`. Nothing
+    recorded is never."""
+    first_full = history_from(earliest)
+    return first_full is not None and activity_days(span)[0] >= first_full
 
 
 def active_series(
     period: Period,
-    now: CountsByGroup,
-    before: CountsByGroup,
+    now: RoleCounts,
+    before: RoleCounts,
     earliest: dt.date | None,
     compare: bool,
 ) -> list[ActivePoint]:
     """The weekly-active trend on the North Star's points: ``now`` and
     ``before`` count each `bucket_weeks` span of the period and of the
-    previous one, point by point, per group; ``earliest`` is the first
-    activity day. A role is null wherever its point is."""
+    previous one, point by point, per role (``before`` unread without
+    compare); ``earliest`` is the first activity day. The total is the roles
+    added up (`everybody`); a role is null wherever its point is."""
 
-    def weekly(group: PrimaryRole | None, i: int, shown: bool, shown_before: bool) -> WeeklyActive:
+    def weekly(
+        roles: tuple[PrimaryRole, ...], i: int, shown: bool, before_shown: bool
+    ) -> WeeklyActive:
         return WeeklyActive(
-            value=now[group][i] if shown else None,
-            previous=before[group][i] if shown_before else None,
+            value=sum(now[role][i] for role in roles) if shown else None,
+            previous=sum(before[role][i] for role in roles) if before_shown else None,
         )
 
     points = []
@@ -583,8 +603,8 @@ def active_series(
         points.append(
             ActivePoint(
                 start=start,
-                total=weekly(None, i, *seen),
-                by_role={role: weekly(role, i, *seen) for role in PrimaryRole},
+                total=weekly(tuple(PrimaryRole), i, *seen),
+                by_role={role: weekly((role,), i, *seen) for role in PrimaryRole},
             )
         )
     return points
@@ -597,6 +617,8 @@ class ActiveMembers:
 
     by_role: dict[PrimaryRole, ActiveMetrics]
     series: list[ActivePoint]
+    #: `history_from`: the day the series' null rule starts counting from.
+    history_from: dt.date | None
 
 
 @dataclass(frozen=True, slots=True)

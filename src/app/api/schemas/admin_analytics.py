@@ -16,6 +16,7 @@ from app.domain.analytics import (
     DEFAULT_TZ,
     ActiveMembers,
     ActiveMetrics,
+    ActivePoint,
     Alert,
     AlertKey,
     AnalyticsTab,
@@ -260,18 +261,19 @@ class ActiveByRoleRead(BaseModel):
     mentor: ActiveRoleRead
 
 
+#: What a trend point's `value` and `previous` mean, in total or for a role.
+_WEEKLY_VALUE = (
+    "Weekly active users in the 7 days ending with the bucket's last day. Null when "
+    "those days start before `history_from`, the first full day of recorded activity."
+)
+_WEEKLY_PREVIOUS = (
+    "The same for the previous period's matching bucket; null also when `compare=false`."
+)
+
+
 class WeeklyActiveRead(BaseModel):
-    value: int | None = Field(
-        description=(
-            "Weekly active users in the 7 days ending with the bucket's last day. Null "
-            "when those days start before the first full day of recorded activity."
-        )
-    )
-    previous: int | None = Field(
-        description=(
-            "The same for the previous period's matching bucket; null also when `compare=false`."
-        )
-    )
+    value: int | None = Field(description=_WEEKLY_VALUE)
+    previous: int | None = Field(description=_WEEKLY_PREVIOUS)
 
     @classmethod
     def of(cls, weekly: WeeklyActive) -> WeeklyActiveRead:
@@ -286,9 +288,26 @@ class ActivePointByRoleRead(BaseModel):
     mentor: WeeklyActiveRead
 
 
-class ActivePointRead(WeeklyActiveRead):
+class ActivePointRead(BaseModel):
+    """One trend point. Its fields are its own, not `WeeklyActiveRead`'s, so
+    the role pair's `of` cannot be called for a point."""
+
     start: date = Field(description="The bucket's first day, as on `north_star.series`.")
+    value: int | None = Field(description=_WEEKLY_VALUE)
+    previous: int | None = Field(description=_WEEKLY_PREVIOUS)
     by_role: ActivePointByRoleRead
+
+    @classmethod
+    def of(cls, point: ActivePoint) -> ActivePointRead:
+        return cls(
+            start=point.start,
+            value=point.total.value,
+            previous=point.total.previous,
+            by_role=ActivePointByRoleRead(
+                mentee=WeeklyActiveRead.of(point.by_role[PrimaryRole.MENTEE]),
+                mentor=WeeklyActiveRead.of(point.by_role[PrimaryRole.MENTOR]),
+            ),
+        )
 
 
 class ActiveMembersRead(BaseModel):
@@ -298,6 +317,14 @@ class ActiveMembersRead(BaseModel):
     series: list[ActivePointRead] = Field(
         description="On `north_star.series`' points and unit, oldest first."
     )
+    history_from: date | None = Field(
+        default=None,
+        description=(
+            "The first full day of recorded activity in this environment (the first "
+            "day recorded plus one): `series` is null before it. Null with nothing "
+            "recorded yet."
+        ),
+    )
 
     @classmethod
     def of(cls, members: ActiveMembers) -> ActiveMembersRead:
@@ -306,18 +333,8 @@ class ActiveMembersRead(BaseModel):
                 mentee=ActiveRoleRead.of(members.by_role[PrimaryRole.MENTEE]),
                 mentor=ActiveRoleRead.of(members.by_role[PrimaryRole.MENTOR]),
             ),
-            series=[
-                ActivePointRead(
-                    start=p.start,
-                    value=p.total.value,
-                    previous=p.total.previous,
-                    by_role=ActivePointByRoleRead(
-                        mentee=WeeklyActiveRead.of(p.by_role[PrimaryRole.MENTEE]),
-                        mentor=WeeklyActiveRead.of(p.by_role[PrimaryRole.MENTOR]),
-                    ),
-                )
-                for p in members.series
-            ],
+            series=[ActivePointRead.of(point) for point in members.series],
+            history_from=members.history_from,
         )
 
 
