@@ -467,9 +467,12 @@ async def drain_analytics(
         rows = await _pending(session, ANALYTICS_CHANNELS, entity_id=None, kind=None, ids=None)
         if not rows:
             break
-        # Each event's person (decision 340), read once for the batch.
-        events = await with_person_properties(session, [row["payload"] for row in rows])
         try:
+            # Each event's person (decision 340), read once for the batch: part
+            # of the send, so its failure fails the batch. In a savepoint, so a
+            # failed read leaves the transaction able to record that.
+            async with session.begin_nested():
+                events = await with_person_properties(session, [r["payload"] for r in rows])
             # Each event's `uuid` is its row id, so a batch resent after a lost
             # answer is a duplicate PostHog drops (decision 137): "Events that
             # share the same uuid, event name, timestamp, and distinct_id are

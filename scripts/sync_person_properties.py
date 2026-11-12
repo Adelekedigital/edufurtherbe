@@ -5,9 +5,12 @@
 
 Persons the history backfill created have none, and a backfill rerun cannot
 add them (PostHog drops its repeated event ids). This sends one `$set` event
-per live, non-internal account, in batches; safe to rerun. A dry run (the
-default) prints the count and one example payload. The rules are in
-`app.infra.analytics_person_sync`; this only wires them up.
+per live, non-internal account **PostHog already knows**, in batches; it never
+creates a person, and is safe to rerun. Both modes need the private API
+(`ANALYTICS_API_HOST`, `ANALYTICS_PROJECT_ID`, `ANALYTICS_API_KEY`) to ask
+PostHog whom it knows. A dry run (the default) prints the counts and one
+example payload. The rules are in `app.infra.analytics_person_sync`; this only
+wires them up.
 """
 
 from __future__ import annotations
@@ -17,9 +20,10 @@ import asyncio
 import json
 
 from app.core.config import get_settings
-from app.core.errors import UpstreamError
+from app.core.errors import AnalyticsUpstreamError, UpstreamError
 from app.infra.analytics_backfill import BackfillRefusedError, sending_sink
-from app.infra.analytics_person_sync import sync_person_properties
+from app.infra.analytics_person_sync import SyncReport, sync_person_properties
+from app.infra.clients.posthog_reader import NullAnalyticsReader, analytics_reader_for
 from app.infra.db.engine import create_database_engine
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 
@@ -27,26 +31,43 @@ from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 EXIT_STOPPED = 3
 
 
+def summary(report: SyncReport, *, send: bool) -> list[str]:
+    """The counts a finished run prints."""
+    lines = [
+        f"sendable: {report.sendable}",
+        f"known to PostHog: {report.known}",
+        f"to send: {report.known}",
+    ]
+    if report.sample is not None:
+        lines.append("sample: " + json.dumps(report.sample, sort_keys=True))
+    lines.append(f"sent: {report.sent}" if send else "dry run: nothing sent")
+    return lines
+
+
 async def run(args: argparse.Namespace) -> int:
     settings = get_settings()
+    reader = analytics_reader_for(settings)
+    if isinstance(reader, NullAnalyticsReader):
+        print("refused: set ANALYTICS_API_HOST, ANALYTICS_PROJECT_ID and ANALYTICS_API_KEY")
+        return EXIT_REFUSED
     engine = create_database_engine(settings)
+    # Outside the `try`, so a stopped run still says how far it got.
+    report = SyncReport()
     try:
         sink = sending_sink(settings, historical_migration=False) if args.send else None
         if args.send:
             print(f"host: {settings.analytics_host}")
-        report = await sync_person_properties(engine, sink=sink)
+        await sync_person_properties(engine, reader=reader, sink=sink, report=report)
     except BackfillRefusedError as exc:
         print(f"refused: {exc}")
         return EXIT_REFUSED
-    except UpstreamError as exc:
-        print(f"stopped, rerun to finish: {exc}")
+    except (UpstreamError, AnalyticsUpstreamError) as exc:
+        print(f"stopped after sending {report.sent}, rerun to finish: {exc}")
         return EXIT_STOPPED
     finally:
         await engine.dispose()
-    print(f"persons: {report.built}")
-    if report.sample is not None:
-        print("sample: " + json.dumps(report.sample, sort_keys=True))
-    print(f"sent: {report.sent}" if args.send else "dry run: nothing sent")
+    for line in summary(report, send=args.send):
+        print(line)
     return EXIT_OK
 
 

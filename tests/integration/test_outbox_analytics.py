@@ -24,6 +24,7 @@ from app.core.config import Settings
 from app.core.errors import UpstreamError
 from app.domain.analytics_events import AnalyticsEvent, analytics_event
 from app.domain.notifications import Channel, Notification
+from app.infra.db import outbox
 from app.infra.db.outbox import (
     BATCH,
     MAX_ATTEMPTS,
@@ -278,6 +279,29 @@ async def test_a_refused_batch_is_retried_and_stops_the_run(db_engine: AsyncEngi
     assert await run(db_engine, sink) == {"sent": BATCH + 1, "failed": 0}
 
 
+async def test_a_person_read_that_fails_fails_the_batch_and_ends_the_run(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The person read is part of the send: its failure counts an attempt and
+    keeps the error, as a refusal does, rather than stall the queue."""
+
+    async def broken(*_args: Any) -> list[dict[str, Any]]:
+        raise RuntimeError("person read failed")
+
+    await queue(db_engine, 2)
+    monkeypatch.setattr(outbox, "with_person_properties", broken)
+    sink = FakeSink()
+
+    counts = await run(db_engine, sink)
+
+    assert counts == {"sent": 0, "failed": 2}
+    assert sink.batches == []
+    found = await rows(db_engine)
+    assert {(r["status"], r["attempts"], r["error_detail"]) for r in found} == {
+        ("pending", 1, "person read failed")
+    }
+
+
 async def test_an_event_refused_max_attempts_times_stays_failed_with_its_error(
     db_engine: AsyncEngine,
 ) -> None:
@@ -375,6 +399,8 @@ async def test_each_event_carries_its_persons_properties_read_once_per_batch(
     }
     assert by_person[str(mentor)]["$set"]["mentor_status"] == "listed"
     assert by_person[str(mentor)]["$set"]["role"] == "mentor"
+    assert by_person[str(mentees[0])]["$unset"] == ["mentor_status"]
+    assert "$unset" not in by_person[str(mentor)]
     month = dt.datetime.now(dt.UTC).strftime("%Y-%m")
     assert {e["properties"]["$set_once"]["account_created_month"] for e in batch} == {month}
     assert all("$set" not in row["payload"]["properties"] for row in await rows(db_engine))

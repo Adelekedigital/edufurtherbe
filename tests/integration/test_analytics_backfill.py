@@ -66,7 +66,7 @@ class FakeSink:
         ]
 
 
-PERSON = ("$set", "$set_once")
+PERSON = ("$set", "$set_once", "$unset")
 
 
 def expected(

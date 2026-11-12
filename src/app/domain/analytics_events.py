@@ -88,6 +88,11 @@ PLAIN_VALUE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 #: 340), whose every key and value is guarded like the event's own.
 PERSON_UPDATES = ("$set", "$set_once")
 
+#: The person keys to clear (a list of property names, PostHog's "`$unset`
+#: array of property keys": https://posthog.com/docs/product-analytics/person-properties,
+#: "How to remove person properties"). Each name must be plain and impersonal.
+PERSON_UNSET = "$unset"
+
 #: PostHog would place a server-sent event at the server's address: "To skip
 #: it for a single event, set the `$geoip_disable` property to `true` on that
 #: event" (https://posthog.com/docs/privacy/data-collection, "Location data
@@ -131,6 +136,8 @@ def _plain(key: str, value: object, *, top: bool = True) -> Any:
         raise ValueError(f"analytics property {key!r} would carry personal data")
     if isinstance(value, Mapping) and top and key in PERSON_UPDATES:
         return _guarded(value, top=False)
+    if isinstance(value, list) and top and key == PERSON_UNSET:
+        return [_unset_name(name) for name in value]
     if isinstance(value, Enum):
         value = value.value
     if isinstance(value, UUID):
@@ -140,6 +147,13 @@ def _plain(key: str, value: object, *, top: bool = True) -> Any:
     if value is None or isinstance(value, str | int | bool):
         return value
     raise ValueError(f"analytics property {key!r} must be an id, enum, count or code")
+
+
+def _unset_name(name: object) -> str:
+    """A property name to clear: a plain, impersonal key, as `_plain` checks one."""
+    if not isinstance(name, str):
+        raise ValueError(f"{PERSON_UNSET} must list property names")
+    return str(_plain(name, name, top=False))
 
 
 # --------------------------------------------------------------------------
@@ -179,16 +193,21 @@ def person_properties(
         "signup_source": signup_source,
         "signup_channel": signup_channel,
     }
+    person: dict[str, object] = {"$set": current}
     if approval_status is not None and listing_status is not None:
         current["mentor_status"] = mentor_status(approval_status, listing_status)
-    month = created_at.astimezone(dt.UTC).strftime("%Y-%m")
-    return _guarded({"$set": current, "$set_once": {"account_created_month": month}})
+    else:
+        # Cleared, not left: a mentor whose profile went keeps no stale status.
+        person[PERSON_UNSET] = ["mentor_status"]
+    person["$set_once"] = {"account_created_month": created_at.astimezone(dt.UTC).strftime("%Y-%m")}
+    # **Guarded here, once**: the merges below take this output as it is.
+    return _guarded(person)
 
 
 def with_person(event: Mapping[str, Any], person: Mapping[str, object]) -> dict[str, Any]:
-    """``event`` with ``person`` (`person_properties`) beside its own
-    properties, through the guard again: nothing reaches PostHog unguarded."""
-    return {**event, "properties": {**event["properties"], **_guarded(person)}}
+    """``event`` with ``person`` (`person_properties`, already guarded)
+    beside its own properties."""
+    return {**event, "properties": {**event["properties"], **person}}
 
 
 def person_update(user_id: UUID, person: Mapping[str, object]) -> dict[str, Any]:
@@ -198,7 +217,7 @@ def person_update(user_id: UUID, person: Mapping[str, object]) -> dict[str, Any]
     return {
         "event": "$set",
         "distinct_id": str(user_id),
-        "properties": {**_guarded(person), GEOIP_DISABLE: True},
+        "properties": {**person, GEOIP_DISABLE: True},
     }
 
 

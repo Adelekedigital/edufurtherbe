@@ -13,6 +13,7 @@ from app.domain.analytics_events import (
     analytics_event,
     mentor_status,
     person_properties,
+    person_update,
     with_person,
 )
 from app.domain.enums import (
@@ -51,7 +52,14 @@ def test_a_mentee_carries_its_current_state_and_no_mentor_status() -> None:
             "signup_channel": "linkedin",
         },
         "$set_once": {"account_created_month": "2025-03"},
+        "$unset": ["mentor_status"],
     }
+
+
+def test_a_mentor_keeps_its_status_and_clears_nothing() -> None:
+    found = person(approval_status=ApprovalStatus.APPROVED, listing_status=ListingStatus.LISTED)
+
+    assert "$unset" not in found
 
 
 def test_a_migrated_mentee_with_no_channel_says_so_with_null() -> None:
@@ -117,30 +125,63 @@ def test_a_creation_time_without_a_zone_is_refused() -> None:
         person(created_at=CREATED.replace(tzinfo=None))
 
 
-def test_merged_into_an_event_the_person_keys_sit_beside_its_own() -> None:
+def test_the_person_is_guarded_at_the_source_and_merged_as_it_is() -> None:
+    """Guarded once, in `person_properties`: ids and enums are already plain
+    text there, and the merges add exactly that, untouched."""
+    guarded = person(role=PrimaryRole.MENTEE)
     event = analytics_event(AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED, properties={})
 
-    merged = with_person(event, person())
+    merged = with_person(event, guarded)
+    update = person_update(USER, guarded)
 
-    assert merged["properties"]["$set"]["user_id"] == str(USER)
-    assert merged["properties"]["$set_once"] == {"account_created_month": "2025-03"}
+    assert type(guarded["$set"]["user_id"]) is str and type(guarded["$set"]["role"]) is str
+    assert {k: merged["properties"][k] for k in guarded} == guarded
     assert merged["properties"]["$geoip_disable"] is True
     assert "$set" not in event["properties"]
+    assert update == {
+        "event": "$set",
+        "distinct_id": str(USER),
+        "properties": {**guarded, "$geoip_disable": True},
+    }
 
 
 @pytest.mark.parametrize("key", ["email", "first_name", "Contact_Email", "about_me"])
-def test_a_personal_key_smuggled_into_a_person_is_refused(key: str) -> None:
-    event = analytics_event(AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED)
-
+def test_a_personal_key_smuggled_into_a_person_update_is_refused(key: str) -> None:
     with pytest.raises(ValueError, match="personal"):
-        with_person(event, {"$set": {key: "x"}})
+        analytics_event(
+            AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED, properties={"$set": {key: "x"}}
+        )
 
 
-def test_free_text_smuggled_into_a_person_is_refused() -> None:
-    event = analytics_event(AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED)
-
+def test_free_text_smuggled_into_a_person_update_is_refused() -> None:
     with pytest.raises(ValueError, match="id, enum value or code"):
-        with_person(event, {"$set_once": {"school": "ada@example.com"}})
+        analytics_event(
+            AnalyticsEvent.CREDIT_SPENT,
+            user_id=USER,
+            at=CREATED,
+            properties={"$set_once": {"school": "ada@example.com"}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("names", "why"),
+    [(["email"], "personal"), (["two words"], "id, enum value or code"), ([3], "names")],
+)
+def test_unset_lists_plain_impersonal_names_only(names: list[object], why: str) -> None:
+    with pytest.raises(ValueError, match=why):
+        analytics_event(
+            AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED, properties={"$unset": names}
+        )
+
+
+def test_a_list_anywhere_but_unset_is_refused() -> None:
+    with pytest.raises(ValueError, match="id, enum, count or code"):
+        analytics_event(
+            AnalyticsEvent.CREDIT_SPENT,
+            user_id=USER,
+            at=CREATED,
+            properties={"$set": {"$unset": ["role"]}},
+        )
 
 
 def test_a_nested_mapping_in_an_event_goes_through_the_guard_too() -> None:
@@ -154,10 +195,13 @@ def test_a_nested_mapping_in_an_event_goes_through_the_guard_too() -> None:
 
 
 def test_a_mapping_deeper_than_a_person_update_is_refused() -> None:
-    event = analytics_event(AnalyticsEvent.CREDIT_SPENT, user_id=USER, at=CREATED)
-
     with pytest.raises(ValueError, match="id, enum, count or code"):
-        with_person(event, {"$set": {"$set": {"role": "mentee"}}})
+        analytics_event(
+            AnalyticsEvent.CREDIT_SPENT,
+            user_id=USER,
+            at=CREATED,
+            properties={"$set": {"$set": {"role": "mentee"}}},
+        )
 
 
 def test_me_reads_is_migrated_from_the_one_predicate() -> None:
@@ -165,3 +209,31 @@ def test_me_reads_is_migrated_from_the_one_predicate() -> None:
 
     assert deps._MIGRATED.params == {}
     assert "(u.signup_source = 'migrated') AS is_migrated" in str(deps.CURRENT_USER)
+
+
+def test_the_reader_keeps_only_the_asked_ids_posthog_answers() -> None:
+    """Bounded to our ids, read back as ids: a stray value is dropped."""
+    import httpx
+    from tests.posthog_fakes import body_of, posthog_reader, rows
+
+    known, unknown, internal = uuid4(), uuid4(), uuid4()
+    reader, seen = posthog_reader(
+        lambda _: rows(["distinct_id"], [str(known)], ["anonymous-browser-id"])
+    )
+
+    assert reader.known_persons([known, unknown], [internal]) == {known}
+    (request,) = seen
+    query = body_of(request)["query"]
+    assert sorted(query["values"]["ids"]) == sorted([str(known), str(unknown)])
+    assert query["values"]["internal"] == [str(internal)]
+    assert "{ids}" in query["query"]
+    assert isinstance(request, httpx.Request)
+
+
+def test_the_reader_asks_nothing_for_no_ids() -> None:
+    from tests.posthog_fakes import posthog_reader, rows
+
+    reader, seen = posthog_reader(lambda _: rows(["distinct_id"]))
+
+    assert reader.known_persons([], []) == set()
+    assert seen == []
