@@ -21,15 +21,21 @@ import asyncio
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError, UpstreamError
 from app.infra.clients.posthog_admin import PostHogAdmin, posthog_admin_for
+from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, configure_streams
 from app.infra.posthog_dashboards.run import Plan, sync_dashboards
 
+BUSY = "another PostHog dashboard sync is running: nothing written"
+
 
 def report(plan: Plan, apply: bool) -> list[str]:
-    lines = [f"{c.kind} {c.action}: {c.name}" for c in plan.changes]
+    """Each real change, then how many items already matched."""
+    lines = [f"{c.kind} {c.action}: {c.name}" for c in plan.changes if c.action != "unchanged"]
+    if unchanged := plan.counts()["unchanged"]:
+        lines.append(f"unchanged: {unchanged}")
     lines.append(f"internal accounts left out of every insight: {plan.internal}")
     if apply:
         lines.append("applied")
@@ -45,17 +51,29 @@ def report(plan: Plan, apply: bool) -> list[str]:
 FAILURES = (ConfigurationError, UpstreamError, SQLAlchemyError, OSError)
 
 
+async def run_once(settings: Settings, admin: PostHogAdmin, apply: bool) -> Plan | None:
+    """One sync on an engine of the script's own."""
+    engine = create_database_engine(settings)
+    try:
+        return await sync_dashboards(create_session_factory(engine), admin, apply=apply)
+    finally:
+        await engine.dispose()
+
+
 def run(apply: bool, admin: PostHogAdmin | None = None) -> int:
     try:
         settings = get_settings()
         admin = admin or posthog_admin_for(settings)
-        plan = asyncio.run(sync_dashboards(settings, admin, apply=apply))
+        plan = asyncio.run(run_once(settings, admin, apply))
     except FAILURES as exc:
         written = admin.written if admin is not None else {}
         done = ", ".join(f"{kind} {n}" for kind, n in sorted(written.items())) or "nothing"
         print(f"written before the failure: {done}")
         # One line: httpx puts a "for more information" line in its message.
         print(f"failed: {type(exc).__name__}: " + " ".join(str(exc).split()))
+        return EXIT_REFUSED
+    if plan is None:
+        print(BUSY)
         return EXIT_REFUSED
     for line in report(plan, apply):
         print(line)

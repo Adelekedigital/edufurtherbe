@@ -34,7 +34,7 @@ from app.infra.clients.meetings import (
 )
 from app.infra.clients.notifications import LoopsNotifier, NullNotifier, notifier_for
 from app.infra.clients.posthog import live_analytics_sink
-from app.infra.clients.posthog_admin import posthog_admin_for
+from app.infra.clients.posthog_admin import PostHogAdmin, posthog_admin_for
 from app.infra.clients.web_push import live_web_push
 from app.infra.db.account_purge import purge_counts, purge_due_accounts
 from app.infra.db.calendar_store import check_connections, free_busy_reader
@@ -66,6 +66,7 @@ from app.infra.db.triggers import timestamps_from_source_across
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
 from app.infra.posthog_dashboards.run import Plan, sync_dashboards
+from app.infra.posthog_dashboards.sync import NOT_WORK as DASHBOARD_NOT_WORK
 from app.infra.storage.supabase import image_storage_for, intake_storage_for
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,11 @@ def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[st
     this adds the key sweep's. In a dry run each is what *would* be removed.
     """
     return {**files, "idempotency_keys_deleted": idempotency_keys}
+
+
+#: Per job, the counts that describe a run rather than count work done: a
+#: run with only these is a no-op.
+NOT_WORK: dict[str, frozenset[str]] = {"sync-posthog-dashboards": DASHBOARD_NOT_WORK}
 
 
 class UnknownRuntimeJobError(ValueError):
@@ -152,7 +158,9 @@ class RuntimeJobs:
             "sync-posthog-dashboards": self._sync_posthog_dashboards,
         }
         counts = await methods[name](dry_run=dry_run)
-        status = "no-op" if not any(counts.values()) else "completed"
+        described = NOT_WORK.get(name, frozenset())
+        did = any(value for key, value in counts.items() if key not in described)
+        status = "completed" if did else "no-op"
         logger.info(
             "runtime job finished",
             extra={
@@ -452,16 +460,31 @@ class RuntimeJobs:
                 await engine.dispose()
 
     async def _sync_posthog_dashboards(self, *, dry_run: bool) -> dict[str, int]:
-        """Rewrite the managed PostHog dashboards, so every insight lists the
-        internal accounts as they are today (decision 344). **Skipped, not
-        failed, without the private API**: analytics is optional until it is
-        configured, and a refusal would only make QStash retry it."""
+        """Make the managed PostHog dashboards match the repo, so every insight
+        lists the internal accounts as they are today (decision 344).
+        **Skipped, not failed, without the private API outside production**:
+        analytics is optional until configured, and a refusal would only make
+        QStash retry it. In production, where the job is on only once someone
+        enabled it, a missing setting fails the run. One run at a time: a run
+        that finds the lock held does nothing."""
         try:
-            admin = posthog_admin_for(self.settings)
+            admin: PostHogAdmin | None = posthog_admin_for(self.settings)
         except ConfigurationError:
+            admin = None
+        admin = self._live_in_production(
+            admin, type(None), "ANALYTICS_API_HOST, ANALYTICS_PROJECT_ID or ANALYTICS_API_KEY"
+        )
+        if admin is None:
             logger.warning("PostHog dashboard sync skipped: the analytics API is not configured")
             return Plan().counts()
-        plan = await sync_dashboards(self.settings, admin, apply=not dry_run)
+        engine = create_database_engine(self.settings)
+        try:
+            plan = await sync_dashboards(create_session_factory(engine), admin, apply=not dry_run)
+        finally:
+            await engine.dispose()
+        if plan is None:
+            logger.info("another PostHog dashboard sync is running; this run did nothing")
+            return Plan().counts()
         return plan.counts()
 
     async def _credit_reminders(self, *, dry_run: bool) -> dict[str, int]:

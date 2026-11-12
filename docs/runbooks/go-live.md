@@ -119,7 +119,7 @@ never changes QStash.
    {"settle-sessions":{"enabled":true},"credit-reminders":{"enabled":true},"monthly-credits":{"enabled":true},"expire-credits":{"enabled":true},"sync-institutions":{"enabled":true},"refresh-next-available":{"enabled":true},"sweep-intake-files":{"enabled":true},"purge-deleted-users":{"enabled":true},"sync-posthog-dashboards":{"enabled":true}}
    ```
 
-   **Owner to confirm:** that all nine go live at cutover. `sync-posthog-dashboards` (decision 344) only syncs once the `ANALYTICS_API_*` settings are set; until then it runs as a no-op.
+   **Owner to confirm:** that all nine go live at cutover. Enable `sync-posthog-dashboards` (decision 344) only once `ANALYTICS_API_HOST`, `ANALYTICS_PROJECT_ID` and `ANALYTICS_API_KEY` are set on production: without them a production run fails, by design.
 2. Dispatch **Reconcile QStash runtime schedules** with
    `environment=production`, `apply=false`. Read the printed diff: schedule ids
    are `edufurther-production-<job>` and destinations start with

@@ -110,3 +110,36 @@ class FakePostHog:
     def admin(self) -> PostHogAdmin:
         client = httpx.Client(transport=httpx.MockTransport(self))
         return PostHogAdmin(api_host=HOST + "/", project_id="42", api_key=KEY, client=client)
+
+
+class FakeSession:
+    """A session whose ``begin()`` is a no-op, for a sync run whose lock and
+    reads are stubbed (`stub_reads`); the lock itself is tested on Postgres."""
+
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    def begin(self) -> FakeSession:
+        return self
+
+
+def stub_reads(monkeypatch: Any, ids: list[Any], *, free: bool = True) -> list[Any]:
+    """Make a sync run read ``ids`` and find the lock ``free`` (or held);
+    returns the sessions the ids were read through."""
+    from app.infra.posthog_dashboards import run
+
+    read_through: list[Any] = []
+
+    async def take_lock(_session: Any) -> bool:
+        return free
+
+    async def read(session: Any) -> list[Any]:
+        read_through.append(session)
+        return ids
+
+    monkeypatch.setattr(run, "take_lock", take_lock)
+    monkeypatch.setattr(run, "read_internal", read)
+    return read_through
