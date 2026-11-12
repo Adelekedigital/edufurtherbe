@@ -316,8 +316,9 @@ def neediest(places: list[SupplyPlace]) -> list[SupplyPlace]:
 AlertKey = Literal["login_code_failed", "no_booking_requests", "no_signups", "delivery_failed"]
 AnalyticsTab = Literal["overview", "sessions", "supply", "credits", "growth", "funnels"]
 
-#: Quiet for this long is an alert, for booking requests and for sign-ups.
-QUIET_FOR = dt.timedelta(hours=24)
+#: Quiet for this long is an alert, for booking requests and for sign-ups
+#: (owner, 2026-11-12: a week; a day was too short).
+QUIET_FOR = dt.timedelta(days=7)
 #: Outbox rows failed in one UTC day above this count raise `delivery_failed`.
 DELIVERY_FAILED_OVER = 20
 
@@ -352,14 +353,14 @@ def quiet_alert(
         return Alert(
             key=key,
             title="No booking requests",
-            body="No booking requests in the last 24 hours.",
+            body=f"No one has asked for a session in the last {QUIET_FOR.days} days.",
             link=AlertLink(tab="sessions"),
             raised_at=raised_at,
         )
     return Alert(
         key=key,
         title="No sign-ups",
-        body="No one has signed up in the last 24 hours.",
+        body=f"No one has signed up in the last {QUIET_FOR.days} days.",
         link=AlertLink(tab="funnels", funnel="signup"),
         raised_at=raised_at,
     )
