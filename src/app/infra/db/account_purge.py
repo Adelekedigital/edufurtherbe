@@ -13,7 +13,8 @@ that is only theirs and that nothing kept points at: sign-in identities, calenda
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
 personal meeting links, their browsers' push subscriptions, their analytics
-cookie answer and the analytics events about them not yet sent. Every handle
+cookie answer, the days they were active (decision 342) and the analytics
+events about them not yet sent. Every handle
 their invite link carried goes too, and the address of the invite they arrived
 through (decision 305).
 
@@ -66,7 +67,7 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
-from app.infra.db.models.platform import FeatureInterest, IdempotencyKey
+from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, UserActivityDay
 from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.referrals import Referral
 from app.infra.db.models.scholarships import UserAward
@@ -114,6 +115,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (MentorConferencingOption, MentorConferencingOption.user_id),
     (PushSubscription, PushSubscription.user_id),
     (AnalyticsConsent, AnalyticsConsent.user_id),
+    (UserActivityDay, UserActivityDay.user_id),
 )
 
 

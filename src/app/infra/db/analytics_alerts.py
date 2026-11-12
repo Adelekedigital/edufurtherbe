@@ -17,7 +17,15 @@ import datetime as dt
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.analytics import Alert, delivery_alert, newest_first, quiet_alert, yesterday
+from app.domain.analytics import (
+    PLATFORM_TZ,
+    Alert,
+    delivery_alert,
+    newest_first,
+    quiet_alert,
+    yesterday,
+)
+from app.domain.availability import local_date
 from app.infra.db.analytics_features import is_sign_up
 from app.infra.db.analytics_sessions import is_request
 from app.infra.db.models.platform import OutboxEvent
@@ -30,7 +38,7 @@ async def active_alerts(session: AsyncSession, now: dt.datetime) -> list[Alert]:
     """Every alert firing at ``now``, newest first."""
     last_request = await session.scalar(select(func.max(Session.created_at)).where(is_request()))
     last_signup = await session.scalar(select(func.max(User.created_at)).where(is_sign_up()))
-    today = now.astimezone(dt.UTC).date()
+    today = local_date(PLATFORM_TZ, now)
     failed = await session.scalar(
         select(func.count())
         .select_from(OutboxEvent)

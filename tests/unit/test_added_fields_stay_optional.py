@@ -154,6 +154,8 @@ ADDED = {
     # Layered funnels and the figures beside them (decision 338).
     "FunnelStepRead": ("layer",),
     "AnalyticsFunnelRead": ("figures",),
+    # Weekly and monthly active users from this database (decision 342).
+    "SubTracksRead": ("weekly_active_users", "monthly_active_users", "stickiness"),
 }
 
 

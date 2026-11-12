@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics import (
     FEATURES,
+    MONTHLY_ACTIVE_DAYS,
+    WEEKLY_ACTIVE_DAYS,
     Feature,
     FeatureKey,
     Metric,
@@ -21,6 +23,8 @@ from app.domain.analytics import (
     SessionsTab,
     SubTracks,
     TopReason,
+    active_spans,
+    active_tracks,
     compared,
     rate,
     ratio,
@@ -37,6 +41,7 @@ from app.infra.db import analytics_sessions as s
 from app.infra.db.analytics_credits import credits_tab
 from app.infra.db.analytics_scope import Measure, per_window, per_window_each
 from app.infra.db.models.sessions import Session
+from app.infra.db.user_activity import active_users
 
 #: The repeat-booking look-back, ending at the window's end.
 REPEAT_DAYS = 60
@@ -99,12 +104,18 @@ async def overview_tab(
         unit=series_unit(period),
         series=series,
     )
+    active_now, active_before = await active_users(
+        session,
+        active_spans(period, WEEKLY_ACTIVE_DAYS),
+        active_spans(period, MONTHLY_ACTIVE_DAYS),
+    )
     sub_tracks = SubTracks(
         unique_mentees=compared(int(mentees[0]), int(mentees[1]), compare),
         mentors_delivered=compared(int(mentors[0]), int(mentors[1]), compare),
         sessions_per_mentee=compared(
             ratio(int(done[0]), int(mentees[0])), ratio(int(done[1]), int(mentees[1])), compare
         ),
+        **active_tracks(active_now, active_before, compare),
     )
 
     supplied, listed = (await session.execute(select(*f.mentor_supply(booking_window)))).one()

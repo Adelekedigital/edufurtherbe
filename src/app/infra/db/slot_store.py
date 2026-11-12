@@ -453,7 +453,7 @@ async def offered_slot(
     test against the public grid, asked over a span in the mentor's days so the
     timezone question stays where it is already answered.
     """
-    day = starts_at.astimezone(dt.UTC).date()
+    day = local_date("UTC", starts_at)
     slots = await list_slots(
         session,
         user_id,
