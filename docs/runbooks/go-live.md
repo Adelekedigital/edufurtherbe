@@ -113,13 +113,13 @@ never changes QStash.
 1. Set the GitHub `production` variable `QSTASH_SCHEDULE_OVERRIDES` to a JSON
    object keyed by job name. Only `enabled` (boolean) and `cron` (string) are
    accepted; anything else fails the run (`_validated_overrides`,
-   `src/app/infra/jobs/manifest.py`; ADR 0028 Decision 5). To enable all eight:
+   `src/app/infra/jobs/manifest.py`; ADR 0028 Decision 5). To enable all nine:
 
    ```json
-   {"settle-sessions":{"enabled":true},"credit-reminders":{"enabled":true},"monthly-credits":{"enabled":true},"expire-credits":{"enabled":true},"sync-institutions":{"enabled":true},"refresh-next-available":{"enabled":true},"sweep-intake-files":{"enabled":true},"purge-deleted-users":{"enabled":true}}
+   {"settle-sessions":{"enabled":true},"credit-reminders":{"enabled":true},"monthly-credits":{"enabled":true},"expire-credits":{"enabled":true},"sync-institutions":{"enabled":true},"refresh-next-available":{"enabled":true},"sweep-intake-files":{"enabled":true},"purge-deleted-users":{"enabled":true},"sync-posthog-dashboards":{"enabled":true}}
    ```
 
-   **Owner to confirm:** that all eight go live at cutover.
+   **Owner to confirm:** that all nine go live at cutover. `sync-posthog-dashboards` (decision 344) only syncs once the `ANALYTICS_API_*` settings are set; until then it runs as a no-op.
 2. Dispatch **Reconcile QStash runtime schedules** with
    `environment=production`, `apply=false`. Read the printed diff: schedule ids
    are `edufurther-production-<job>` and destinations start with

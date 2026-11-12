@@ -27,6 +27,7 @@ Action = Literal["create", "rewrite", "delete"]
 INSIGHT_NOTE = "Defined in the backend repo; edits here are overwritten by the next sync."
 _KEY_LINE = re.compile(r"^managed-key: (\S+)\s*$", re.MULTILINE)
 _GONE = {"deleted": True}
+_COUNTED: dict[Action, str] = {"create": "created", "rewrite": "rewritten", "delete": "deleted"}
 
 Write = Callable[[int, dict[str, Any]], Any]
 
@@ -43,6 +44,14 @@ class Plan:
     changes: list[Change] = field(default_factory=list)
     #: The internal accounts each insight leaves out.
     internal: int = 0
+
+    def counts(self) -> dict[str, int]:
+        """What a job run reports (decision 344): planned changes per action,
+        what a dry run would do, and how many ids each insight lists."""
+        done = {"created": 0, "rewritten": 0, "deleted": 0}
+        for change in self.changes:
+            done[_COUNTED[change.action]] += 1
+        return {**done, "internal": self.internal}
 
 
 def described(text: str, key: str) -> str:

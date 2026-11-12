@@ -11,18 +11,18 @@ import logging
 from pathlib import Path
 from types import ModuleType
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from tests.posthog_fakes import HOST, KEY
+from tests.posthog_fakes import HOST, KEY, PREFIX, FakePostHog
 
 from app.core.errors import UpstreamError
 from app.domain.analytics_behaviour import EVERYONE, FUNNELS
 from app.domain.mentor_stats import Window
 from app.infra.clients.posthog_admin import MAX_PAGES, PostHogAdmin, PostHogAnswerError
 from app.infra.clients.posthog_reader import funnel_query, not_internal
+from app.infra.posthog_dashboards import run as shared
 from app.infra.posthog_dashboards.definitions import (
     ACTIVE_USERS,
     DASHBOARDS,
@@ -33,59 +33,7 @@ from app.infra.posthog_dashboards.definitions import (
 )
 from app.infra.posthog_dashboards.sync import described, managed_key, sync
 
-PREFIX = "/api/projects/42"
 INSIGHTS = sum(len(d.insights) for d in DASHBOARDS)
-
-
-class FakePostHog:
-    """In-memory insights and dashboards behind a MockTransport, listed a
-    few rows a page with a `next` link, as PostHog pages."""
-
-    def __init__(self, page: int = 4) -> None:
-        self.rows: dict[str, list[dict[str, Any]]] = {"insights": [], "dashboards": []}
-        self.writes: list[tuple[str, str, Any]] = []
-        self.ids = itertools.count(1)
-        self.page = page
-        self.keep_tags = True
-        self.keep_keys = True
-        #: PostHog's `next` names its own host, which need not be ours.
-        self.next_host = "https://app.posthog.example.test"
-        #: A whole other list URL for `next`, when set.
-        self.next_url: str | None = None
-
-    def add(self, kind: str, **row: Any) -> dict[str, Any]:
-        row = {"id": next(self.ids), "deleted": False, **row}
-        self.rows[kind].append(row)
-        return row
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        assert request.headers["Authorization"] == f"Bearer {KEY}"
-        url = urlparse(str(request.url))
-        parts = url.path.removeprefix(PREFIX).strip("/").split("/")
-        body = json.loads(request.content) if request.content else None
-        kind = parts[0]
-        if request.method == "GET":
-            offset = int(parse_qs(url.query).get("offset", ["0"])[0])
-            rows = self.rows[kind][offset : offset + self.page]
-            more = offset + self.page < len(self.rows[kind])
-            at = self.next_url or f"{self.next_host}{url.path}"
-            following = f"{at}?limit={self.page}&offset={offset + self.page}"
-            return httpx.Response(200, json={"results": rows, "next": following if more else None})
-        self.writes.append((request.method, url.path, body))
-        if len(parts) == 1:
-            created = self.add(kind, **body)
-            if not self.keep_tags:
-                created["tags"] = []
-            if not self.keep_keys:
-                created["description"] = "managed-key lost"
-            return httpx.Response(201, json=created)
-        row = next(r for r in self.rows[kind] if r["id"] == int(parts[1]))
-        row.update(body)
-        return httpx.Response(200, json=row)
-
-    def admin(self) -> PostHogAdmin:
-        client = httpx.Client(transport=httpx.MockTransport(self))
-        return PostHogAdmin(api_host=HOST + "/", project_id="42", api_key=KEY, client=client)
 
 
 def _all_insights() -> list[Any]:
@@ -502,11 +450,11 @@ def _script() -> ModuleType:
     return module
 
 
-def _reading(monkeypatch: pytest.MonkeyPatch, script: ModuleType, internal: list[UUID]) -> None:
-    async def read() -> list[UUID]:
+def _reading(monkeypatch: pytest.MonkeyPatch, _script: ModuleType, internal: list[UUID]) -> None:
+    async def read(_settings: object) -> list[UUID]:
         return internal
 
-    monkeypatch.setattr(script, "read_internal", read)
+    monkeypatch.setattr(shared, "read_internal", read)
 
 
 def test_the_script_prints_the_plan(
@@ -592,6 +540,6 @@ def test_a_bug_keeps_its_traceback(
     def broken(*_: Any, **__: Any) -> None:
         raise KeyError("a bug, not PostHog")
 
-    monkeypatch.setattr(script, "sync", broken)
+    monkeypatch.setattr(shared, "sync", broken)
     with pytest.raises(KeyError):
         script.run(False, posthog.admin())

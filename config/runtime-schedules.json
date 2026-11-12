@@ -65,6 +65,14 @@
       "environments": {"local": false, "ci": false, "staging": true, "production": false},
       "timeout": "300s",
       "retries": 3
+    },
+    {
+      "name": "sync-posthog-dashboards",
+      "handler": "/api/v1/internal/jobs/sync-posthog-dashboards",
+      "cron": "0 2 * * *",
+      "environments": {"local": false, "ci": false, "staging": true, "production": false},
+      "timeout": "120s",
+      "retries": 3
     }
   ]
 }
