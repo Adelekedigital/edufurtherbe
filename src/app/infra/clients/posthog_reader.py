@@ -288,7 +288,7 @@ def _iso(at: dt.datetime) -> str:
     return at.astimezone(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
-def _filter(match: Match) -> dict[str, Any]:
+def property_filter(match: Match) -> dict[str, Any]:
     """A PostHog property filter: ``exact`` (``is_not`` negated, which also
     matches a person without it) or ``is_set``."""
     if match.value is None:
@@ -297,17 +297,15 @@ def _filter(match: Match) -> dict[str, Any]:
     return {"type": match.on, "key": _name(match.key), "operator": operator, "value": [match.value]}
 
 
-def funnel_query(
-    funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-) -> dict[str, Any]:
-    """The `FunnelsQuery` for ``funnel`` narrowed by ``by``. ``filterTestAccounts``
-    stays off: `NOT_INTERNAL` excludes, not a project setting nobody reviews."""
+def funnel_body(funnel: Funnel, by: str) -> dict[str, Any]:
+    """The `FunnelsQuery` for ``funnel`` narrowed by ``by``, without a date
+    range or an exclusion: what admin Analytics and the dashboards share."""
     breakdown = funnel.by[by]
     series = []
     for i, step in enumerate(funnel.tracked):
-        where = [_filter(m) for m in step.where]
+        where = [property_filter(m) for m in step.where]
         if breakdown.step == i:
-            where += [_filter(m) for m in breakdown.matches]
+            where += [property_filter(m) for m in breakdown.matches]
         if len(step.events) == 1:
             node: dict[str, Any] = {"kind": "EventsNode", "event": _name(step.events[0])}
         else:
@@ -315,26 +313,38 @@ def funnel_query(
             where.append({"type": "hogql", "key": f"event IN ({_events(step.events)})"})
         node["properties"] = where
         series.append(node)
-    listed = "[" + ", ".join(f"'{user}'" for user in _ids(internal)) + "]"
     people = [*funnel.people, *(breakdown.matches if breakdown.step is None else ())]
     return {
         "kind": "FunnelsQuery",
         "series": series,
-        "dateRange": {
-            "date_from": _iso(window.since),
-            "date_to": _iso(window.until),
-            "explicitDate": True,
-        },
         "funnelsFilter": {
             "funnelWindowInterval": funnel.window_days,
             "funnelWindowIntervalUnit": "day",
             "funnelOrderType": "ordered",
             "funnelVizType": "steps",
         },
+        "properties": [property_filter(m) for m in people],
+    }
+
+
+def funnel_query(
+    funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+) -> dict[str, Any]:
+    """`funnel_body` over ``window``, leaving out ``internal``. ``filterTestAccounts``
+    stays off: `NOT_INTERNAL` excludes, not a project setting nobody reviews."""
+    body = funnel_body(funnel, by)
+    listed = "[" + ", ".join(f"'{user}'" for user in _ids(internal)) + "]"
+    return {
+        **body,
+        "dateRange": {
+            "date_from": _iso(window.since),
+            "date_to": _iso(window.until),
+            "explicitDate": True,
+        },
         "filterTestAccounts": False,
         "properties": [
             {"type": "hogql", "key": NOT_INTERNAL.replace("{internal}", listed)},
-            *(_filter(m) for m in people),
+            *body["properties"],
         ],
     }
 
@@ -660,7 +670,7 @@ class PostHogReader:
         return ExploreFigures(per_window=searchers, booked=booked)
 
 
-def _api(settings: Settings) -> tuple[str, str, str] | None:
+def private_api(settings: Settings) -> tuple[str, str, str] | None:
     """The private host, project id and key, when all three are set and the
     id is a number (it is written into the path)."""
     host, project = settings.analytics_api_host, settings.analytics_project_id
@@ -674,7 +684,7 @@ def _api(settings: Settings) -> tuple[str, str, str] | None:
 def analytics_reader_for(settings: Settings) -> AnalyticsReader:
     """PostHog when its private API is configured, else the null reader.
     Reading needs no sending, so `ANALYTICS_ENABLED` does not decide."""
-    api = _api(settings)
+    api = private_api(settings)
     if api is None:
         return NullAnalyticsReader()
     host, project, key = api
@@ -684,7 +694,7 @@ def analytics_reader_for(settings: Settings) -> AnalyticsReader:
 def replay_url_for(settings: Settings) -> str | None:
     """The project's session replay list in PostHog's app, or ``None`` when
     the private API is not configured."""
-    api = _api(settings)
+    api = private_api(settings)
     if api is None:
         return None
     host, project, _ = api

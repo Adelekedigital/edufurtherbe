@@ -23,6 +23,7 @@ from uuid import UUID, uuid5
 from app.domain.enums import ApprovalStatus, ListingStatus, SessionStatus
 
 __all__ = [
+    "ENTRY_POINT",
     "HISTORY_NAMESPACE",
     "MENTOR_COUNTERPARTS",
     "PERSONAL_KEYS",
@@ -226,10 +227,14 @@ def person_update(user_id: UUID, person: Mapping[str, object]) -> dict[str, Any]
 # --------------------------------------------------------------------------
 
 
+#: The property naming where a booking began, which the booking funnel breaks down by.
+ENTRY_POINT = "entry_point"
+
+
 def _entered(properties: dict[str, object], entry_point: object) -> dict[str, object]:
     """``properties`` with the session's `entry_point` (PRD 30) when it has one:
     an older session or a client that sent none carries no key at all."""
-    return properties if entry_point is None else {**properties, "entry_point": entry_point}
+    return properties if entry_point is None else {**properties, ENTRY_POINT: entry_point}
 
 
 def requested_properties(
