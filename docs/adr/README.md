@@ -38,6 +38,7 @@ answer is a new record that supersedes the old one, not an edit.
 | [0028](0028-qstash-owns-runtime-scheduling.md) | QStash owns application-runtime scheduling | Accepted |
 | [0029](0029-store-each-mentors-next-free-time.md) | Store each mentor's next free time, and poll free/busy to keep it | Accepted |
 | [0030](0030-structured-logs-and-sentry.md) | Structured logs on stdout, and Sentry wherever a DSN is set | Accepted |
+| [0031](0031-paystack-first-for-payments-payouts-by-hand-abroad.md) | Paystack first for payments; payouts abroad by hand, behind one port | Proposed |
 
 ## Conventions
 
