@@ -254,7 +254,7 @@ scenarios:
           - {do: upload, target: {label: Add photo}, value: avatar.png}
           - {do: fill, target: {role: combobox, name: "Where are you from?"}, value: Nigeria}
           - {do: click, target: {role: option, name: Nigeria}}
-          - {do: fill, target: {role: textbox, name: LinkedIn profile}, value: "https://www.linkedin.com/in/e2e-applicant"}
+          - {do: fill, target: {role: textbox, name: LinkedIn profile}, value: "https://www.linkedin.com/in/edufurther-e2e-test-applicant"}
           # The About draft runs on arrival and blocks Continue until it settles (drafted or not).
           - {do: wait, target: {role: button, name: "/^(Write a draft|Improve)$/"}}
           - {do: click, target: {role: button, name: Continue}}
@@ -269,7 +269,7 @@ scenarios:
         human: "Fill in everything the application asks for (help areas, a school with dates, photo, origin, LinkedIn, weekly hours) and press Submit application. Saving the hours creates the Intro chat session type."
       - {kind: api, id: submit, viewer: mentor_pending, method: GET, path: /api/v1/me,
          after: complete_application,
-         expect: {status: 200, json: {/mentor_profile/approval_status: pending}},
+         expect: {status: 200, json: {/mentor_profile/approval_status: pending, /mentor_profile/submitted_at: "<present>"}},
          human: "The application the UI submitted is waiting for review."}
       - {kind: api, id: queue, viewer: admin_viewer, method: GET, path: /api/v1/admin/mentors/pending,
          expect: {status: 200, json: {/data: "<nonempty>"}}, human: "Any admin sees the application waiting."}
