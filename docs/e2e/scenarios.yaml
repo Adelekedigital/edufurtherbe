@@ -230,6 +230,10 @@ scenarios:
          path: /api/v1/me/mentor-application/submit,
          expect: {status: 409, json: {/type: /problems/mentor-application-incomplete, /missing: "<nonempty>"}},
          human: "Submitting too early is refused and lists what is missing."}
+      - {kind: api, id: decide_unsubmitted, viewer: admin_super, method: POST,
+         path: "/api/v1/admin/mentors/{user_id}/decision", params: {user_id: "${mentor_pending.id}", approve: true},
+         body: {}, expect: {status: 409, json: {/type: /problems/mentor-application-not-submitted}},
+         human: "An admin cannot approve an application that was never submitted (#660)."}
       - kind: ui
         id: complete_application
         viewer: mentor_pending

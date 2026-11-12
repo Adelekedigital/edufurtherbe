@@ -33,7 +33,11 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.errors import MentorPausedThemselvesError, ValidationError
+from app.core.errors import (
+    MentorApplicationNotSubmittedError,
+    MentorPausedThemselvesError,
+    ValidationError,
+)
 from app.domain.analytics_events import AnalyticsEvent
 from app.domain.enums import ApprovalStatus, ListingStatus, MentorStatusType, UnlistedReason
 from app.domain.listing import (
@@ -187,6 +191,10 @@ async def decide(
     before = await _approval_before(session, user_id)
     if before is None:
         return False
+    # On what was submitted, never on a draft (#660): approving one listed a
+    # mentor with nothing to book. A decided mentor may still be decided again.
+    if not await _profile_flag(session, user_id, MentorProfile.submitted_at.is_not(None)):
+        raise MentorApplicationNotSubmittedError("the mentor has not submitted an application")
 
     await record(
         session,

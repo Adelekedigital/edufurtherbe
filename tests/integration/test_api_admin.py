@@ -378,6 +378,43 @@ async def test_a_decision_on_no_application_tells_nobody(
     assert await queued_for(db_engine, nobody) == []
 
 
+@pytest.mark.parametrize("approve", ["true", "false"])
+async def test_a_draft_application_cannot_be_decided(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, approve: str
+) -> None:
+    """#660: an admin decides on what was submitted, never on a draft. Approving
+    one listed a mentor with no session type and no hours to book."""
+    auth_id = uuid4()
+    await make_user(db_engine, auth_id, f"admin-draft-{approve}@example.com", role="super_admin")
+    target = await make_user(db_engine, uuid4(), f"draft-{approve}@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO mentor_profiles (user_id, headline) VALUES (:u, 'Draft')"),
+            {"u": target},
+        )
+
+    response = await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision",
+        params={"approve": approve},
+        json={},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["type"] == "/problems/mentor-application-not-submitted"
+    async with db_engine.connect() as conn:
+        state = await conn.execute(
+            text(
+                "SELECT approval_status::text, listing_status::text, "
+                "(SELECT count(*) FROM mentor_status_events WHERE mentor_user_id = :u) "
+                "FROM mentor_profiles WHERE user_id = :u"
+            ),
+            {"u": target},
+        )
+        assert state.one() == ("pending", "unlisted", 0)
+    assert await queued_for(db_engine, target) == []
+
+
 # --------------------------------------------------------------------------
 # The institution queue
 # --------------------------------------------------------------------------

@@ -544,7 +544,7 @@ async def test_listing_a_listed_mentor_again_is_not_a_second_listing(
 
 
 async def test_approving_an_approved_listed_mentor_lists_nobody(db_engine: AsyncEngine) -> None:
-    mentor = await make_public_mentor(db_engine, "ev-reapprove")
+    mentor = await make_public_mentor(db_engine, "ev-reapprove", submitted=True)
     admin = await make_public_mentor(db_engine, "ev-reapprove-admin")
 
     async with async_sessionmaker(db_engine)() as session:
@@ -555,7 +555,9 @@ async def test_approving_an_approved_listed_mentor_lists_nobody(db_engine: Async
 
 
 async def test_approving_an_unlisted_applicant_lists_them_once(db_engine: AsyncEngine) -> None:
-    mentor = await make_public_mentor(db_engine, "ev-approve", approved=False, listed=False)
+    mentor = await make_public_mentor(
+        db_engine, "ev-approve", approved=False, listed=False, submitted=True
+    )
     admin = await make_public_mentor(db_engine, "ev-approve-admin")
 
     async with async_sessionmaker(db_engine)() as session:
