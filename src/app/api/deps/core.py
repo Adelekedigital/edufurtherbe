@@ -38,7 +38,7 @@ from app.core.reporting import remember_member
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
-from app.domain.enums import AdminRole, SignupSource
+from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
 from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
@@ -48,6 +48,7 @@ from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in, record_auth_method
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
 from app.infra.db.models.user import User
+from app.infra.db.predicates import migrated
 from app.infra.db.preview_store import Owner
 
 # `get_session` is aliased: this module already has one, and it is the **database
@@ -205,19 +206,24 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # report follows it without querying a database that may be what failed,
 # together with `analytics_sendable`, `analytics_scope.sendable` itself
 # compiled onto `u` (decision 339).
-_SENDABLE = sendable(aliased(User, name="u")).compile(
-    dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
-    compile_kwargs={"literal_binds": True},
+# `is_migrated` is `predicates.migrated` compiled the same way (decision 340).
+_SENDABLE, _MIGRATED = (
+    predicate(aliased(User, name="u")).compile(
+        dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
+        compile_kwargs={"literal_binds": True},
+    )
+    for predicate in (sendable, migrated)
 )
-# What keeps the S608/B608 suppression below true: the predicate binds nothing.
-if _SENDABLE.params:
-    raise RuntimeError("analytics_scope.sendable must compile without bound values")
-# S608: the only interpolation is `_SENDABLE`, our own predicate compiled at
-# import with no bound values; nothing from a request reaches this text.
+# What keeps the S608/B608 suppression below true: the predicates bind nothing.
+if _SENDABLE.params or _MIGRATED.params:
+    raise RuntimeError("the CURRENT_USER predicates must compile without bound values")
+# S608: the only interpolations are `_SENDABLE` and `_MIGRATED`, our own
+# predicates compiled at import with no bound values; nothing from a request
+# reaches this text.
 CURRENT_USER = text(f"""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at, u.auth_method,
-           (u.signup_source = :migrated) AS is_migrated,
+           ({_MIGRATED}) AS is_migrated,
            p.about_me, p.about_me_drafted_at, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin,
@@ -264,7 +270,7 @@ async def _user_row(
     """`CURRENT_USER` by exactly one of a token's subject or our own user id."""
     result = await session.execute(
         CURRENT_USER,
-        {"auth_id": auth_id, "user_id": user_id, "migrated": SignupSource.MIGRATED.value},
+        {"auth_id": auth_id, "user_id": user_id},
     )
     row = result.mappings().first()
     return None if row is None else dict(row)

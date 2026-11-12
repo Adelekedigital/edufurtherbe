@@ -20,6 +20,7 @@ from app.domain.attribution import signup_channel, signup_source
 from app.domain.enums import SignupChannel, SignupSource
 from app.infra.db.invite_links import resolve_code
 from app.infra.db.models.user import User
+from app.infra.db.predicates import migrated
 
 __all__ = ["Acquisition", "record_acquisition"]
 
@@ -57,7 +58,7 @@ async def record_acquisition(
             .where(
                 User.id == user_id,
                 User.acquired_at.is_(None),
-                User.signup_source != SignupSource.MIGRATED,
+                ~migrated(User),
             )
             .values(
                 signup_source=signup_source(source, invited=invited),

@@ -52,8 +52,21 @@ class FakeSink:
         self.batches.append(list(events))
 
     @property
-    def events(self) -> list[dict[str, Any]]:
+    def sent(self) -> list[dict[str, Any]]:
+        """Every event as it left, person properties (decision 340) and all."""
         return [event for batch in self.batches for event in batch]
+
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        """Every event without its person's properties: the fact's own event,
+        which the tests below compare with the live writer's."""
+        return [
+            {**e, "properties": {k: v for k, v in e["properties"].items() if k not in PERSON}}
+            for e in self.sent
+        ]
+
+
+PERSON = ("$set", "$set_once")
 
 
 def expected(
@@ -444,6 +457,26 @@ async def test_every_fact_before_the_cutoff_is_sent_as_the_live_event(
         name: sum(1 for e in history.expected if e["event"] == name) for name in ORDER
     }
     assert report.sent == len(history.expected)
+
+
+async def test_each_event_carries_its_persons_properties(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """The drain's enrichment, read once per batch (decision 340): the mentor
+    listed by its history reads its current `listed`, a mentee has no mentor status."""
+    await a_history(db_engine)
+    sink = FakeSink()
+
+    await backfill_analytics(
+        db_engine, sink=sink, cursor=tmp_path / "cursor.json", until=CUTOFF, target=TARGET
+    )
+
+    people = {e["distinct_id"]: e["properties"]["$set"] for e in sink.sent}
+    assert len(people) > 1
+    assert all(person["user_id"] == key for key, person in people.items())
+    roles = {person["role"]: person.get("mentor_status") for person in people.values()}
+    assert roles == {"mentor": "listed", "mentee": None}
+    assert all(PERSON[1] in e["properties"] for e in sink.sent)
 
 
 async def test_a_dry_run_counts_and_sends_nothing(db_engine: AsyncEngine, tmp_path: Path) -> None:
