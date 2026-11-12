@@ -123,6 +123,9 @@ BOOKING_STARTED = "booking_started"
 LINK_SHARED, MENTOR_PROFILE_LINK = "link_shared", "mentor_profile"
 JOIN_CLICKED, JOIN_FAILED = "session_join_clicked", "session_join_failed"
 WRITING_ASSIST = "writing_assist_used"
+#: `pwa_installed`: the client sends it once per device, on the first launch
+#: in standalone mode (`method: standalone_launch`), on every platform. Before
+#: 2026-11-12 it was the browser's `appinstalled`, which only Chromium fires.
 APP_INSTALLED, PUSH_ALLOWED = "pwa_installed", "push_permission_granted"
 REQUEST_FAILED = "request_failed"
 #: A mentor's setup and adoption, and a message, as the client sends them.

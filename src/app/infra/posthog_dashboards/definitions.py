@@ -261,7 +261,8 @@ DASHBOARDS: tuple[Dashboard, ...] = (
     Dashboard(
         "reliability",
         "Reliability",
-        "Failed requests, server errors and the installed app.",
+        "Failed requests, server errors, push permission, and app installs (devices that "
+        "first opened the installed app, every platform, since 2026-11-12).",
         (
             _trend(
                 "failed_requests", "Failed requests by route", REQUEST_FAILED, by=(ROUTE, "event")
