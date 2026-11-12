@@ -153,6 +153,8 @@ EXPECTED_MODELS = {
     # Admins' email wording and its history (decision 318).
     "EmailLineOverride",
     "EmailLineEdit",
+    # The days each person used the platform (decision 342).
+    "UserActivityDay",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -189,6 +191,8 @@ APPEND_ONLY = frozenset(
         "PreviewEvent",
         # An email edit history row is one line an admin changed, then.
         "EmailLineEdit",
+        # An activity day is the fact that someone used the platform that day.
+        "UserActivityDay",
     }
 )
 

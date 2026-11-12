@@ -222,6 +222,8 @@ EXPECTED_TABLES = [
     "email_line_edits",
     # A person's analytics-cookie answer (PRD 30, decision 329).
     "analytics_consents",
+    # The days each person used the platform (decision 342).
+    "user_activity_days",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
