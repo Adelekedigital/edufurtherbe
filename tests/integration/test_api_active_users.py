@@ -22,6 +22,7 @@ from tests.integration.test_api_preview_swap import live_preview, previewing
 
 from app.api.deps import core
 from app.domain.activity import SeenToday
+from app.infra.db.demo_seed import DEMO_DOMAIN
 from app.infra.storage.supabase import SupabaseStorage
 from conftest import add_user, api_token, bearer
 
@@ -221,3 +222,123 @@ async def test_the_window_ends_on_the_viewers_day(
     assert there["sub_tracks"]["stickiness"] == {"value": 100.0, "previous": None}
     assert utc["sub_tracks"]["weekly_active_users"]["value"] == 0
     assert utc["sub_tracks"]["stickiness"]["value"] is None
+
+
+# --- Active members: by role and the weekly trend (decision 343) ------------
+
+
+async def test_by_role_splits_the_totals_and_leaves_out_internal_accounts(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    async with db_engine.begin() as conn:
+        ada, bo, di = await person(conn), await person(conn), await person(conn)
+        cy = await add_user(conn, f"{uuid4()}@example.test", primary_role="mentor")
+        staff = await person(conn, admin=True)
+        demo = await add_user(conn, f"{uuid4()}@{DEMO_DOMAIN}", primary_role="mentor")
+    last = dt.date(2025, 3, 16)
+    await active_on(db_engine, last, ada, cy, staff, demo)
+    await active_on(db_engine, last - dt.timedelta(days=1), bo, cy, staff, demo)
+    await active_on(db_engine, last - dt.timedelta(days=10), di, staff, demo)  # month only
+
+    day = {"from": "2025-03-16", "to": "2025-03-16"}
+    body = await read(db_engine, api_storage, "overview", **day)
+    subs, roles = body["sub_tracks"], body["active_members"]["by_role"]
+
+    # Now: mentees week ada, bo; month ada, bo, di. Before (the 15th): week
+    # bo; month bo, di. The live admin and the demo account count nowhere.
+    assert roles["mentee"] == {
+        "weekly": {"value": 2, "previous": 1},
+        "monthly": {"value": 3, "previous": 2},
+        "stickiness": {"value": 66.7, "previous": 50.0},
+    }
+    assert roles["mentor"] == {
+        "weekly": {"value": 1, "previous": 1},
+        "monthly": {"value": 1, "previous": 1},
+        "stickiness": {"value": 100.0, "previous": 100.0},
+    }
+    for figure, total in (("weekly", "weekly_active_users"), ("monthly", "monthly_active_users")):
+        for side in ("value", "previous"):
+            split = roles["mentee"][figure][side] + roles["mentor"][figure][side]
+            assert split == subs[total][side]
+    assert "weekly_active_users" not in body["active_members"]
+
+
+async def test_a_role_nobody_was_active_in_has_no_stickiness(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    async with db_engine.begin() as conn:
+        ada = await person(conn)
+    await active_on(db_engine, dt.date(2025, 3, 16), ada)
+
+    day = {"from": "2025-03-16", "to": "2025-03-16"}
+    roles = (await read(db_engine, api_storage, "overview", **day))["active_members"]["by_role"]
+
+    assert roles["mentor"] == {
+        "weekly": {"value": 0, "previous": 0},
+        "monthly": {"value": 0, "previous": 0},
+        "stickiness": {"value": None, "previous": None},
+    }
+    assert roles["mentee"]["stickiness"] == {"value": 100.0, "previous": None}
+
+
+async def test_the_trend_is_7_day_actives_on_the_north_stars_points(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    async with db_engine.begin() as conn:
+        x = await person(conn)
+        y = await add_user(conn, f"{uuid4()}@example.test", primary_role="mentor")
+        staff = await person(conn, admin=True)
+    # Recording began on 20 Feb (partial): the first full day is the 21st.
+    await active_on(db_engine, dt.date(2025, 2, 20), x)
+    await active_on(db_engine, dt.date(2025, 2, 26), y, staff)
+    await active_on(db_engine, dt.date(2025, 3, 3), x, staff)
+    window = {"from": "2025-03-01", "to": "2025-03-14", "tz": "UTC"}
+
+    body = await read(db_engine, api_storage, "overview", **window)
+    series = body["active_members"]["series"]
+
+    assert [p["start"] for p in series] == [p["start"] for p in body["north_star"]["series"]]
+    # Each point is 7 days ending that day: y (26 Feb) reaches 4 March, x (3
+    # March) the 9th. Before: 15-28 Feb, whose weeks start on the partial day
+    # or earlier until the 27th (21-27 Feb).
+    values = [1, 1, 2, 2, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    previous = [None] * 12 + [1, 1]
+    assert [(p["value"], p["previous"]) for p in series] == list(zip(values, previous, strict=True))
+    # x is a mentee, y a mentor; the live admin counts in neither.
+    mentee = [0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    mentor = [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert [p["by_role"]["mentee"]["value"] for p in series] == mentee
+    assert [p["by_role"]["mentor"]["value"] for p in series] == mentor
+    assert [p["by_role"]["mentee"]["previous"] for p in series] == [None] * 12 + [0, 0]
+    assert [p["by_role"]["mentor"]["previous"] for p in series] == [None] * 12 + [1, 1]
+    for p in series:
+        for side in ("value", "previous"):
+            if p[side] is not None:
+                roles = p["by_role"]
+                assert roles["mentee"][side] + roles["mentor"][side] == p[side]
+
+    flat = (await read(db_engine, api_storage, "overview", **window, compare="false"))[
+        "active_members"
+    ]["series"]
+    assert [(p["value"], p["previous"]) for p in flat] == [(v, None) for v in values]
+    assert [p["by_role"]["mentee"] for p in flat] == [
+        {"value": v, "previous": None} for v in mentee
+    ]
+    assert all(p["by_role"]["mentor"]["previous"] is None for p in flat)
+
+
+async def test_weekly_points_before_recording_began_are_null(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    # Nothing recorded in 2025: the reading admin's own day today is the first.
+    window = {"from": "2025-01-01", "to": "2025-03-31"}
+
+    body = await read(db_engine, api_storage, "overview", **window)
+    series = body["active_members"]["series"]
+
+    assert body["north_star"]["unit"] == "week"
+    assert [p["start"] for p in series] == [p["start"] for p in body["north_star"]["series"]]
+    assert len(series) == 13
+    assert all(p["value"] is None and p["previous"] is None for p in series)
+    nothing = {"value": None, "previous": None}
+    assert all(p["by_role"] == {"mentee": nothing, "mentor": nothing} for p in series)

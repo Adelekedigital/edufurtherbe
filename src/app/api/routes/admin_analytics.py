@@ -105,7 +105,10 @@ async def analytics_credits(read: AnalyticsCreditsDep, response: Response) -> An
         "are not sign-ups) with a completed session within 14 days\n"
         "- `mentor_activation`: mentors approved in the window who are taking "
         "bookings now (an application must be bookable to be submitted, so this "
-        "catches a mentor who stopped)\n\n" + _SECTION
+        "catches a mentor who stopped)\n\n"
+        "`active_members`: the weekly, monthly and stickiness sub-tracks by primary "
+        "role, and weekly active users (in total and by role) on the North Star's "
+        "points, null before the first full day of recorded activity\n\n" + _SECTION
     ),
     responses=_RESPONSES,
 )

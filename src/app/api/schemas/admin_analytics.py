@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.domain.analytics import (
     CREDIT_GROUPS,
     DEFAULT_TZ,
+    ActiveMembers,
+    ActiveMetrics,
     Alert,
     AlertKey,
     AnalyticsTab,
@@ -32,9 +34,16 @@ from app.domain.analytics import (
     StageKey,
     SupplyPlace,
     SupplyTab,
+    WeeklyActive,
 )
 from app.domain.analytics_behaviour import BehaviourTab, FunnelName, FunnelTab
-from app.domain.enums import FunnelFigureUnit, FunnelLayer, MissedReason, ProfileViewSource
+from app.domain.enums import (
+    FunnelFigureUnit,
+    FunnelLayer,
+    MissedReason,
+    PrimaryRole,
+    ProfileViewSource,
+)
 
 
 class WindowRead(BaseModel):
@@ -221,6 +230,97 @@ class SubTracksRead(BaseModel):
     )
 
 
+class ActiveRoleRead(BaseModel):
+    """`sub_tracks`' three active-user figures, for one primary role."""
+
+    weekly: MetricRead = Field(
+        description="As `sub_tracks.weekly_active_users`, for this role only."
+    )
+    monthly: MetricRead = Field(
+        description="As `sub_tracks.monthly_active_users`, for this role only."
+    )
+    stickiness: MetricRead = Field(
+        description="Weekly over monthly for this role; null with nobody in its 30 days."
+    )
+
+    @classmethod
+    def of(cls, figures: ActiveMetrics) -> ActiveRoleRead:
+        return cls(
+            weekly=MetricRead.of(figures.weekly),
+            monthly=MetricRead.of(figures.monthly),
+            stickiness=MetricRead.of(figures.stickiness),
+        )
+
+
+class ActiveByRoleRead(BaseModel):
+    """By `primary_role`, as Growth splits sign-ups: the two add up to the
+    `sub_tracks` totals."""
+
+    mentee: ActiveRoleRead
+    mentor: ActiveRoleRead
+
+
+class WeeklyActiveRead(BaseModel):
+    value: int | None = Field(
+        description=(
+            "Weekly active users in the 7 days ending with the bucket's last day. Null "
+            "when those days start before the first full day of recorded activity."
+        )
+    )
+    previous: int | None = Field(
+        description=(
+            "The same for the previous period's matching bucket; null also when `compare=false`."
+        )
+    )
+
+    @classmethod
+    def of(cls, weekly: WeeklyActive) -> WeeklyActiveRead:
+        return cls(value=weekly.value, previous=weekly.previous)
+
+
+class ActivePointByRoleRead(BaseModel):
+    """The point by `primary_role`, same 7 days and null rule: where the
+    point is a number the two add up to it; where it is null, both are."""
+
+    mentee: WeeklyActiveRead
+    mentor: WeeklyActiveRead
+
+
+class ActivePointRead(WeeklyActiveRead):
+    start: date = Field(description="The bucket's first day, as on `north_star.series`.")
+    by_role: ActivePointByRoleRead
+
+
+class ActiveMembersRead(BaseModel):
+    """Who is active, by role, and the weekly-active trend (decision 343)."""
+
+    by_role: ActiveByRoleRead
+    series: list[ActivePointRead] = Field(
+        description="On `north_star.series`' points and unit, oldest first."
+    )
+
+    @classmethod
+    def of(cls, members: ActiveMembers) -> ActiveMembersRead:
+        return cls(
+            by_role=ActiveByRoleRead(
+                mentee=ActiveRoleRead.of(members.by_role[PrimaryRole.MENTEE]),
+                mentor=ActiveRoleRead.of(members.by_role[PrimaryRole.MENTOR]),
+            ),
+            series=[
+                ActivePointRead(
+                    start=p.start,
+                    value=p.total.value,
+                    previous=p.total.previous,
+                    by_role=ActivePointByRoleRead(
+                        mentee=WeeklyActiveRead.of(p.by_role[PrimaryRole.MENTEE]),
+                        mentor=WeeklyActiveRead.of(p.by_role[PrimaryRole.MENTOR]),
+                    ),
+                )
+                for p in members.series
+            ],
+        )
+
+
 class FeatureRead(BaseModel):
     key: FeatureKey
     value: MetricRead | None = Field(
@@ -248,6 +348,13 @@ class AnalyticsOverviewRead(SectionRead):
     north_star: NorthStarRead
     sub_tracks: SubTracksRead
     features: list[FeatureRead] = Field(description="Always all seven, in a fixed order.")
+    active_members: ActiveMembersRead | None = Field(
+        default=None,
+        description=(
+            "The active-user figures by role, and weekly active users on the North "
+            "Star's points (decision 343). Always sent."
+        ),
+    )
 
     @classmethod
     def of(cls, period: Period, alerts: list[Alert], tab: OverviewTab) -> AnalyticsOverviewRead:
@@ -280,6 +387,7 @@ class AnalyticsOverviewRead(SectionRead):
                 )
                 for feature in tab.features
             ],
+            active_members=ActiveMembersRead.of(tab.active_members),
         )
 
 

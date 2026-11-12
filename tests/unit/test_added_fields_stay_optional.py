@@ -156,6 +156,8 @@ ADDED = {
     "AnalyticsFunnelRead": ("figures",),
     # Weekly and monthly active users from this database (decision 342).
     "SubTracksRead": ("weekly_active_users", "monthly_active_users", "stickiness"),
+    # Active members by role and the weekly trend (decision 343).
+    "AnalyticsOverviewRead": ("active_members",),
 }
 
 
