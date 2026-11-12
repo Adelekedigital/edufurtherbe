@@ -103,6 +103,9 @@ async def test_booking_spends_one_credit(
     assert await balance_of(db_engine, mentee) == 2
 
 
+# Ordered by `created_at`: the grant and the debit need the clock to move
+# between them, which a frozen `now()` inside one savepoint does not (CI, #656).
+@pytest.mark.isolated_db
 async def test_the_debit_names_the_session_it_paid_for(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

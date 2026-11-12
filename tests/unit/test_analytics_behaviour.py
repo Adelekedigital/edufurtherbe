@@ -667,6 +667,15 @@ def test_a_failed_read_logs_what_posthog_said(
     assert "bad token" in vars(record)["reason"]
 
 
+def test_a_200_that_is_not_json_is_a_failed_read(caplog: pytest.LogCaptureFixture) -> None:
+    read, _ = posthog_reader(lambda _: httpx.Response(200, text="<html>proxy</html>"))
+    with caplog.at_level(logging.WARNING), pytest.raises(AnalyticsUpstreamError):
+        read.login_codes(WINDOW, INTERNAL)
+    (record,) = (r for r in caplog.records if r.getMessage() == "analytics read failed")
+    assert vars(record)["status"] == 200
+    assert vars(record)["failure"] == "JSONDecodeError"
+
+
 def settings(**values: object) -> Settings:
     return Settings(_env_file=None, **values)  # type: ignore[arg-type]
 
