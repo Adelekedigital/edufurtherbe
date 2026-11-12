@@ -239,6 +239,11 @@ class MentorApplicationDecidedError(ConflictError):
     submit. A type of its own: the client shows the outcome, not the form."""
 
 
+class MentorApplicationNotSubmittedError(ConflictError):
+    """An admin decided on an application the mentor never submitted (#660).
+    An admin decides on what was submitted, never on a draft."""
+
+
 class BookingNeedsOnboardingError(MissingItemsError):
     """Booking is for someone who has finished onboarding (owner, 2026-10-18).
 

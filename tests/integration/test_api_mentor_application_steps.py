@@ -67,7 +67,7 @@ async def test_a_decline_resets_seen_so_a_later_approval_shows_its_screen(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
     admin = await an_admin(db_engine, "reseen")
-    mentor = await make_public_mentor(db_engine, "seen-again")
+    mentor = await make_public_mentor(db_engine, "seen-again", submitted=True)
     auth = await headers(db_engine, mentor)
     await api_client.post(SEEN, headers=auth)
     decide = f"/api/v1/admin/mentors/{mentor}/decision"
