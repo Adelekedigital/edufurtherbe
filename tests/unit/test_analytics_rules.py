@@ -126,17 +126,32 @@ def test_every_lot_source_is_in_exactly_one_credit_group() -> None:
     assert set(a.SOURCE_GROUP.values()) == set(a.CREDIT_GROUPS)
 
 
-def test_quiet_for_less_than_a_day_raises_nothing() -> None:
-    last = NOW - a.QUIET_FOR + dt.timedelta(seconds=1)
-    assert a.quiet_alert("no_booking_requests", last, NOW) is None
+def test_quiet_for_six_days_raises_nothing() -> None:
+    # Owner, 2026-11-12: the window is a week, not a day.
+    for key in ("no_booking_requests", "no_signups"):
+        assert a.quiet_alert(key, NOW - dt.timedelta(days=6), NOW) is None
+        last = NOW - dt.timedelta(days=7) + dt.timedelta(seconds=1)
+        assert a.quiet_alert(key, last, NOW) is None
 
 
-def test_quiet_for_a_day_raises_when_the_quiet_began() -> None:
-    last = NOW - a.QUIET_FOR
+def test_quiet_for_seven_days_raises_when_the_quiet_began() -> None:
+    last = NOW - dt.timedelta(days=7)
     alert = a.quiet_alert("no_signups", last, NOW)
     assert alert is not None
     assert alert.raised_at == NOW
+    assert alert.title == "No sign-ups"
+    assert alert.body == "No one has signed up in the last 7 days."
     assert alert.link == a.AlertLink(tab="funnels", funnel="signup")
+
+
+def test_quiet_for_more_than_seven_days_raised_seven_days_after_the_last() -> None:
+    last = NOW - dt.timedelta(days=9)
+    alert = a.quiet_alert("no_booking_requests", last, NOW)
+    assert alert is not None
+    assert alert.raised_at == last + dt.timedelta(days=7)
+    assert alert.title == "No booking requests"
+    assert alert.body == "No one has asked for a session in the last 7 days."
+    assert alert.link == a.AlertLink(tab="sessions")
 
 
 def test_nothing_ever_raises_now() -> None:
@@ -155,8 +170,8 @@ def test_delivery_fires_above_twenty_only() -> None:
 
 
 def test_alerts_come_newest_first() -> None:
-    old = a.quiet_alert("no_signups", NOW - dt.timedelta(days=3), NOW)
-    new = a.quiet_alert("no_booking_requests", NOW - dt.timedelta(days=1), NOW)
+    old = a.quiet_alert("no_signups", NOW - dt.timedelta(days=10), NOW)
+    new = a.quiet_alert("no_booking_requests", NOW - dt.timedelta(days=8), NOW)
     assert [x.key for x in a.newest_first([old, None, new])] == [
         "no_booking_requests",
         "no_signups",

@@ -356,7 +356,7 @@ async def test_a_tab_is_served_from_cache_but_alerts_are_not(
         first = (
             await client.get(f"{ROOT}/sessions", params={"window": "7d"}, headers=headers)
         ).json()
-        # The platform goes quiet: no request or sign-up in the last day.
+        # The platform goes quiet: no request or sign-up in the last 7 days.
         async with db_engine.begin() as conn:
             await conn.execute(
                 text("UPDATE sessions SET created_at = created_at - interval '30 days'")

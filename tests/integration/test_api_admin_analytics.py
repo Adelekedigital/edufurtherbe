@@ -207,20 +207,20 @@ async def test_quiet_platform_raises_both_quiet_alerts_newest_first(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     token = await admin_token(db_engine)
-    # A request two days old, and a sign-up three days old (admins are not
+    # A request eight days old, and a sign-up nine days old (admins are not
     # sign-ups); a migrated account created today is not a sign-up either.
     mentee = await a_user(db_engine)
     mentor = await a_user(db_engine)
     async with db_engine.begin() as conn:
         await conn.execute(
-            text("UPDATE users SET created_at = now() - interval '3 days' WHERE id IN (:a, :b)"),
+            text("UPDATE users SET created_at = now() - interval '9 days' WHERE id IN (:a, :b)"),
             {"a": mentee, "b": mentor},
         )
         await conn.execute(
             text(
                 "INSERT INTO sessions (mentor_id, mentee_id, starts_at, duration_minutes, "
                 "created_at) VALUES (:m, :e, now() + interval '2 days', 30, "
-                "now() - interval '2 days')"
+                "now() - interval '8 days')"
             ),
             {"m": mentor, "e": mentee},
         )
@@ -235,6 +235,29 @@ async def test_quiet_platform_raises_both_quiet_alerts_newest_first(
         alerts = (await get(client, token)).json()["alerts"]
     assert [x["key"] for x in alerts] == ["no_booking_requests", "no_signups"]
     assert alerts[0]["link"] == {"tab": "sessions", "funnel": None, "by": None}
+    assert [x["body"] for x in alerts] == [
+        "No one has asked for a session in the last 7 days.",
+        "No one has signed up in the last 7 days.",
+    ]
+
+
+async def test_a_request_and_sign_up_six_days_old_raise_nothing(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None
+) -> None:
+    token = await admin_token(db_engine)
+    mentor, mentee = await a_user(db_engine), await a_user(db_engine)
+    await a_session(db_engine, mentor, mentee, hours=30)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET created_at = now() - interval '6 days' WHERE id IN (:a, :b)"),
+            {"a": mentor, "b": mentee},
+        )
+        await conn.execute(
+            text("UPDATE sessions SET created_at = now() - interval '6 days' WHERE mentee_id = :e"),
+            {"e": mentee},
+        )
+    async with client_for(app_for(db_engine, api_storage)) as client:
+        assert (await get(client, token)).json()["alerts"] == []
 
 
 async def test_a_recent_request_and_sign_up_raise_nothing(
