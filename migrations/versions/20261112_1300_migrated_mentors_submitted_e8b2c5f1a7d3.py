@@ -3,8 +3,8 @@
 #491's backfill stamped every profile that existed then, because in Bubble
 creating a profile was applying. The profile loader never wrote the column, so
 a mentor loaded since has it null: a pending applicant missed the admin queue,
-and once `decide` refuses an unsubmitted application (#660) no admin could
-decide on any of them. The loader now stamps it; this covers rows already
+and once `decide` refuses an undecided, unsubmitted application (#660) no admin
+could decide on them. The loader now stamps it; this covers rows already
 loaded.
 
 Only rows with a ``legacy_bubble_id``: a profile created here with no

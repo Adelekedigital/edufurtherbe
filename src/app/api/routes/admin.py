@@ -177,9 +177,10 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
         "meant.\n\n"
         "A reason is optional on decline — better to give one, but requiring it "
         "turns a clear-cut decision into a form to argue with.\n\n"
-        "**Only a submitted application is decided.** A profile the mentor has "
-        "not submitted answers `409` `/problems/mentor-application-not-submitted`, "
-        "for approve and decline alike.\n\n"
+        "**Only a submitted application is decided.** An undecided profile the "
+        "mentor has not submitted answers `409` "
+        "`/problems/mentor-application-not-submitted`, for approve and decline "
+        "alike. A mentor already approved or declined may be decided again.\n\n"
         "`approved_by` records **who decided**, including when an admin decides "
         "their own application. That is permitted; it is visible rather than "
         "prevented, because on a small team blocking it means the only admin can "
@@ -189,8 +190,8 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
     | {
         status.HTTP_409_CONFLICT: {
             "description": (
-                "`/problems/mentor-application-not-submitted`: the mentor has a "
-                "profile but never submitted the application."
+                "`/problems/mentor-application-not-submitted`: the mentor has an "
+                "undecided profile but never submitted the application."
             )
         },
     },

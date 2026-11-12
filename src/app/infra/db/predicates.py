@@ -83,6 +83,11 @@ def has_mentor_profile(user_id: Any) -> Any:
     return exists().where(MentorProfile.user_id == user_id)
 
 
+def application_submitted() -> Any:
+    """The mentor submitted their application: the one statement of it."""
+    return MentorProfile.submitted_at.is_not(None)
+
+
 def application_in_review() -> list[Any]:
     """A mentor application submitted and awaiting a decision, on a live profile.
 
@@ -91,7 +96,7 @@ def application_in_review() -> list[Any]:
     """
     return [
         MentorProfile.approval_status == ApprovalStatus.PENDING,
-        MentorProfile.submitted_at.is_not(None),
+        application_submitted(),
         MentorProfile.deleted_at.is_(None),
     ]
 
