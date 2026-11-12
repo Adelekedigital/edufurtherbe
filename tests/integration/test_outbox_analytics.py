@@ -236,6 +236,9 @@ async def test_pending_events_go_in_batches_of_a_hundred_oldest_first(
     assert {(row["status"], row["attempts"], row["sent_at"]) for row in found} == {("sent", 1, AT)}
 
 
+# Drained oldest first by `created_at`, which a frozen `now()` inside one
+# savepoint ties across the three rows (release CI, #661).
+@pytest.mark.isolated_db
 async def test_each_event_is_sent_with_its_row_id_as_its_uuid(db_engine: AsyncEngine) -> None:
     """A batch resent after a lost answer carries the same `uuid`s, so the
     vendor drops the copies (decision 137); the stored payload is unchanged."""
