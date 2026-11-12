@@ -24,7 +24,12 @@ from sqlalchemy import select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.analytics_activation import ApprovedMentor, Stood
-from app.domain.analytics_behaviour import MENTOR_ACTIVATED_WITHIN, Breakdown, Match
+from app.domain.analytics_behaviour import (
+    MENTOR_ACTIVATED_WITHIN,
+    SIGNUP_SOURCE,
+    Breakdown,
+    Match,
+)
 from app.domain.mentor_stats import Window
 from app.infra.db.analytics_consent_store import consent_accepted
 from app.infra.db.analytics_features import approved_in, delivered_soon, received_soon
@@ -34,7 +39,7 @@ from app.infra.db.models.user import User
 from app.infra.db.public_visibility import offerings, weekly_hours
 
 #: The person properties a database funnel can be broken down by, as columns.
-PERSON_COLUMNS = {"signup_source": User.signup_source}
+PERSON_COLUMNS = {SIGNUP_SOURCE: User.signup_source}
 
 Spans = dict[tuple[Any, Any], list[Stood]]
 

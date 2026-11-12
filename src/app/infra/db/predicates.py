@@ -19,7 +19,7 @@ from typing import Any, Protocol
 from sqlalchemy import and_, exists, func, or_, true
 
 from app.domain.attendance import PRESENCE_REPORTING
-from app.domain.enums import ApprovalStatus, ListingStatus
+from app.domain.enums import ApprovalStatus, ListingStatus, SignupSource
 from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.mentoring import MentorProfile
@@ -52,6 +52,13 @@ def live(user: Any) -> Any:
     rule cannot mean one thing for the mentor alias and another everywhere else.
     """
     return user.deleted_at.is_(None)
+
+
+def migrated(user: Any) -> Any:
+    """``user`` (`User` or an alias) came from the old platform: **the one
+    statement of it**, read by `/me`'s `is_migrated`, the acquisition write
+    and PostHog's person properties (decision 340)."""
+    return user.signup_source == SignupSource.MIGRATED
 
 
 #: "This user still exists." An expression object rather than a string, so a

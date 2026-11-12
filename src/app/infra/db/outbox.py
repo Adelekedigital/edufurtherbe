@@ -40,6 +40,7 @@ from app.domain.notifications import Channel, Notification
 from app.domain.ports import AnalyticsSink
 from app.domain.push import SESSION_PUSHES, session_push, session_push_spec
 from app.infra.clients.web_push import PushOutcome, PushTarget, WebPushPort, fan_out
+from app.infra.db.analytics_persons import with_person_properties
 from app.infra.db.analytics_scope import sendable
 from app.infra.db.chat_store import unread_total
 from app.infra.db.credit_store import expiring_on
@@ -467,12 +468,17 @@ async def drain_analytics(
         if not rows:
             break
         try:
+            # Each event's person (decision 340), read once for the batch: part
+            # of the send, so its failure fails the batch. In a savepoint, so a
+            # failed read leaves the transaction able to record that.
+            async with session.begin_nested():
+                events = await with_person_properties(session, [r["payload"] for r in rows])
             # Each event's `uuid` is its row id, so a batch resent after a lost
             # answer is a duplicate PostHog drops (decision 137): "Events that
             # share the same uuid, event name, timestamp, and distinct_id are
             # treated as duplicates" (https://posthog.com/docs/data/events,
             # "Event deduplication"; /api/capture does not list the field).
-            events = [{**row["payload"], "uuid": str(row["id"])} for row in rows]
+            events = [{**e, "uuid": str(row["id"])} for e, row in zip(events, rows, strict=True)]
             await asyncio.to_thread(sink.capture, events)
         except Exception as exc:
             for row in rows:

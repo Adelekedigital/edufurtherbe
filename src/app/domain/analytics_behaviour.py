@@ -26,7 +26,7 @@ from app.domain.analytics import (
     rounded,
     spark_buckets,
 )
-from app.domain.analytics_events import AnalyticsEvent
+from app.domain.analytics_events import ENTRY_POINT, AnalyticsEvent
 from app.domain.availability import local_day_start
 from app.domain.enums import (
     EntryPoint,
@@ -125,16 +125,25 @@ JOIN_CLICKED, JOIN_FAILED = "session_join_clicked", "session_join_failed"
 WRITING_ASSIST = "writing_assist_used"
 APP_INSTALLED, PUSH_ALLOWED = "pwa_installed", "push_permission_granted"
 REQUEST_FAILED = "request_failed"
+#: A mentor's setup and adoption, and a message, as the client sends them.
+AVAILABILITY_SET, SESSION_TYPE_CREATED = "availability_set", "session_type_created"
+CALENDAR_CONNECTED, MESSAGE_SENT = "calendar_connected", "message_sent"
+#: `link_shared.kind` for an invite link.
+INVITE_LINK = "invite"
+
+# The property names the funnels and dashboards filter or break down by.
+ROLE, SIGNUP_SOURCE, SIGNUP_CHANNEL = "role", "signup_source", "signup_channel"
+ROUTE, KIND, OWN = "route", "kind", "own"
 
 #: The server's `booking_requested` carries the session; the client's does
 #: not. A funnel's request step is the server's, so an ad blocker cannot drop it.
 FROM_SERVER = Match("session_id")
 
-_ROLE = {role.value: Breakdown((Match("role", role.value, on="person"),)) for role in PrimaryRole}
+_ROLE = {role.value: Breakdown((Match(ROLE, role.value, on="person"),)) for role in PrimaryRole}
 
 
 def _sources(*sources: SignupSource) -> dict[str, Breakdown]:
-    return {s.value: Breakdown((Match("signup_source", s.value, on="person"),)) for s in sources}
+    return {s.value: Breakdown((Match(SIGNUP_SOURCE, s.value, on="person"),)) for s in sources}
 
 
 def _everyone(options: Mapping[str, Breakdown]) -> Mapping[str, Breakdown]:
@@ -143,7 +152,7 @@ def _everyone(options: Mapping[str, Breakdown]) -> Mapping[str, Breakdown]:
 
 #: A new mentee: not a migrated account logging in again.
 _NEW_MENTEE = (
-    Match("role", PrimaryRole.MENTEE.value, on="person"),
+    Match(ROLE, PrimaryRole.MENTEE.value, on="person"),
     Match("is_migrated", "true", on="person", negate=True),
 )
 #: The row a funnel draws its outcomes in, beside the path.
@@ -202,7 +211,7 @@ FUNNELS: Mapping[FunnelName, Funnel] = MappingProxyType(
             window_days=60,
             note="Requested and Completed come from the server, so ad blockers can't drop them.",
             by=_everyone(
-                {p.value: Breakdown((Match("entry_point", p.value),), step=0) for p in EntryPoint}
+                {p.value: Breakdown((Match(ENTRY_POINT, p.value),), step=0) for p in EntryPoint}
             ),
         ),
         "mentee_activation": Funnel(

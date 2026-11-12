@@ -34,6 +34,7 @@ import httpx
 from app.core.config import Settings, analytics_gaps
 from app.core.errors import UpstreamError
 from app.domain.ports import AnalyticsSink
+from app.infra.clients.posthog_private import PrivateApi, PrivateApiError
 from app.infra.http.client import shared
 from app.infra.http.upstream import trim_origin, why
 
@@ -88,6 +89,16 @@ class PostHogSink:
         self._historical = historical_migration
         self._client = client or shared(TIMEOUT)
         self._eraser = eraser
+        self._erase_api = (
+            None
+            if eraser is None
+            else PrivateApi(
+                api_host=eraser.api_host,
+                project_id=eraser.project_id,
+                api_key=eraser.api_key,
+                client=self._client,
+            )
+        )
 
     def capture(self, events: list[dict[str, Any]]) -> None:
         if not events:
@@ -107,24 +118,22 @@ class PostHogSink:
             raise UpstreamError(f"analytics capture failed: {why(exc)}") from exc
 
     def delete_person(self, user_id: UUID) -> None:
-        if self._eraser is None:
+        if self._erase_api is None:
             # Raised, not skipped: the purge then defers the account, as for a
             # refusal, rather than finish it with the person left behind.
             raise UpstreamError(
                 "analytics person not erased: set ANALYTICS_API_HOST, "
                 "ANALYTICS_PROJECT_ID and ANALYTICS_API_KEY"
             )
-        eraser = self._eraser
         try:
-            response = self._client.post(
-                f"{trim_origin(eraser.api_host)}/api/projects/{eraser.project_id}"
+            self._erase_api.call(
+                "POST",
                 "/persons/bulk_delete/",
-                headers={"Authorization": f"Bearer {eraser.api_key}"},
-                json={"distinct_ids": [str(user_id)], "delete_events": True},
+                body={"distinct_ids": [str(user_id)], "delete_events": True},
+                parse=False,
             )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise UpstreamError(f"analytics person erase failed: {why(exc)}") from exc
+        except PrivateApiError as exc:
+            raise UpstreamError(f"analytics person erase failed: {exc.reason}") from exc
 
 
 def analytics_sink_for(settings: Settings, *, client: httpx.Client | None = None) -> AnalyticsSink:

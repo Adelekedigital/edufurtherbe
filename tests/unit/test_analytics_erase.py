@@ -68,6 +68,31 @@ def test_a_refused_erase_is_an_upstream_error(status: int) -> None:
         sink.delete_person(USER)
 
 
+def test_a_refused_erase_never_carries_the_key() -> None:
+    """The erase sends through the one private-API helper, which cuts the key
+    out of what PostHog echoes (decision 341)."""
+
+    def echo(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text=f"bad key {KEY}")
+
+    client = httpx.Client(transport=httpx.MockTransport(echo))
+    sink = PostHogSink(host=HOST, project_token=TOKEN, client=client, eraser=ERASER)
+
+    with pytest.raises(UpstreamError) as raised:
+        sink.delete_person(USER)
+
+    assert "bad key [secret]" in str(raised.value)
+    assert KEY not in str(raised.value)
+
+
+def test_a_200_that_is_not_json_still_erases() -> None:
+    """The erase reads no answer, so any 2xx body is fine, as it always was."""
+    client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, text="ok")))
+    sink = PostHogSink(host=HOST, project_token=TOKEN, client=client, eraser=ERASER)
+
+    sink.delete_person(USER)
+
+
 def test_without_the_erase_settings_nothing_is_sent_and_the_erase_is_refused() -> None:
     """Refused, so the purge defers the account rather than leave the person."""
     seen: list[httpx.Request] = []

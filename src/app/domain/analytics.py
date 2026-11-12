@@ -28,6 +28,7 @@ from typing import Literal, get_args
 
 from app.core.errors import AnalyticsWindowError
 from app.domain.accounts import UNLISTED_ON_DELETION
+from app.domain.activity import activity_day
 from app.domain.availability import (
     UnknownTimezoneError,
     local_date,
@@ -440,6 +441,52 @@ class SubTracks:
     unique_mentees: Metric
     mentors_delivered: Metric
     sessions_per_mentee: Metric
+    weekly_active_users: Metric
+    monthly_active_users: Metric
+    stickiness: Metric
+
+
+#: Active users are people with a recorded activity day (decision 342) in this
+#: many days ending with the window's last day.
+WEEKLY_ACTIVE_DAYS = 7
+MONTHLY_ACTIVE_DAYS = 30
+
+
+def active_spans(period: Period, days: int) -> tuple[Period, Period]:
+    """``days`` whole days ending with the window's last day, and the same
+    ending with the previous period's, in the window's zone."""
+    return period.ending(period.last, days), period.ending(period.previous().last, days)
+
+
+def activity_days(span: Period) -> tuple[dt.date, dt.date]:
+    """The first and last activity day (a UTC date) that overlaps ``span``'s
+    local days: one never missed inside it, and at most one partial day
+    outside it, at whichever end the zone's offset falls (decision 342)."""
+    window = span.window
+    return activity_day(window.since), activity_day(window.until - dt.timedelta(microseconds=1))
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveUsers:
+    """Distinct counted people active in the last 7 and the last 30 days."""
+
+    weekly: int
+    monthly: int
+
+    @property
+    def stickiness(self) -> float | None:
+        """Weekly over monthly, a percentage with one decimal; ``None`` with
+        nobody active in the month."""
+        return rate(self.weekly, self.monthly)
+
+
+def active_tracks(now: ActiveUsers, before: ActiveUsers, compare: bool) -> dict[str, Metric]:
+    """The three active-user sub-tracks, by their wire names."""
+    return {
+        "weekly_active_users": compared(now.weekly, before.weekly, compare),
+        "monthly_active_users": compared(now.monthly, before.monthly, compare),
+        "stickiness": compared(now.stickiness, before.stickiness, compare),
+    }
 
 
 @dataclass(frozen=True, slots=True)

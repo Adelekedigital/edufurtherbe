@@ -6,9 +6,9 @@ import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from types import SimpleNamespace
 from typing import Annotated, Any
@@ -35,10 +35,11 @@ from app.core.errors import (
     ValidationError,
 )
 from app.core.reporting import remember_member
+from app.domain.activity import SeenToday, activity_day
 from app.domain.admin_permissions import EVERY_GRANT, PREVIEW, holds_any
 from app.domain.availability import BookingWindow, booking_window
 from app.domain.credits import CreditLadder, credit_ladder
-from app.domain.enums import AdminRole, SignupSource
+from app.domain.enums import AdminRole
 from app.domain.idempotency import request_fingerprint
 from app.domain.sessions import response_window_hours
 from app.infra.auth.supabase import SupabaseTokenVerifier, TokenClaims, issuer_for
@@ -48,7 +49,9 @@ from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.first_sign_in import provision_first_sign_in, record_auth_method
 from app.infra.db.idempotency import Held, Mismatched, Replayed, reserve
 from app.infra.db.models.user import User
+from app.infra.db.predicates import migrated
 from app.infra.db.preview_store import Owner
+from app.infra.db.user_activity import record_active_day
 
 # `get_session` is aliased: this module already has one, and it is the **database
 # session** dependency at line 142. Two callables with that name in one file is a
@@ -205,19 +208,24 @@ ClaimsDep = Annotated[TokenClaims, Depends(get_claims)]
 # report follows it without querying a database that may be what failed,
 # together with `analytics_sendable`, `analytics_scope.sendable` itself
 # compiled onto `u` (decision 339).
-_SENDABLE = sendable(aliased(User, name="u")).compile(
-    dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
-    compile_kwargs={"literal_binds": True},
+# `is_migrated` is `predicates.migrated` compiled the same way (decision 340).
+_SENDABLE, _MIGRATED = (
+    predicate(aliased(User, name="u")).compile(
+        dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
+        compile_kwargs={"literal_binds": True},
+    )
+    for predicate in (sendable, migrated)
 )
-# What keeps the S608/B608 suppression below true: the predicate binds nothing.
-if _SENDABLE.params:
-    raise RuntimeError("analytics_scope.sendable must compile without bound values")
-# S608: the only interpolation is `_SENDABLE`, our own predicate compiled at
-# import with no bound values; nothing from a request reaches this text.
+# What keeps the S608/B608 suppression below true: the predicates bind nothing.
+if _SENDABLE.params or _MIGRATED.params:
+    raise RuntimeError("the CURRENT_USER predicates must compile without bound values")
+# S608: the only interpolations are `_SENDABLE` and `_MIGRATED`, our own
+# predicates compiled at import with no bound values; nothing from a request
+# reaches this text.
 CURRENT_USER = text(f"""
     SELECT u.id, u.email, u.first_name, u.last_name, u.slug, u.primary_role,
            u.timezone, u.email_verified_at, u.created_at, u.auth_method,
-           (u.signup_source = :migrated) AS is_migrated,
+           ({_MIGRATED}) AS is_migrated,
            p.about_me, p.about_me_drafted_at, p.gender, p.avatar_url, p.banner_url,
            p.avatar_focus_x, p.avatar_focus_y,
            p.social_linkedin,
@@ -264,7 +272,7 @@ async def _user_row(
     """`CURRENT_USER` by exactly one of a token's subject or our own user id."""
     result = await session.execute(
         CURRENT_USER,
-        {"auth_id": auth_id, "user_id": user_id, "migrated": SignupSource.MIGRATED.value},
+        {"auth_id": auth_id, "user_id": user_id},
     )
     row = result.mappings().first()
     return None if row is None else dict(row)
@@ -399,11 +407,42 @@ async def _previewed_user(
     return target | {"is_admin": False, "admin_roles": []}
 
 
+#: Who this process recorded active today (decision 342): one write a day each.
+SEEN_TODAY = SeenToday()
+
+
+async def _record_activity(session: AsyncSession, user_id: UUID) -> None:
+    """Record that ``user_id`` used the platform today, once a day per process.
+
+    **A short transaction on the request's own session: insert, commit.**
+    Here the session holds only the caller's reads (a first sign-in and the
+    auth method commit their own writes), so the commit carries the activity
+    row alone, on one connection: a second per request could starve the pool
+    when everybody's first request of the day lands at once. **Never fails
+    the request**: a failure is logged, rolled back (only reads are lost) and
+    retried on a later request.
+    """
+    day = activity_day(datetime.now(UTC))
+    if SEEN_TODAY.has(user_id, day):
+        return
+    try:
+        await record_active_day(session, user_id, day)
+        await session.commit()
+    except Exception:
+        logger.warning("activity not recorded", extra={"user_id": str(user_id)}, exc_info=True)
+        with suppress(Exception):  # a dead connection fails the next statement, not this
+            await session.rollback()
+        return
+    SEEN_TODAY.add(user_id, day)
+
+
 async def _resolve(
     request: Request, claims: TokenClaims, session: AsyncSession, header: str | None
 ) -> dict[str, Any]:
     user = await _signed_in_user(claims, session)
     if header is None:
+        # Only here: a preview is the admin's view, not the member's activity.
+        await _record_activity(session, user["id"])
         remember_member(
             request.state,
             user["id"],

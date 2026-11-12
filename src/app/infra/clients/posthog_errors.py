@@ -53,6 +53,7 @@ from app.infra.observability import reportable_message, scrub, short_path
 
 __all__ = [
     "ERROR_TIMEOUT",
+    "EXCEPTION_EVENT",
     "MAX_CHAIN",
     "MAX_FRAMES",
     "MAX_IN_FLIGHT",
@@ -64,6 +65,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+#: PostHog's own error event, which its error tracking reads.
+EXCEPTION_EVENT = "$exception"
 
 #: Short: a report that cannot land in about three seconds is dropped, not
 #: retried. httpx times each phase apart, so the bound is their sum: 0.5 s for
@@ -162,7 +166,7 @@ def exception_event(
         properties["$process_person_profile"] = False
     event: dict[str, Any] = scrub(
         {
-            "event": "$exception",
+            "event": EXCEPTION_EVENT,
             # Never the request id when anonymous: a caller may choose it.
             "distinct_id": str(member) if member else uuid4().hex,
             "timestamp": dt.datetime.now(dt.UTC).isoformat(),

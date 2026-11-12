@@ -26,6 +26,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.domain.availability import local_date
 from app.domain.reviews import VALUABLE_SCALE
 
 __all__ = [
@@ -63,7 +64,7 @@ def week_start(now: dt.datetime) -> dt.date:
     viewer, and a week that began at different moments for different people
     would show two mentors at once.
     """
-    day = now.astimezone(dt.UTC).date()
+    day = local_date("UTC", now)
     return day - dt.timedelta(days=day.weekday())
 
 
