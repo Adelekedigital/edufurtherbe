@@ -42,7 +42,7 @@ from app.infra.db.models.referrals import Referral
 from app.infra.db.models.sessions import Session, SessionEvent
 from app.infra.db.models.user import User
 from app.infra.db.next_available_state import free_within
-from app.infra.db.predicates import during
+from app.infra.db.predicates import during, has_primary_role
 from app.infra.db.public_visibility import mentor_is_public, taking_bookings
 from app.infra.db.session_stats import completed
 
@@ -192,7 +192,7 @@ def sign_ups(window: Window, *, role: PrimaryRole | None = None, extra: Any = No
     """Sign-ups made in ``window``; with ``role``, only that `primary_role`."""
     where = [is_sign_up(), during(User.created_at, window)]
     if role is not None:
-        where.append(User.primary_role == role)
+        where.append(has_primary_role(role))
     if extra is not None:
         where.append(extra)
     return _scalar(select(func.count()).select_from(User).where(*where))

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ValidationError
 from app.domain.enums import PrimaryRole
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE, blank, is_live_admin, person_like
+from app.infra.db.predicates import LIVE, blank, has_primary_role, is_live_admin, person_like
 
 __all__ = ["find_users", "sort_key"]
 
@@ -60,7 +60,7 @@ async def find_users(
         .limit(limit + 1)
     )
     if role is not None:
-        statement = statement.where(User.primary_role == role)
+        statement = statement.where(has_primary_role(role))
     if q:
         statement = statement.where(person_like(User, q))
     if after is not None:

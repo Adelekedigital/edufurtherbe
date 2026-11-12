@@ -19,7 +19,7 @@ from typing import Any, Protocol
 from sqlalchemy import and_, exists, func, or_, true
 
 from app.domain.attendance import PRESENCE_REPORTING
-from app.domain.enums import ApprovalStatus, ListingStatus, SignupSource
+from app.domain.enums import ApprovalStatus, ListingStatus, PrimaryRole, SignupSource
 from app.infra.db.catalogue_store import LIKE_ESCAPE, escape_like
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.mentoring import MentorProfile
@@ -81,6 +81,12 @@ def has_mentor_profile(user_id: Any) -> Any:
     """Whether `user_id` has a mentor profile at all, soft-deleted or not: the
     fact `finishes_as_mentee` reads, so onboarding and the bio draft agree."""
     return exists().where(MentorProfile.user_id == user_id)
+
+
+def has_primary_role(role: PrimaryRole) -> Any:
+    """The account's `primary_role` is ``role``: the one statement of it. A
+    dashboard split, never an authorization check (`PrimaryRole`)."""
+    return User.primary_role == role
 
 
 def application_submitted() -> Any:
