@@ -26,6 +26,7 @@ from app.domain.enums import PrimaryRole
 from app.infra.db.analytics_scope import counted_user
 from app.infra.db.models.platform import UserActivityDay
 from app.infra.db.models.user import User
+from app.infra.db.predicates import has_primary_role
 
 
 async def record_active_day(session: AsyncSession, user_id: UUID, day: dt.date) -> None:
@@ -47,7 +48,7 @@ def active_in(span: Period, role: PrimaryRole | None = None) -> Any:
     if role is not None:
         # A subquery, not a join: a join would let `counted_user`'s own scan
         # of `users` correlate to the joined row.
-        where.append(UserActivityDay.user_id.in_(select(User.id).where(User.primary_role == role)))
+        where.append(UserActivityDay.user_id.in_(select(User.id).where(has_primary_role(role))))
     return (
         select(func.count(func.distinct(UserActivityDay.user_id))).where(*where).scalar_subquery()
     )
