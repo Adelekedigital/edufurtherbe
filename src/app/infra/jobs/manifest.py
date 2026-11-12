@@ -21,6 +21,7 @@ RUNTIME_JOB_NAMES = frozenset(
         "refresh-next-available",
         "sweep-intake-files",
         "purge-deleted-users",
+        "sync-posthog-dashboards",
     }
 )
 

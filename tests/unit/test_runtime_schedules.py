@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "config" / "runtime-schedules.json"
 
 
-def test_the_manifest_declares_the_eight_runtime_jobs_in_utc() -> None:
+def test_the_manifest_declares_the_nine_runtime_jobs_in_utc() -> None:
     manifest = load_manifest(MANIFEST)
 
     assert manifest.timezone == "UTC"
@@ -34,6 +34,7 @@ def test_the_manifest_declares_the_eight_runtime_jobs_in_utc() -> None:
         "refresh-next-available",
         "sweep-intake-files",
         "purge-deleted-users",
+        "sync-posthog-dashboards",
     }
     assert {job.name: job.cron for job in manifest.jobs} == {
         "settle-sessions": "30 * * * *",
@@ -50,6 +51,9 @@ def test_the_manifest_declares_the_eight_runtime_jobs_in_utc() -> None:
         # Daily, after the intake sweep: a purge date is a day, so once a day
         # is as prompt as it needs to be (Mentee Settings PRD).
         "purge-deleted-users": "30 3 * * *",
+        # Daily, in the quiet hours: an account becomes internal rarely, and a
+        # day's lag in PostHog's dashboards is fine (decision 344).
+        "sync-posthog-dashboards": "0 2 * * *",
     }
 
 
