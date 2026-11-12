@@ -63,13 +63,16 @@ MENTOR_HAS_HISTORY = """
 SELECT 1 FROM mentor_status_events WHERE mentor_user_id = :user_id LIMIT 1
 """
 
+#: ``submitted_at`` is ``created_at``: in Bubble creating a profile was applying,
+#: as #491's backfill reads it. Left null, a migrated applicant missed the admin
+#: queue and could not be decided (#660). A re-load keeps one already recorded.
 UPSERT_MENTOR_PROFILE = """
 INSERT INTO mentor_profiles (
-    user_id, legacy_bubble_id, created_at, updated_at,
+    user_id, legacy_bubble_id, created_at, updated_at, submitted_at,
     approval_status, listing_status, requires_booking_confirmation,
     primary_study_country_id, primary_study_program
 ) VALUES (
-    :user_id, :legacy_bubble_id, :created_at, :updated_at,
+    :user_id, :legacy_bubble_id, :created_at, :updated_at, :created_at,
     :approval_status,
     :listing_status,
     :requires_booking_confirmation,
@@ -79,6 +82,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     user_id                       = EXCLUDED.user_id,
     created_at                    = EXCLUDED.created_at,
     updated_at                    = EXCLUDED.updated_at,
+    submitted_at                  = COALESCE(mentor_profiles.submitted_at, EXCLUDED.submitted_at),
     approval_status               = EXCLUDED.approval_status,
     listing_status                = EXCLUDED.listing_status,
     requires_booking_confirmation = EXCLUDED.requires_booking_confirmation,

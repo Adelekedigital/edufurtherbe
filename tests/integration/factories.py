@@ -38,6 +38,8 @@ async def make_public_mentor(
     *,
     approved: bool = True,
     listed: bool = True,
+    #: Whether the application was submitted: only then may an admin decide it.
+    submitted: bool = False,
     timezone: str = LAGOS,
     #: The legacy public profile handle. Nullable in the schema and on 4 of 43
     #: migrated users, so a mentor without one must stay reachable by id.
@@ -65,11 +67,12 @@ async def make_public_mentor(
         await conn.execute(
             text(
                 "INSERT INTO mentor_profiles "
-                "(user_id, headline, approval_status, listing_status) "
-                "VALUES (:u, 'M', :a, :l)"
+                "(user_id, headline, approval_status, listing_status, submitted_at) "
+                "VALUES (:u, 'M', :a, :l, CASE WHEN :s THEN now() END)"
             ),
             {
                 "u": mentor,
+                "s": submitted,
                 "a": "approved" if approved else "pending",
                 "l": "listed" if listed else "unlisted",
             },

@@ -55,7 +55,7 @@ _SECTION = (
     "**Left out of every number**: admins and demo accounts. Preview sessions "
     "write nothing, so nothing of theirs is counted.\n\n"
     "**`alerts`**: every alert firing now, newest first, whatever the window: no "
-    "booking requests for 24 hours, no sign-ups for 24 hours (migrated accounts "
+    "booking requests for 7 days, no sign-ups for 7 days (migrated accounts "
     "are not sign-ups), and more than 20 emails, notifications or events given up on yesterday "
     "(UTC), and more than 10% of yesterday's (UTC) log-in codes failed, read from "
     "PostHog and left out when PostHog does not answer.\n\n"

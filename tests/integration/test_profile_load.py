@@ -392,6 +392,30 @@ async def test_a_pending_mentor_is_loaded_and_gets_no_history(db_engine: AsyncEn
     assert events.scalar_one() == 0, "a pending mentor has no decision to record"
 
 
+async def test_a_migrated_mentor_arrives_submitted(db_engine: AsyncEngine) -> None:
+    """In Bubble creating a profile was applying, as #491's backfill reads it.
+    Left null, a migrated applicant missed the admin queue and no admin could
+    decide on them (#660). A re-load keeps a submission already recorded."""
+    async with db_engine.begin() as conn:
+        await load_everything(
+            conn, [linked_user()], mentors=[mentor_record(**{"✅approvedText": ""})]
+        )
+        first = await conn.execute(text("SELECT submitted_at = created_at FROM mentor_profiles"))
+        assert first.scalar_one() is True
+        await conn.execute(
+            text("UPDATE mentor_profiles SET submitted_at = timestamptz '2025-01-02 03:04:05+00'")
+        )
+
+        await load_everything(
+            conn, [linked_user()], mentors=[mentor_record(**{"✅approvedText": ""})]
+        )
+        kept = await conn.execute(
+            text("SELECT submitted_at = timestamptz '2025-01-02 03:04:05+00' FROM mentor_profiles")
+        )
+
+    assert kept.scalar_one() is True, "a re-load overwrote a recorded submission"
+
+
 async def test_an_approved_mentor_still_gets_both_events(db_engine: AsyncEngine) -> None:
     """The other half of the guard, so it cannot be satisfied by seeding nothing.
 

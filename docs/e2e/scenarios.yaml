@@ -81,7 +81,7 @@ scenarios:
       - {kind: api, id: confirm_on, viewer: mentor_listed, method: PATCH,
          path: "/api/v1/me/session-types/{session_type_id}", params: {session_type_id: "${type_id}"},
          body: {requires_booking_confirmation: true},
-         expect: {status: 200, json: {/requires_booking_confirmation: true}},
+         expect: {status: 200, json: {/updated: true}},
          human: "The mentor asks to confirm each booking."}
       - {kind: api, id: daily_on, viewer: mentor_listed, method: PATCH, path: /api/v1/me/conferencing,
          body: {provider: daily}, expect: {status: 200, json: {/provider: daily}},
@@ -100,9 +100,19 @@ scenarios:
     smoke_prod: false
     preconditions: ["A new run tag, so mentee_new has no users row"]
     steps:
-      - {kind: ui, id: sign_in, viewer: mentee_new, viewport: [390, 1440], route: /, actions: TODO(frontend),
-         expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Open the magic link from e2e_session.py --link; you land signed in."}
+      - kind: ui
+        id: sign_in
+        viewer: mentee_new
+        viewport: [390, 1440]
+        route: /
+        actions:
+          - {do: wait, target: {role: heading, name: "What would you like help with?"}}
+        expect:
+          - {url: /onboarding/mentee}
+          - {visible: {role: button, name: Continue}}
+        screenshot: true
+        a11y: true
+        human: "Open the magic link from e2e_session.py --link. You land signed in, and a new account goes straight to onboarding."
       - {kind: api, id: anonymous_me, viewer: anonymous, method: GET, path: /api/v1/me,
          expect: {status: 401}, human: "Without signing in, your account is not shown."}
       - {kind: api, id: first_me, viewer: mentee_new, method: GET, path: /api/v1/me,
@@ -130,9 +140,6 @@ scenarios:
     smoke_prod: false
     preconditions: ["AUTH-001 passed (mentee_new exists)"]
     steps:
-      - {kind: ui, id: onboarding_ui, viewer: mentee_new, viewport: [390, 1440], route: /onboarding,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Answer the onboarding questions."}
       - {kind: api, id: not_started, viewer: mentee_new, method: GET, path: /api/v1/me/onboarding,
          expect: {status: 404}, human: "Before you start, there is no onboarding record."}
       - {kind: api, id: too_early, viewer: mentee_new, method: POST, path: /api/v1/me/onboarding/completion,
@@ -143,6 +150,30 @@ scenarios:
          body: {session_type_id: "00000000-0000-7000-8000-000000000000", starts_at: "2030-01-01T09:00:00Z"},
          expect: {status: 409, json: {/type: /problems/booking-needs-onboarding}},
          human: "Booking before onboarding is refused."}
+      - kind: ui
+        id: onboarding_ui
+        viewer: mentee_new
+        viewport: [390]   # it saves each step, so a second width would resume at step 2
+        route: /onboarding
+        after: book_too_early
+        actions:
+          - {do: wait, target: {role: heading, name: "What would you like help with?"}}
+          - {do: click, target: {role: button, name: "/^Find a program/"}}
+          - {do: click, target: {role: button, name: Continue}}
+          - {do: wait, target: {role: heading, name: "Tell us about your study plans"}}
+          - {do: fill, target: {role: combobox, name: "Where are you from?"}, value: Ghana}
+          - {do: click, target: {role: option, name: Ghana}}
+          - {do: click, target: {role: combobox, name: "What are you applying for?"}}
+          - {do: click, target: {role: option, name: "Master’s"}}
+          - {do: fill, target: {role: combobox, name: "What do you want to study?"}, value: Economics}
+          - {do: click, target: {role: option, name: "/Economics/"}}
+          - {do: fill, target: {role: combobox, name: "Where do you want to study?"}, value: United Kingdom}
+          - {do: click, target: {role: option, name: United Kingdom}}
+        expect:
+          - {visible: {role: button, name: See my matches}}
+        screenshot: true
+        a11y: true
+        human: "Answer the onboarding questions: a kind of help, then origin, degree, subject and where to study. Stop before See my matches; the API steps finish onboarding."
       - {kind: api, id: country, viewer: anonymous, method: GET, path: "/api/v1/catalog/{catalogue}",
          params: {catalogue: countries, q: Ghana}, expect: {status: 200}, save: {country_id: /data/0/id},
          human: "Look up a country."}
@@ -199,13 +230,51 @@ scenarios:
          path: /api/v1/me/mentor-application/submit,
          expect: {status: 409, json: {/type: /problems/mentor-application-incomplete, /missing: "<nonempty>"}},
          human: "Submitting too early is refused and lists what is missing."}
-      - {kind: ui, id: complete_application, viewer: mentor_pending, viewport: [390, 1440], route: /onboarding,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Fill in everything the application asks for: offerings, education with dates, study country, photo, origin, LinkedIn, headline, weekly hours and a session type."}
-      - {kind: api, id: submit, viewer: mentor_pending, method: POST, path: /api/v1/me/mentor-application/submit,
+      - {kind: api, id: decide_unsubmitted, viewer: admin_super, method: POST,
+         path: "/api/v1/admin/mentors/{user_id}/decision", params: {user_id: "${mentor_pending.id}", approve: true},
+         body: {}, expect: {status: 409, json: {/type: /problems/mentor-application-not-submitted}},
+         human: "An admin cannot approve an application that was never submitted (#660)."}
+      - kind: ui
+        id: complete_application
+        viewer: mentor_pending
+        viewport: [1440]
+        route: /onboarding
+        actions:
+          - {do: wait, target: {role: heading, name: "What can you help mentees with?"}}
+          - {do: click, target: {role: button, name: Document preparation}}
+          - {do: click, target: {role: button, name: Continue}}
+          - {do: wait, target: {role: heading, name: "Where did you study?"}}
+          - {do: fill, target: {role: combobox, name: University}, value: University of Oxford}
+          - {do: click, target: {role: option, name: "/University of Oxford/"}}
+          - {do: click, target: {role: button, name: "Master’s"}}
+          - {do: fill, target: {role: combobox, name: Field of study}, value: Economics}
+          - {do: click, target: {role: option, name: "/Economics/"}}
+          - {do: click, target: {role: combobox, name: Start year}}
+          - {do: click, target: {role: option, name: "2018"}}
+          - {do: click, target: {role: combobox, name: End year (or expected)}}
+          - {do: click, target: {role: option, name: "2020"}}
+          - {do: click, target: {role: button, name: Continue}}
+          - {do: wait, target: {role: heading, name: About you}}
+          - {do: upload, target: {label: Add photo}, value: avatar.png}
+          - {do: fill, target: {role: combobox, name: "Where are you from?"}, value: Nigeria}
+          - {do: click, target: {role: option, name: Nigeria}}
+          - {do: fill, target: {role: textbox, name: LinkedIn profile}, value: "https://www.linkedin.com/in/edufurther-e2e-test-applicant"}
+          # The About draft runs on arrival and blocks Continue until it settles (drafted or not).
+          - {do: wait, target: {role: button, name: "/^(Write a draft|Improve)$/"}}
+          - {do: click, target: {role: button, name: Continue}}
+          - {do: wait, target: {role: heading, name: "When can you mentor?"}}
+          - {do: click, target: {role: button, name: Weekdays}}
+          - {do: click, target: {role: button, name: Submit application}}
+        expect:
+          - {visible: {role: heading, name: "/^Application sent/"}}
+          - {url: /mentor-application}
+        screenshot: true
+        a11y: true
+        human: "Fill in everything the application asks for (help areas, a school with dates, photo, origin, LinkedIn, weekly hours) and press Submit application. Saving the hours creates the Intro chat session type."
+      - {kind: api, id: submit, viewer: mentor_pending, method: GET, path: /api/v1/me,
          after: complete_application,
-         expect: {status: 200, json: {/submitted_at: "<present>", /approval_status: pending}},
-         human: "Submit the application."}
+         expect: {status: 200, json: {/mentor_profile/approval_status: pending, /mentor_profile/submitted_at: "<present>"}},
+         human: "The application the UI submitted is waiting for review."}
       - {kind: api, id: queue, viewer: admin_viewer, method: GET, path: /api/v1/admin/mentors/pending,
          expect: {status: 200, json: {/data: "<nonempty>"}}, human: "Any admin sees the application waiting."}
       - {kind: api, id: viewer_cannot_decide, viewer: admin_viewer, method: POST,
@@ -249,9 +318,21 @@ scenarios:
     smoke_prod: false
     preconditions: ["SETUP-001 passed", "mentee_with_credits has no live session with mentor_listed"]
     steps:
-      - {kind: ui, id: explore_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /explore,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Search Explore for the E2E mentor and open their profile."}
+      - kind: ui
+        id: explore_ui
+        viewer: mentee_with_credits
+        viewport: [390, 1440]
+        route: /explore
+        actions:
+          - {do: fill, target: {role: searchbox, name: Search mentors}, value: Eve}
+          - {do: press, target: {role: searchbox, name: Search mentors}, value: Enter}
+          - {do: click, target: {role: link, name: "/^Eve Tester/"}}
+        expect:
+          - {visible: {role: heading, name: "/^Eve Tester/"}}
+          - {visible: {role: button, name: Book a session}}
+        screenshot: true
+        a11y: true
+        human: "Search Explore for the E2E mentor and open their profile."
       - {kind: api, id: explore, viewer: mentee_with_credits, method: GET, path: /api/v1/mentors,
          params: {q: Eve}, expect: {status: 200, json: {/data: "<nonempty>"}},
          human: "Explore finds the E2E mentor (Eve Tester <run>)."}
@@ -266,13 +347,23 @@ scenarios:
          params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+2>", end: "<today+9>"},
          expect: {status: 200, json: {/data/0/start: "<present>"}}, save: {starts_at: /data/0/start},
          human: "Pick the first free time at least two days away."}
-      - {kind: ui, id: book_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: "/mentors/${mentor_listed.id}",
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Book that time from the profile, answering the intake question."}
+      - kind: ui
+        id: book_ui
+        viewer: mentee_with_credits
+        viewport: [390, 1440]
+        route: "/mentors/${mentor_listed.id}"
+        actions:
+          - {do: click, target: {role: button, name: Book a session}}
+          - {do: click, target: {role: radio, name: "/^\\d{1,2}:\\d{2} (am|pm)$/"}}
+        expect:
+          - {visible: {role: button, name: "/^Request /"}}
+        screenshot: true
+        a11y: true
+        human: "Open Book a session on the profile and pick the first free time. The button now reads Request with the day and time; the API step sends it."
       - {kind: api, id: book, viewer: mentee_with_credits, method: POST, path: /api/v1/sessions,
          headers: {Idempotency-Key: "<new>"},
          body: {session_type_id: "${type_id}", starts_at: "${starts_at}", topic: E2E booking,
-                entry_point: mentor_profile, answers: "TODO(frontend): one per required question"},
+                entry_point: mentor_profile},
          expect: {status: 201, json: {/status: pending_mentor_approval, /respond_by: "<present>", /refund_until: null}},
          save: {session_id: /id}, human: "Send the request; it waits for the mentor."}
       - {kind: api, id: replay, viewer: mentee_with_credits, method: POST, path: /api/v1/sessions,
@@ -298,9 +389,19 @@ scenarios:
       - {kind: api, id: mentor_joins, viewer: mentor_listed, method: POST,
          path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
          expect: {status: 200, json: {/joined: true}}, human: "The mentor joins."}
-      - {kind: ui, id: join_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: "/sessions/${session_id}",
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Both open the join button and reach the meeting."}
+      - kind: ui
+        id: join_ui
+        viewer: mentee_with_credits
+        viewport: [390, 1440]
+        route: "/sessions/${session_id}"
+        after: mentor_joins
+        actions:
+          - {do: wait, target: {role: link, name: "/^(Join session|Rejoin call) \\(opens in a new tab\\)$/"}}
+        expect:
+          - {visible: {role: link, name: "/^(Join session|Rejoin call) \\(opens in a new tab\\)$/"}}
+        screenshot: true
+        a11y: true
+        human: "Second sitting, in the join window: the join link is live. Both people then open it and enter the Daily room (attendance comes from Daily's webhook)."
       - {kind: job, id: settle, script: scripts/settle_sessions.py, after: mentor_joins, expect: {exit: 0},
          human: "After the join window closes, run settlement."}
       - {kind: api, id: completed, viewer: mentee_with_credits, method: GET, path: "/api/v1/sessions/{session_id}",
@@ -442,8 +543,9 @@ scenarios:
          params: {user_id: "${mentor_listed.id}"}, expect: {status: 200}, save: {type_id: /data/0/id},
          human: "See what the mentor offers."}
       - {kind: api, id: slots, viewer: mentee_late_cancel, method: GET, path: "/api/v1/users/{user_id}/availability/slots",
-         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+1>", end: "<today+3>"},
-         expect: {status: 200}, save: {starts_at: /data/0/start}, human: "Pick the first time after the 24h notice."}
+         params: {user_id: "${mentor_listed.id}", session_type_id: "${type_id}", start: "<today+1>", end: "<today+8>"},
+         expect: {status: 200, json: {/data/0/start: "<present>"}}, save: {starts_at: /data/0/start},
+         human: "Pick the first free time after the 24h notice (a week wide, so a weekend never leaves it empty)."}
       - {kind: api, id: book, viewer: mentee_late_cancel, method: POST, path: /api/v1/sessions,
          headers: {Idempotency-Key: "<new>"}, body: {session_type_id: "${type_id}", starts_at: "${starts_at}"},
          expect: {status: 201}, save: {session_id: /id}, human: "Book it."}
@@ -481,9 +583,21 @@ scenarios:
       - {kind: api, id: mentee_cannot_decline, viewer: mentee_canceller, method: POST,
          path: "/api/v1/sessions/{session_id}/decline", params: {session_id: "${session_id}"},
          body: {reason_code: other}, expect: {status: 404}, human: "Only the mentor may decline."}
-      - {kind: ui, id: decline_ui, viewer: mentor_listed, viewport: [390, 1440], route: /sessions,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "The mentor opens the request and declines it with a reason."}
+      - kind: ui
+        id: decline_ui
+        viewer: mentor_listed
+        viewport: [390, 1440]
+        route: "/bookings?tab=pending"
+        actions:
+          - {do: click, target: {role: button, name: Decline}}
+          - {do: wait, target: {role: dialog, name: "Decline this request?"}}
+          - {do: click, target: {role: switch, name: "/^Suggest a new time to /"}}
+          - {do: click, target: {role: button, name: "I’m no longer free"}}
+        expect:
+          - {visible: {role: button, name: Decline request}}
+        screenshot: true
+        a11y: true
+        human: "The mentor opens Bookings, Pending, chooses Decline, turns off Suggest a new time and picks I'm no longer free. The API step confirms the decline."
       - {kind: api, id: decline, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/decline",
          params: {session_id: "${session_id}"}, body: {reason_code: mentor_unavailable},
          expect: {status: 200, json: {/declined: true}}, human: "The mentor declines."}
@@ -524,9 +638,20 @@ scenarios:
       - {kind: api, id: mentor_cannot_move, viewer: mentor_listed, method: POST, path: "/api/v1/sessions/{session_id}/move",
          params: {session_id: "${session_id}"}, headers: {Idempotency-Key: "<new>"}, body: {starts_at: "${second}"},
          expect: {status: 404}, human: "Only the mentee moves a session."}
-      - {kind: ui, id: move_ui, viewer: mentee_canceller, viewport: [390, 1440], route: "/sessions/${session_id}",
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "The mentee chooses Reschedule and picks the second time."}
+      - kind: ui
+        id: move_ui
+        viewer: mentee_canceller
+        viewport: [390, 1440]
+        route: "/sessions/${session_id}"
+        actions:
+          - {do: click, target: {role: button, name: Cancel}}
+          - {do: wait, target: {role: dialog, name: "Move this session?"}}
+          - {do: click, target: {role: radio, name: "/^[A-Z][a-z]{2}, [A-Z][a-z]{2} \\d{1,2} · /"}}
+        expect:
+          - {visible: {role: button, name: "/^(Move session|Send request)$/"}}
+        screenshot: true
+        a11y: true
+        human: "The mentee opens the session, chooses Cancel, keeps Book a new time on and picks another time. The API step makes the move."
       - {kind: api, id: move, viewer: mentee_canceller, method: POST, path: "/api/v1/sessions/{session_id}/move",
          params: {session_id: "${session_id}"}, headers: {Idempotency-Key: "<new>"},
          body: {starts_at: "${second}", message: E2E move},
@@ -566,9 +691,22 @@ scenarios:
       - {kind: api, id: reviewable, viewer: mentee_with_credits, method: GET, path: /api/v1/me/reviewable-sessions,
          expect: {status: 200, json: {/data/0/session_id: "<uuid>"}}, save: {session_id: /data/0/session_id},
          human: "The completed session asks for a review."}
-      - {kind: ui, id: review_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /reviews,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Rate the session and write a public review."}
+      - kind: ui
+        id: review_ui
+        viewer: mentee_with_credits
+        viewport: [390, 1440]
+        route: "/sessions/${session_id}"
+        actions:
+          - {do: click, target: {role: button, name: Leave a review}}
+          - {do: wait, target: {role: dialog, name: "/^How was your session with /"}}
+          - {do: click, target: {role: radio, name: "5 stars, Excellent"}}
+          - {do: fill, target: {label: "/Your review/"}, value: Clear and useful E2E session.}
+          - {do: click, target: {role: button, name: Continue}}
+        expect:
+          - {visible: {role: radiogroup, name: "How supported did you feel during the session?"}}
+        screenshot: true
+        a11y: true
+        human: "Open the completed session, choose Leave a review, give 5 stars and write a public review. The API step submits it."
       - {kind: api, id: review, viewer: mentee_with_credits, method: POST, path: /api/v1/reviews,
          body: {session_id: "${session_id}", overall_rating: 5, communication_rating: great, knowledge_rating: great,
                 practicality_rating: okay, support_rating: great, valuable_rating: 5, nps_recommend_score: 9,
@@ -668,9 +806,21 @@ scenarios:
       - {kind: api, id: stranger, viewer: mentee_new, method: POST, path: "/api/v1/me/messages/{user_id}",
          params: {user_id: "${mentor_listed.id}"}, body: {client_id: "<new>", body: Hello},
          expect: {status: 403, json: {/type: /problems/not-connected}}, human: "Someone with no booking cannot message."}
-      - {kind: ui, id: message_ui, viewer: mentee_with_credits, viewport: [390, 1440], route: /messages,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Open messages and write to the mentor."}
+      - kind: ui
+        id: message_ui
+        viewer: mentee_with_credits
+        viewport: [390, 1440]
+        flags: [NEXT_PUBLIC_MESSAGES_ENABLED]
+        route: /messages
+        actions:
+          - {do: click, target: {role: button, name: "/^Eve Tester/"}}
+          - {do: fill, target: {role: textbox, name: Message Eve}, value: Hello from E2E}
+        expect:
+          - {visible: {role: region, name: "/^Chat with Eve Tester/"}}
+          - {visible: {role: button, name: Send}}
+        screenshot: true
+        a11y: true
+        human: "Open Messages, pick the mentor and write a message. The API step sends it."
       - {kind: api, id: send, viewer: mentee_with_credits, method: POST, path: "/api/v1/me/messages/{user_id}",
          params: {user_id: "${mentor_listed.id}"}, body: {client_id: "<new>", body: Hello from E2E},
          expect: {status: 201, json: {/mine: true, /body: Hello from E2E}}, save: {message_id: /id},
@@ -706,9 +856,20 @@ scenarios:
          expect: {status: 200}, human: "The account exists."}
       - {kind: api, id: no_confirm, viewer: mentee_to_delete, method: DELETE, path: /api/v1/me,
          body: {confirm: delete}, expect: {status: 422}, human: "Deleting without typing DELETE is refused."}
-      - {kind: ui, id: delete_ui, viewer: mentee_to_delete, viewport: [390, 1440], route: /settings,
-         actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Open Settings, choose Delete account and type DELETE."}
+      - kind: ui
+        id: delete_ui
+        viewer: mentee_to_delete
+        viewport: [390, 1440]
+        route: /settings/security
+        actions:
+          - {do: click, target: {role: button, name: Delete account}}
+          - {do: wait, target: {role: alertdialog, name: "Delete your account?"}}
+          - {do: fill, target: {label: Type DELETE to confirm}, value: DELETE}
+        expect:
+          - {visible: {role: button, name: Delete my account}}
+        screenshot: true
+        a11y: true
+        human: "Open Settings, Login & security, choose Delete account and type DELETE. The API step deletes it."
       - {kind: api, id: delete, viewer: mentee_to_delete, method: DELETE, path: /api/v1/me,
          body: {confirm: DELETE}, expect: {status: 204}, human: "Delete the account."}
       - {kind: api, id: gone, viewer: mentee_to_delete, method: GET, path: /api/v1/me,
@@ -759,8 +920,23 @@ scenarios:
       - {kind: api, id: hidden, viewer: admin_viewer, method: GET, path: "/api/v1/me/messages/{user_id}",
          params: {user_id: "${mentor_listed.id}"}, headers: {X-EF-Preview: "${preview_id}"},
          expect: {status: 200, json: {/items/0/hidden_in_preview: true}}, human: "Message contents are hidden."}
-      - {kind: ui, id: banner_ui, viewer: admin_viewer, viewport: [1440], route: /admin, actions: TODO(frontend),
-         expect: TODO(frontend), screenshot: true, a11y: true, human: "The preview banner shows whose view this is."}
+      - kind: ui
+        id: banner_ui
+        viewer: admin_viewer
+        viewport: [1440]
+        route: /admin/mentors
+        actions:
+          - {do: click, target: {role: button, name: Preview as user}}
+          - {do: wait, target: {role: dialog, name: Choose a user to preview as}}
+          - {do: fill, target: {role: combobox, name: Search users by email or name}, value: "${mentee_with_credits.email}"}
+          - {do: click, target: {role: option, name: "/${mentee_with_credits.email}/"}}
+        expect:
+          - {visible: {role: region, name: Preview as user}}
+          - {visible: {role: button, name: "Previewing as ${mentee_with_credits.email}. Switch user"}}
+          - {visible: {role: button, name: Exit preview}}
+        screenshot: true
+        a11y: true
+        human: "The admin chooses Preview as user and picks the mentee. The banner names whose view this is and offers Exit preview."
       - {kind: api, id: end, viewer: admin_viewer, method: POST, path: "/api/v1/admin/preview-sessions/{preview_id}/end",
          params: {preview_id: "${preview_id}"}, body: {reason: exit}, expect: {status: 204}, human: "End the preview."}
       - {kind: api, id: ended, viewer: admin_viewer, method: GET, path: /api/v1/me,
@@ -786,8 +962,8 @@ scenarios:
     smoke_prod: true
     flags: [ADMIN_ANALYTICS_ENABLED]
     steps:
-      - {kind: api, id: flag_off, viewer: anonymous, method: GET, path: /api/v1/admin/analytics/overview,
-         expect: {status: 404}, human: "With the flag off (or for an anonymous caller), the page does not exist."}
+      - {kind: api, id: signed_out, viewer: anonymous, method: GET, path: /api/v1/admin/analytics/overview,
+         expect: {status: 401}, human: "Signed out, it is refused. (With the flag off, every caller gets 404 instead.)"}
       - {kind: api, id: mentee, viewer: mentee_with_credits, method: GET, path: /api/v1/admin/analytics/overview,
          expect: {status: 404}, human: "A mentee cannot see it."}
       - {kind: api, id: overview, viewer: admin_viewer, method: GET, path: /api/v1/admin/analytics/overview,
@@ -811,9 +987,28 @@ scenarios:
          expect: {status: 200}, human: "The behaviour tab loads (503 analytics-upstream when PostHog is unconfigured)."}
       - {kind: api, id: unknown_funnel, viewer: admin_viewer, method: GET, path: "/api/v1/admin/analytics/funnels/{name}",
          params: {name: nope}, expect: {status: 404}, human: "An unknown funnel does not exist."}
-      - {kind: ui, id: tabs_ui, viewer: admin_viewer, viewport: [1440], flags: [ADMIN_ANALYTICS_ENABLED],
-         route: /admin/analytics, actions: TODO(frontend), expect: TODO(frontend), screenshot: true, a11y: true,
-         human: "Open each analytics tab."}
+      - kind: ui
+        id: tabs_ui
+        viewer: admin_viewer
+        viewport: [1440]
+        flags: [NEXT_PUBLIC_ADMIN_ANALYTICS_ENABLED]
+        route: /admin/analytics
+        actions:
+          - {do: wait, target: {role: region, name: Platform North Star}}
+          - {do: click, target: {role: tab, name: Sessions}}
+          - {do: wait, target: {role: region, name: Sessions}}
+          - {do: click, target: {role: tab, name: Supply}}
+          - {do: wait, target: {role: region, name: Mentor supply}}
+          - {do: click, target: {role: tab, name: Credits}}
+          - {do: wait, target: {role: region, name: Credits}}
+          - {do: click, target: {role: tab, name: Growth}}
+          - {do: wait, target: {role: region, name: Growth}}
+          - {do: click, target: {role: tab, name: Behavior}}
+        expect:
+          - {visible: {role: region, name: Funnels}}
+        screenshot: true
+        a11y: true
+        human: "Open each analytics tab: Overview, Sessions, Supply, Credits, Growth, Behavior."
 
   - id: CONSENT-001
     title: A user answers the analytics consent and can change it
@@ -852,19 +1047,23 @@ scenarios:
       The first answer is stored and later ones change nothing; unknown values
       become direct / other rather than being refused (decision 329).
     smoke_prod: false
-    preconditions: ["AUTH-001 passed (mentee_new is new and has no acquisition)"]
+    preconditions: ["mentee_late_cancel has never opened the app: the app records acquisition at a first sign-in (AUTH-001 does that for mentee_new)"]
     steps:
-      - {kind: api, id: first, viewer: mentee_new, method: POST, path: /api/v1/me/acquisition,
+      - {kind: api, id: first, viewer: mentee_late_cancel, method: POST, path: /api/v1/me/acquisition,
          body: {source: not-a-source, channel: not-a-channel},
          expect: {status: 201, json: {/source: direct, /channel: other}}, human: "The first answer is stored."}
-      - {kind: api, id: second, viewer: mentee_new, method: POST, path: /api/v1/me/acquisition,
+      - {kind: api, id: second, viewer: mentee_late_cancel, method: POST, path: /api/v1/me/acquisition,
          body: {source: invite, channel: whatsapp},
          expect: {status: 200, json: {/source: direct, /channel: other}}, human: "A later answer changes nothing."}
     assertions:
       - {id: stored, check: db, after: second,
          query: "SELECT signup_source, signup_channel, acquired_at IS NOT NULL AS acquired FROM users WHERE id = :u",
-         binds: {u: "${mentee_new.id}"}, expect: {first: {signup_source: direct, signup_channel: other, acquired: true}},
+         binds: {u: "${mentee_late_cancel.id}"}, expect: {first: {signup_source: direct, signup_channel: other, acquired: true}},
          human: "The first answer is what is kept."}
+      - {id: app_recorded, check: db, after: second,
+         query: "SELECT acquired_at IS NOT NULL AS acquired FROM users WHERE id = :u",
+         binds: {u: "${mentee_new.id}"}, expect: {first: {acquired: true}},
+         human: "The app itself recorded how mentee_new arrived, at their first sign-in."}
 
   # ------------------------------------------------------------------ smoke
   - id: SMOKE-001
@@ -889,8 +1088,41 @@ scenarios:
      roles: [visitor, mentee], why: "The onboarding_guest entry point carries a chosen time through sign-up.", smoke_prod: false, steps: []}
   - {id: INVITE-001, title: An invite link lands and is claimed, journey: invites, priority: P1,
      roles: [visitor, mentee], why: "GET /invites/{code} shows the landing; a qualified invite counts toward a level (decision 308).", smoke_prod: false, steps: []}
-  - {id: LINK-001, title: Email and push deep links return to the page after sign-in, journey: deep links, priority: P1,
-     roles: [mentee, mentor], why: "A link from an email or push opens the right page, through sign-in if needed.", smoke_prod: false, steps: []}
+  - id: LINK-001
+    title: Email and push deep links return to the page after sign-in
+    journey: deep links
+    priority: P1
+    roles: [mentee, mentor]
+    why: >-
+      A link from an email or push opens the right page, through sign-in if
+      needed: signed out, a members-only page answers 307 to /login?next=<page>
+      before anything is drawn (FE 565).
+    smoke_prod: false
+    steps:
+      - kind: ui
+        id: signed_out_redirect
+        viewer: anonymous
+        viewport: [390, 1440]
+        route: "/bookings?tab=past"
+        actions:
+          - {do: wait, target: {role: heading, name: Log in}}
+        expect:
+          - {url: "/login?next=%2Fbookings%3Ftab%3Dpast"}
+          - {visible: {role: textbox, name: Email}}
+        screenshot: true
+        a11y: true
+        human: "Signed out, open a Bookings link from an email. You get the log-in page, which keeps where you were going."
+      - kind: ui
+        id: signed_in_return
+        viewer: mentee_with_credits
+        viewport: [390]
+        route: "/login?next=%2Fbookings%3Ftab%3Dpast"
+        actions:
+          - {do: wait, target: {role: heading, name: Bookings}}
+        expect:
+          - {url: "/bookings?tab=past"}
+        screenshot: true
+        human: "Once signed in, the same link goes straight to the page."
   - {id: OAUTH-001, title: A mentor connects their calendar and video provider, journey: integrations, priority: P1,
      roles: [mentor], why: "GET /me/calendar/connect and its callback link a Google calendar; conferencing is set.", smoke_prod: false, steps: []}
   - {id: PWA-001, title: "The app installs, updates its service worker and shows offline state", journey: PWA, priority: P2,
@@ -899,14 +1131,86 @@ scenarios:
      roles: [mentee], why: "Opting in stores a subscription (POST /me/push-subscriptions).", smoke_prod: false, steps: []}
   - {id: TZ-001, title: Times show in the viewer's time zone, journey: time zones, priority: P1,
      roles: [mentee, mentor], why: "Slots are UTC instants; each side sees their own zone.", smoke_prod: false, steps: []}
-  - {id: LANDING-001, title: A mentor landing redirects to the right place, journey: mentor landing, priority: P2,
-     roles: [mentor], why: "Mentors land on their dashboard, not the mentee home.", smoke_prod: false, steps: []}
+  - id: LANDING-001
+    title: A mentor landing redirects to the right place
+    journey: mentor landing
+    priority: P2
+    roles: [mentor]
+    why: "Mentors land on their dashboard, not the mentee home (start URL /)."
+    smoke_prod: false
+    steps:
+      - kind: ui
+        id: approval_first
+        viewer: mentor_listed
+        viewport: [390]
+        route: /
+        actions:
+          - {do: wait, target: {role: heading, name: "/^You’re in, /"}}
+        expect:
+          - {url: /mentor-application}
+        screenshot: true
+        human: "Until they dismiss it, a newly approved mentor lands on the approval screen."
+      - {kind: api, id: seen, viewer: mentor_listed, method: POST, path: /api/v1/me/mentor-application/approved-seen,
+         expect: {status: 200}, human: "The mentor dismisses the approval screen."}
+      - kind: ui
+        id: mentor_lands
+        viewer: mentor_listed
+        viewport: [390, 1440]
+        route: /
+        actions:
+          - {do: wait, target: {role: heading, name: "/^Welcome back/"}}
+        expect:
+          - {url: /dashboard}
+        screenshot: true
+        a11y: true
+        human: "A listed mentor opens the app's start page and lands on their dashboard."
   - {id: FILE-001, title: Private files upload and open only for the right people, journey: private files, priority: P1,
      roles: [mentee, mentor], why: "Intake and message files are private to the pair.", smoke_prod: false, steps: []}
-  - {id: ERROR-001, title: Offline and server errors show a retry, journey: error states, priority: P1,
-     roles: [mentee], why: "A 5xx or lost connection is recoverable, not a blank page.", smoke_prod: false, steps: []}
-  - {id: CONSENT-002, title: The consent banner and its withdraw toggle, journey: analytics consent, priority: P1,
-     roles: [visitor, mentee], why: "The banner asks once; Settings can withdraw (decision 329).", smoke_prod: false, steps: []}
+  - id: ERROR-001
+    title: Offline and server errors show a retry
+    journey: error states
+    priority: P1
+    roles: [mentee]
+    why: "A 5xx or lost connection is recoverable, not a blank page; a 404 and a 500 share one page (FE 558)."
+    smoke_prod: false
+    steps:
+      - kind: ui
+        id: not_found
+        viewer: anonymous
+        viewport: [390, 1440]
+        route: /no-such-page-e2e
+        actions:
+          - {do: wait, target: {role: heading, name: "We can’t find that page"}}
+        expect:
+          - {text: Error 404}
+          - {visible: {role: link, name: Go to EduFurther}}
+        screenshot: true
+        a11y: true
+        human: "An unknown address shows the 404 page with a way back, never a log-in."
+  - id: CONSENT-002
+    title: The consent banner and its withdraw toggle
+    journey: analytics consent
+    priority: P1
+    roles: [visitor, mentee]
+    why: "The banner asks once; Settings can withdraw (decision 329)."
+    smoke_prod: false
+    flags: [NEXT_PUBLIC_ANALYTICS_ENABLED, NEXT_PUBLIC_CONSENT_BANNER_ENABLED]
+    steps:
+      - kind: ui
+        id: banner_decline
+        viewer: anonymous
+        viewport: [390, 1440]
+        flags: [NEXT_PUBLIC_ANALYTICS_ENABLED, NEXT_PUBLIC_CONSENT_BANNER_ENABLED]
+        consent: true
+        route: /explore
+        actions:
+          - {do: wait, target: {role: region, name: "Can we use analytics cookies?"}}
+          - {do: click, target: {role: button, name: Decline}}
+        expect:
+          - {hidden: {role: region, name: "Can we use analytics cookies?"}}
+        screenshot: true
+        a11y: true
+        human: "A visitor sees the banner once and declines; it goes away. (Withdrawing in Settings, and that no PostHog id is left on the device, are checked by hand.)"
   - {id: KEYBOARD-001, title: Booking with the keyboard only, journey: accessibility, priority: P1,
      roles: [mentee], why: "The BOOK-001 path works without a mouse.", smoke_prod: false, steps: []}
   - {id: LAYOUT-001, title: P0 screens at 390px, journey: layout, priority: P2,

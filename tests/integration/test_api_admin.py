@@ -87,15 +87,17 @@ async def add_education(engine: AsyncEngine, user_id: UUID, institution_id: UUID
         )
 
 
-async def add_mentor(engine: AsyncEngine, user_id: UUID, headline: str = "I help") -> None:
+async def add_mentor(
+    engine: AsyncEngine, user_id: UUID, headline: str = "I help", *, submitted: bool = True
+) -> None:
     async with engine.begin() as conn:
         await conn.execute(
             text(
                 # Submitted: only a submitted application is in the queue (B3).
                 "INSERT INTO mentor_profiles (user_id, headline, submitted_at) "
-                "VALUES (:u, :h, now())"
+                "VALUES (:u, :h, CASE WHEN :s THEN now() END)"
             ),
-            {"u": user_id, "h": headline},
+            {"u": user_id, "h": headline, "s": submitted},
         )
 
 
@@ -376,6 +378,68 @@ async def test_a_decision_on_no_application_tells_nobody(
 
     assert response.status_code == 404
     assert await queued_for(db_engine, nobody) == []
+
+
+@pytest.mark.parametrize("approve", ["true", "false"])
+async def test_a_draft_application_cannot_be_decided(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, approve: str
+) -> None:
+    """#660: an admin decides on what was submitted, never on a draft. Approving
+    one listed a mentor with no session type and no hours to book."""
+    auth_id = uuid4()
+    await make_user(db_engine, auth_id, f"admin-draft-{approve}@example.com", role="super_admin")
+    target = await make_user(db_engine, uuid4(), f"draft-{approve}@example.com")
+    await add_mentor(db_engine, target, submitted=False)
+
+    response = await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision",
+        params={"approve": approve},
+        json={},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["type"] == "/problems/mentor-application-not-submitted"
+    async with db_engine.connect() as conn:
+        state = await conn.execute(
+            text(
+                "SELECT approval_status::text, listing_status::text, "
+                "(SELECT count(*) FROM mentor_status_events WHERE mentor_user_id = :u) "
+                "FROM mentor_profiles WHERE user_id = :u"
+            ),
+            {"u": target},
+        )
+        assert state.one() == ("pending", "unlisted", 0)
+    assert await queued_for(db_engine, target) == []
+
+
+async def test_a_decided_mentor_with_no_submission_may_still_be_decided(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """The guard is for drafts. A mentor approved before it, submitted or not,
+    must stay reversible: that is how a draft approval is undone."""
+    auth_id = uuid4()
+    await make_user(db_engine, auth_id, "admin-undo@example.com", role="super_admin")
+    target = await make_user(db_engine, uuid4(), "approved-draft@example.com")
+    await add_mentor(db_engine, target, submitted=False)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO mentor_status_events (mentor_user_id, status_type) "
+                "VALUES (:u, 'approved'), (:u, 'listed')"
+            ),
+            {"u": target},
+        )
+
+    response = await api_client.post(
+        f"{ADMIN}/mentors/{target}/decision",
+        params={"approve": "false"},
+        json={},
+        headers=bearer(api_token(auth_id)),
+    )
+
+    assert response.status_code == 200, response.text
+    assert await queued_for(db_engine, target) == [("mentor_declined", {"reason": ""})]
 
 
 # --------------------------------------------------------------------------
