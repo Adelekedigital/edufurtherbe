@@ -114,6 +114,10 @@
         },
         "screenshot": {"type": "boolean"},
         "a11y": {"type": "boolean"},
+        "consent": {
+          "type": "boolean",
+          "description": "The step is about the analytics consent banner. Otherwise the runner hides the banner when it covers a target, since answering it writes consent to the account."
+        },
         "after": {"type": "string"},
         "human": {"type": "string", "minLength": 1}
       }

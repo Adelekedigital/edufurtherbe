@@ -56,3 +56,11 @@ def test_a_demo_mentor_stays_within_the_session_type_limit() -> None:
     it must never give a mentor more than the API would let them hold."""
     assert MAX_TYPES <= DEFAULT_SESSION_TYPE_LIMIT
     assert len(session_types_for(tuple(CATALOGUE))) <= DEFAULT_SESSION_TYPE_LIMIT
+
+
+def test_demo_mentors_work_monday_to_friday() -> None:
+    """`day_of_week` 0 is Sunday, so weekdays are 1 to 5. The old (0..4) made
+    every demo and E2E mentor bookable Sunday to Thursday (E2E run, 2026-11-12)."""
+    from app.infra.db.demo_seed import _e2e_mentor
+
+    assert _e2e_mentor("mentor_listed", "r1").weekdays == (1, 2, 3, 4, 5)

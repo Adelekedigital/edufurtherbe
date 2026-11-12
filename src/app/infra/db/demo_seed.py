@@ -124,7 +124,8 @@ class DemoMentor:
     ratings: tuple[int, ...] = ()
     #: False blocks the whole booking horizon, so the card reads `none`.
     open: bool = True
-    weekdays: tuple[int, ...] = field(default=(0, 1, 2, 3, 4))
+    #: `availability_rules.day_of_week`, where 0 is Sunday: Monday to Friday.
+    weekdays: tuple[int, ...] = field(default=(1, 2, 3, 4, 5))
     #: What they offer, first one first. Empty keeps the old single
     #: `LEGACY_SESSION_TYPE`, which is what the tests' plain mentors use.
     session_types: tuple[DemoSessionType, ...] = ()
