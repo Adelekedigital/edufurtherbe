@@ -38,7 +38,8 @@ answer is a new record that supersedes the old one, not an edit.
 | [0028](0028-qstash-owns-runtime-scheduling.md) | QStash owns application-runtime scheduling | Accepted |
 | [0029](0029-store-each-mentors-next-free-time.md) | Store each mentor's next free time, and poll free/busy to keep it | Accepted |
 | [0030](0030-structured-logs-and-sentry.md) | Structured logs on stdout, and Sentry wherever a DSN is set | Accepted |
-| [0031](0031-paystack-first-for-payments-payouts-by-hand-abroad.md) | Payments v1: Paystack first, the platform holds a paid session's money until it happens, payouts abroad by hand | Proposed |
+| [0031](0031-paystack-first-for-payments-payouts-by-hand-abroad.md) | Payments v1: Paystack first, the provider holds a paid session's money until it happens, payouts abroad by hand | Proposed |
+| [0032](0032-ai-credits-are-a-separate-wallet.md) | AI credits are a separate wallet; free tools meter anonymous use; invites earn AI credits, and session credits unlock on attendance | Proposed |
 
 ## Conventions
 

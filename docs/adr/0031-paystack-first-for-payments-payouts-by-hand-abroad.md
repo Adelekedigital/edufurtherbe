@@ -1,4 +1,4 @@
-# 31. Payments v1: Paystack first, the platform holds a paid session's money until it happens, payouts abroad by hand
+# 31. Payments v1: Paystack first, the provider holds a paid session's money until it happens, payouts abroad by hand
 
 Date: 2026-11-12 (money flow, fee and refunds added 2026-11-13, while still
 Proposed)
@@ -146,8 +146,14 @@ price; ADPList's paid Advance sessions take a flat 10%.
    rewrites nothing. A paid
    booking is charged when it is requested, because bank transfer and USSD
    cannot be authorised and captured later; the slot is held for a short
-   payment window and released if the charge does not complete. Free sessions
-   and credits are unchanged. The payer is the mentee's own account in v1;
+   payment window and released if the charge does not complete. **Paid and
+   free sessions have separate booking windows, both in configuration (owner,
+   2026-11-13):** free sessions keep today's 56 days; paid sessions default to
+   **14 days**, because no-shows rise past 14 days (62% at 14+ days in the
+   legacy app) and the money is held until the session (point 7). The paid
+   window can never exceed the longest hold the provider allows. Free sessions
+   and credits are otherwise unchanged; AI credit packs, also sold on this
+   rail, are ADR 0032. The payer is the mentee's own account in v1;
    paying for someone else (a parent, a relative abroad) is a later step.
 7. **The money is held until the session happens, and the provider must
    support the hold (owner, 2026-11-13).** Without a provider-native hold the
@@ -403,6 +409,14 @@ Neutral:
 - **A full charge on a late cancellation, or a full refund.** Simpler. Lost to
   the split: a full charge is harsh where price decides, a full refund invites
   cancelling at the last minute.
+- **The documented alternative for a late cancellation: the platform fee
+  only** (owner asked for it to be recorded, 2026-11-13). The mentee is
+  refunded the price less the platform fee, and the mentor receives nothing.
+  It is the kindest to mentees and the simplest to explain, and it covers the
+  provider's fee. Not chosen as the default because the mentor loses a slot
+  that is hard to refill at short notice and is paid nothing for it. Both are
+  kept in configuration as the late-cancel mode, `split` (the default) or
+  `fee_only`, so switching needs no code.
 - **The fee on top of the mentor's price** (MentorCruise's shape). The mentor's
   number is what they receive, which mentors like. It lost because the mentee
   then pays more than the price the mentor chose, for an audience where price
