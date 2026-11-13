@@ -93,7 +93,33 @@ window.
    level 1 who has already attended moves to 3 when this ships. Grandfathered
    migrated users stay at 3. "Attending" keeps decision 295's meaning (attended,
    not completed), because the owner chose it to avoid penalising a mentee whose
-   mentor did not come; the owner confirms this when accepting the record.
+   mentor did not come (owner confirmed, 2026-11-13).
+
+10. **The numbers (owner, 2026-11-13), all in configuration:**
+    - anonymous use: **3 per tool per day**;
+    - sign-up grant: **20 AI credits**;
+    - attending a session: **5**;
+    - invites: the **first** invited friend who attends earns **5**; each
+      **later** one earns **1** (the owner offered 0.5 or 1; 1 keeps credits
+      whole numbers, as the ledger counts them);
+    - earned balance cap: **50**.
+11. **Configuration is one structured setting per area, not one variable per
+    number** (owner: "a json or list set ... gives room for future addition").
+    For example `AI_CREDIT_EARN={"session_attended": 5,
+    "first_invite_attended": 5, "later_invite_attended": 1}`,
+    `AI_CREDIT_LIMITS={"scholarship_finder": {"anonymous_per_day": 3}, ...}`
+    and `AI_CREDIT_POLICY={"signup_grant": 20, "earned_expiry": "never",
+    "earned_cap": 50, "daily_spend_ceiling_ngn": ...}`. Each is parsed into a
+    typed model in `core/config.py`, the way `EMAIL_TEMPLATES` and
+    `QSTASH_SCHEDULE_OVERRIDES` already are, so an unknown key or a negative
+    amount fails at startup rather than at the first grant. A new earning
+    action is a new key and its code, not a new variable.
+12. **The reward is told, not just granted** (owner): the message says what
+    showing up gets this person ("Attend Thursday's session to unlock 3 free
+    sessions a month and earn 5 AI credits"), not a generic "earn rewards".
+    It goes in the session reminders and confirmations on the channels the
+    person has (in-app, push, email, and WhatsApp once the WhatsApp reminders
+    theme ships), and once more when the credits land.
 
 ## Consequences
 
@@ -156,5 +182,6 @@ Bad:
 - The monetisation strategy doc and planner (claude.ai artifacts
   CPufFkRoRjA9EnsB9zQE7C and CN2TPMkhUEtNvtEGEdxMx6); the roadmap theme
   "AI credits and free-tool limits".
-- Open for the owner: each tool's anonymous limit, the sign-up grant, earning
-  amounts and caps, the earned-balance cap, credit pack prices.
+- Open for the owner: credit pack prices (with ADR 0031's pricing), each
+  tool's credit cost once its real AI cost is measured, and the daily spend
+  ceiling.
