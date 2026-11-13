@@ -66,8 +66,22 @@ sponsors, never from the free sessions. The owner's answers:
   reset (decision 308).
 - **University commissions: yes, later, as a partner, not as an agency.** Out of
   scope here; it gets its own record when it starts.
-- The platform fee was asked to be clarified; point 8 states the shape, and the
-  number is the owner's.
+- **The fee (second answer, 2026-11-13): 15% works for now, but the owner wants
+  a regressive commission**, falling as a mentor's monthly sessions rise, never
+  below 5%, with flat or regressive chosen in config. Point 8.
+- **Refunds follow the credit pattern, with one shift (owner):** a mentee who
+  misses a paid session the mentor attended gets one more try within a
+  configured window (7 or 14 days). Point 9.
+- **The entity is Nigerian (owner):** the business is registered in Nigeria and
+  goes live on Paystack Nigeria.
+- **Tax is to be researched** for the rail, the countries served and the
+  country of registration. The starting point is under Consequences.
+
+Sliding commissions are an established pattern, not a new one: Preply charges
+tutors 33% falling to 18% by lifetime hours taught; Upwork charged 20%, 10% and
+5% by billings per client until it moved to a variable fee; ClassGap tiers by
+classes taught in the last year. **Resetting it every month is the less common
+part**: these platforms count lifetime or a trailing year.
 
 Comparable marketplaces, from their own help pages read 2026-11-13:
 MentorCruise adds a fee of "along the lines of 20%" on top of the mentor's
@@ -80,11 +94,17 @@ price; ADPList's paid Advance sessions take a flat 10%.
    offers local methods (card, bank transfer and USSD in Nigeria; mobile money
    in Ghana and Kenya), next-day naira settlement, and Transfers to Nigerian
    banks. Being Stripe's African arm keeps a later Stripe step close.
-2. **Payouts abroad start by hand**, through Wise, exactly as decision 10
-   allows, recorded in the ledger as paid with the transfer's reference. This
-   lasts until volume makes the manual step the bottleneck. At that point the
-   candidate is Stripe Global Payouts, or Flutterwave if more African corridors
-   matter. That choice gets its own record.
+2. **v1 pays out to Nigerian bank accounts only, through Paystack Transfers;
+   payouts abroad start by hand once a rail is confirmed.** The entity is
+   Nigerian, and Wise appears not to open business accounts for companies with
+   a Nigerian address (competitor and third-party sources, 2026-11-13;
+   unconfirmed with Wise). So the foreign rail is the owner's to confirm before
+   any mentor abroad is paid: Wise if it accepts the entity, otherwise a
+   domiciliary account's SWIFT transfer or a provider such as Flutterwave or
+   Airwallex. Until then a mentor abroad can sell paid sessions with a Nigerian
+   account, or keep offering free ones. Manual payouts are recorded in the
+   ledger with the transfer's reference (decision 10) until volume makes the
+   manual step the bottleneck; the automated rail gets its own record.
 3. **Flutterwave is the named second provider**, added only when a market
    Paystack does not serve (Tanzania mobile money first) has enough paying users
    to justify a second integration. It is not integrated now.
@@ -100,8 +120,9 @@ price; ADPList's paid Advance sessions take a flat 10%.
    Daily webhook today.
 6. **What v1 sells is a mentor's paid session type, paid at booking.** A session
    type gains a price (integer minor units and a currency, decision 10), set by
-   the mentor (decision 9), in naira first. The price and the fee rate are
-   snapshotted onto the payment, so a later change rewrites nothing. A paid
+   the mentor (decision 9), in naira first. The price is snapshotted onto the
+   payment and the fee rate onto the earning (point 8), so a later change
+   rewrites nothing. A paid
    booking is charged when it is requested, because bank transfer and USSD
    cannot be authorised and captured later; the slot is held for a short
    payment window and released if the charge does not complete. Free sessions
@@ -114,22 +135,54 @@ price; ADPList's paid Advance sessions take a flat 10%.
    earning to the mentor's ledger. It becomes **payable** only when attendance
    settles with the mentor present, and payouts are batched by hand from payable
    earnings (decision 10; point 2 for mentors abroad).
-8. **The platform fee is a percentage taken from the price the mentee sees.**
-   The mentor sets the one all-in price the mentee pays and is shown what they
-   will receive ("you receive NGN 17,000"). The platform pays the provider's fee
-   from its share. The rate is a setting next to the credit ladder, snapshotted
-   on each payment. **Its value is the owner's**; this record proposes 15%,
-   between ADPList's 10% and MentorCruise's about 20%. Worked example at 15% on
-   a NGN 20,000 price: the mentee pays NGN 20,000, the mentor receives
-   NGN 17,000, Paystack takes about NGN 400 (1.5% + NGN 100), and the platform
-   keeps about NGN 2,600.
-9. **Refunds follow the credit refund rules, so a mentee learns one policy.**
-   Full refund on a decline, an expiry, a mentor cancellation, a mentee
-   cancellation 12 hours or more ahead, or any session the mentor did not
-   attend. A mentee cancellation under 12 hours, or a mentee no-show with the
-   mentor present, pays the mentor. Each refund reverses the pending earning in
-   the ledger; nothing is deleted. **The policy is customer-facing and needs the
-   owner's confirmation before it ships.**
+8. **The platform fee is a percentage taken from the price the mentee sees, set
+   by a configured schedule.** The mentor sets the one all-in price the mentee
+   pays and is shown what they will receive ("you receive NGN 17,000"); the
+   mentee's price never depends on the tier. The platform pays the provider's
+   fee from its share.
+   - **The schedule is a list of tiers** (from this many sessions, this rate),
+     set in configuration. **Flat is a schedule with one tier**, so flat or
+     regressive is a config change, not a code path. Launch value: one tier at
+     15% (owner). The floor is 5% (owner); configuration refuses a tier below
+     it.
+   - **What counts:** the mentor's paid sessions that settled with the mentor
+     present, in the **calendar month** (owner's "in a month"), counted when
+     each session settles. Booked or cancelled sessions do not count, because
+     they can be inflated and undone.
+   - **Each session's rate is its own tier, never back-dated** (the 10th
+     session in a month is charged the 10th's rate; the first nine keep
+     theirs). Back-dating would rewrite earnings already shown to the mentor
+     and complicate payouts.
+   - **The rate is fixed when the earning becomes payable** (point 7), and the
+     tier, rate and schedule version are recorded on that ledger row.
+   - **A minimum fee in naira** (a setting) stops a low price at a low tier from
+     costing the platform money once the provider's fee and refunds are paid.
+   - Illustrative regressive schedule, for the owner to set: sessions 1-4 at
+     15%, 5-9 at 12%, 10-19 at 9%, 20 and up at 5%.
+   Worked example at 15% on a NGN 20,000 price: the mentee pays NGN 20,000, the
+   mentor receives NGN 17,000, Paystack takes about NGN 400 (1.5% + NGN 100),
+   and the platform keeps about NGN 2,600. At 5% the platform keeps about
+   NGN 600.
+9. **Refunds follow the credit refund rules, so a mentee learns one policy,
+   with one shift for money (owner).** Full refund on a decline, an expiry, a
+   mentor cancellation, a mentee cancellation 12 hours or more ahead, or any
+   session the mentor did not attend. **A mentee who misses a session the mentor
+   attended gets one more try**:
+   - one rebooking of the same paid session type with the same mentor, at no
+     charge, booked within a configured window (default 14 days, settable to 7)
+     from the missed session;
+   - **one try per payment**: missing the rebooked session as well, or not
+     booking it within the window, ends it;
+   - the mentor's earning stays pending meanwhile and becomes payable **once**,
+     when the try is attended, missed, or not booked in time. So the mentor is
+     paid once for the session that was paid for, and gives at most one extra
+     slot;
+   - if the mentor declines, cancels, lets the rebooking expire or misses it,
+     the normal rules apply and the mentee is refunded in full.
+   A mentee cancellation under 12 hours pays the mentor and gets no retry; the
+   owner's shift names a missed session only. Each refund reverses the pending
+   earning in the ledger; nothing is deleted. **The policy is customer-facing:
+   it ships as written here only once the owner accepts this record.**
 10. **Sponsors stay off the payments rail in v1.** A sponsored cohort is invoiced
     outside the platform and delivered through support's credit grants (#224),
     reported from admin analytics. An `invoices` table waits until sponsor
@@ -147,18 +200,41 @@ Good:
 
 Bad:
 
-- **It needs a Nigerian registered business** (or one in another Paystack
-  country) to go live. That is the owner's to confirm, and it may be the
-  longest lead item.
+- **The entity is Nigerian (owner), so Paystack Nigeria can onboard it**; the
+  merchant onboarding itself is still the longest lead item.
 - Payers outside Paystack's countries can pay only by international card, at
   about 3.9%, and some cards will be refused.
-- Manual payouts abroad cost the operator time and carry Wise's fees and
-  currency spread. They don't scale past a few mentors a month.
+- **Mentors abroad cannot be paid until a foreign rail is confirmed** (point 2),
+  and manual payouts abroad cost the operator time and carry fees and currency
+  spread. They don't scale past a few mentors a month.
 - Pricing in naira against payouts in dollars or pounds puts currency risk on
   the platform between collection and payout. That is a pricing question, not
   a code one.
-- Tax (VAT on fees in Nigeria; withholding or 1099-type obligations on payouts)
-  is not settled here.
+- **A monthly tier rewards bunching**: a mentor near a boundary late in the
+  month gains by fitting sessions in before the 1st, and every mentor starts
+  the month at the top rate. A trailing 30 days would smooth both; it is one
+  setting away if the calendar month proves noisy.
+- **The one-more-try rule costs mentors a slot** when a mentee misses, and it
+  delays their payout by up to the window. The 44 mentees behind 56% of
+  mentee-absent no-shows in the old data are why it is one try per payment.
+- **Tax is not settled here; it needs a Nigerian accountant.** The rules below
+  are a starting point from accounting-firm summaries, read 2026-11-13, and the
+  sources disagree on thresholds:
+  - **VAT at 7.5%** under the Nigeria Tax Act 2025. The open question is
+    whether the platform charges it on its **fee only** (acting as the mentor's
+    agent, the usual marketplace position) or on the **whole price** (acting as
+    the seller). That choice decides the receipt's wording and the ledger's
+    lines, so it is needed before the build. Registration thresholds are quoted
+    as NGN 25m or NGN 50m of turnover.
+  - **Company income tax**: small companies pay 0%, with the turnover limit
+    quoted as NGN 50m or NGN 100m.
+  - **Withholding on payouts**: about 2% for resident service providers and
+    5% for non-resident ones under the 2024 regulations (higher for listed
+    professional fees). Small suppliers with a tax id are exempt under about
+    NGN 2m a month. So the payout ledger must be able to hold a withholding
+    line per payout, and Nigerian mentors may need to give a tax id.
+  - Every rate and threshold is configuration, never code, so a ruling changes
+    a setting.
 - **Holding money for mentors until the session (point 7) may be regulated**
   (escrow or marketplace rules for the entity's country). That is a legal check
   for the owner before go-live, alongside the entity itself.
@@ -186,6 +262,13 @@ Neutral:
   reverses it with a new row rather than an edit.
 - A test proves that changing a session type's price or the fee setting leaves
   existing payments' snapshotted amounts unchanged.
+- Fee tests prove a one-tier schedule charges every session the same, that a
+  regressive schedule charges the Nth settled session of the month the Nth
+  tier without back-dating, that a tier below 5% is refused at startup, and
+  that the naira minimum applies.
+- Retry tests prove that a mentee no-show with the mentor present grants
+  exactly one free rebooking inside the window, that the earning becomes
+  payable once, and that a mentor decline of the rebooking refunds the mentee.
 - **Not checked by anything:** that the fees above are still current; that manual
   payouts are actually recorded in the ledger. The second needs an admin flow,
   and until one exists it is a process. Nothing checks that the legal and tax
@@ -219,6 +302,12 @@ Neutral:
   number is what they receive, which mentors like. It lost because the mentee
   then pays more than the price the mentor chose, for an audience where price
   decides; point 8 shows one price and tells the mentor their share instead.
+- **Tiers by lifetime or a trailing year** (Preply, ClassGap). They reward
+  long service and avoid a monthly reset. Not chosen because the owner asked
+  for a monthly count; a trailing window remains one setting away.
+- **A back-dated monthly rebate** (the whole month re-rated at the tier
+  reached). It is the most generous to mentors. It lost because it rewrites
+  earnings already shown and paid, which point 7's ledger does not allow.
 - **Selling credits.** It reuses the credit ledger. It lost as #473 found:
   bought credits fight the monthly free reset, and a mentee who buys and does
   not use them is charged for credits they would have been given.
@@ -236,6 +325,11 @@ Neutral:
   (help.mentorcruise.com/articles/what-fees-does-mentorcruise-take); ADPList
   Advance fees (intercom.help/adplist-community/en/articles/8716947).
 - Issues #473 (paid sessions against credits) and #224 (support credit grants).
+- Read 2026-11-13, to be re-verified: Preply commission model
+  (help.preply.com/articles/4171383); Upwork fee history (golance.com,
+  hubstaff.com); Nigeria Tax Act 2025 summaries (PwC Nigeria sectoral analysis,
+  techpoint.africa); Withholding Regulations 2024 (EY, PwC, KPMG Nigeria);
+  Wise Business availability (slash.com, worldfirst.com, both competitors).
 - Revisit when a non-Paystack market has enough paying users, when manual
   payouts exceed what one operator can do in a day a month, or when the entity's
   country changes.
