@@ -71,7 +71,9 @@ sponsors, never from the free sessions. The owner's answers:
   below 5%, with flat or regressive chosen in config. Point 8.
 - **Refunds follow the credit pattern, with one shift (owner):** a mentee who
   misses a paid session the mentor attended gets one more try within a
-  configured window (7 or 14 days). Point 9.
+  configured window (7 or 14 days). Point 9. Later the same day: when both
+  are absent the platform keeps a small fee and refunds the rest (the owner's
+  idea), and the fee keeps three modes: flat, lifetime (Preply) and monthly.
 - **The entity is Nigerian (owner):** the business is registered in Nigeria and
   goes live on Paystack Nigeria.
 - **Tax is to be researched** for the rail, the countries served and the
@@ -140,49 +142,75 @@ price; ADPList's paid Advance sessions take a flat 10%.
    pays and is shown what they will receive ("you receive NGN 17,000"); the
    mentee's price never depends on the tier. The platform pays the provider's
    fee from its share.
-   - **The schedule is a list of tiers** (from this many sessions, this rate),
-     set in configuration. **Flat is a schedule with one tier**, so flat or
-     regressive is a config change, not a code path. Launch value: one tier at
-     15% (owner). The floor is 5% (owner); configuration refuses a tier below
-     it.
-   - **What counts:** the mentor's paid sessions that settled with the mentor
-     present, in the **calendar month** (owner's "in a month"), counted when
-     each session settles. Booked or cancelled sessions do not count, because
-     they can be inflated and undone.
+   - **Three modes, chosen in configuration, each with its own tier list**
+     (from this many sessions, this rate), so switching is a setting, not a
+     code path (owner, 2026-11-13: keep all three):
+     - `flat`: one rate for every session. **The launch mode, at 15%** (owner).
+     - `lifetime` (Preply's model, the owner's preference): the mentor's paid
+       sessions settled with the mentor present since payments began. It
+       rewards long service and never resets.
+     - `monthly`: the same count within the calendar month, reset on the 1st.
+   - **The floor is 5% in every mode** (owner); configuration refuses a tier
+     below it at startup.
+   - **What counts:** only paid sessions that settled with the mentor present,
+     counted when each settles. Booked or cancelled sessions do not count,
+     because they can be inflated and undone. Free sessions do not count.
    - **Each session's rate is its own tier, never back-dated** (the 10th
-     session in a month is charged the 10th's rate; the first nine keep
-     theirs). Back-dating would rewrite earnings already shown to the mentor
-     and complicate payouts.
+     counted session is charged the 10th's rate; the first nine keep theirs).
+     Back-dating would rewrite earnings already shown to the mentor and
+     complicate payouts.
    - **The rate is fixed when the earning becomes payable** (point 7), and the
-     tier, rate and schedule version are recorded on that ledger row.
+     mode, tier, rate and schedule version are recorded on that ledger row, so
+     a mode switch rewrites nothing already earned.
    - **A minimum fee in naira** (a setting) stops a low price at a low tier from
      costing the platform money once the provider's fee and refunds are paid.
-   - Illustrative regressive schedule, for the owner to set: sessions 1-4 at
-     15%, 5-9 at 12%, 10-19 at 9%, 20 and up at 5%.
+   - Illustrative tiers, for the owner to set: `lifetime` 1-10 at 15%, 11-50 at
+     12%, 51-200 at 9%, over 200 at 5%; `monthly` 1-4 at 15%, 5-9 at 12%, 10-19
+     at 9%, 20 and up at 5%.
    Worked example at 15% on a NGN 20,000 price: the mentee pays NGN 20,000, the
    mentor receives NGN 17,000, Paystack takes about NGN 400 (1.5% + NGN 100),
    and the platform keeps about NGN 2,600. At 5% the platform keeps about
    NGN 600.
 9. **Refunds follow the credit refund rules, so a mentee learns one policy,
-   with one shift for money (owner).** Full refund on a decline, an expiry, a
-   mentor cancellation, a mentee cancellation 12 hours or more ahead, or any
-   session the mentor did not attend. **A mentee who misses a session the mentor
-   attended gets one more try**:
-   - one rebooking of the same paid session type with the same mentor, at no
-     charge, booked within a configured window (default 14 days, settable to 7)
-     from the missed session;
-   - **one try per payment**: missing the rebooked session as well, or not
-     booking it within the window, ends it;
-   - the mentor's earning stays pending meanwhile and becomes payable **once**,
-     when the try is attended, missed, or not booked in time. So the mentor is
-     paid once for the session that was paid for, and gives at most one extra
-     slot;
-   - if the mentor declines, cancels, lets the rebooking expire or misses it,
-     the normal rules apply and the mentee is refunded in full.
-   A mentee cancellation under 12 hours pays the mentor and gets no retry; the
-   owner's shift names a missed session only. Each refund reverses the pending
-   earning in the ledger; nothing is deleted. **The policy is customer-facing:
-   it ships as written here only once the owner accepts this record.**
+   with two shifts for money (owner).** Before the session: full refund on a
+   decline, an expiry, a mentor cancellation, or a mentee cancellation 12 hours
+   or more ahead; a mentee cancellation under 12 hours pays the mentor, with no
+   retry. After it, by who attended:
+
+   | Session | Mentor | Mentee | Outcome |
+   |---|---|---|---|
+   | Booked | present | present | Mentor paid |
+   | Booked | absent | present | Full refund to the mentee |
+   | Booked | present | absent | **One more try** (below); mentor paid once it ends |
+   | Booked | absent | absent | **Platform keeps a small fee, the rest refunded**; mentor unpaid; no retry |
+   | Retry | present | present | Mentor paid, once |
+   | Retry | present | absent | Mentor paid; it ends |
+   | Retry | absent | present | **Full refund to the mentee**; mentor unpaid for either slot |
+   | Retry | absent | absent | Same as both absent: small fee kept, the rest refunded |
+   | Retry not booked in the window | | | Mentor paid |
+
+   - **One more try (owner):** one rebooking of the same paid session type with
+     the same mentor, at no charge, within a configured window (default 14
+     days, settable to 7) from the missed session. One try per payment. The
+     mentor's earning stays pending meanwhile and becomes payable at most once.
+     A mentor who declines, cancels or lets the rebooking expire is treated as
+     absent, and the mentee is refunded in full.
+   - **A mentor absent from the retry forfeits the payment**, even after
+     attending the first slot. The payment buys one session that happens; the
+     mentor promised the retry by accepting it, and a mentee who turned up
+     should not pay for a session that never happened. This keeps "mentor
+     absent means refund" true in every row.
+   - **Both absent (owner's idea, adopted):** the platform keeps a
+     **no-show fee** (a setting: a percentage of the price, never less than the
+     naira minimum fee) and refunds the rest; the mentor is unpaid. Neither side
+     turned up, so neither is made whole, and the fee covers the provider's
+     charge, which a refund does not return. Both were absent from 70 of the 370
+     no-shows in the old data, so this case is common. **The fee must be shown
+     before payment**, with the policy, to be fair and to meet consumer
+     protection rules (Nigeria's FCCPA 2018; to confirm with the lawyer).
+   Each refund reverses the pending earning in the ledger; nothing is deleted.
+   **The policy is customer-facing: it ships as written here only once the
+   owner accepts this record.**
 10. **Sponsors stay off the payments rail in v1.** A sponsored cohort is invoiced
     outside the platform and delivered through support's credit grants (#224),
     reported from admin analytics. An `invoices` table waits until sponsor
@@ -210,10 +238,10 @@ Bad:
 - Pricing in naira against payouts in dollars or pounds puts currency risk on
   the platform between collection and payout. That is a pricing question, not
   a code one.
-- **A monthly tier rewards bunching**: a mentor near a boundary late in the
-  month gains by fitting sessions in before the 1st, and every mentor starts
-  the month at the top rate. A trailing 30 days would smooth both; it is one
-  setting away if the calendar month proves noisy.
+- **`monthly` rewards bunching**: a mentor near a boundary late in the month
+  gains by fitting sessions in before the 1st, and every mentor starts the
+  month at the top rate. **`lifetime` is permanent**: a busy mentor reaches the
+  5% floor for good, so the floor and the naira minimum carry the margin.
 - **The one-more-try rule costs mentors a slot** when a mentee misses, and it
   delays their payout by up to the window. The 44 mentees behind 56% of
   mentee-absent no-shows in the old data are why it is one try per payment.
@@ -262,13 +290,14 @@ Neutral:
   reverses it with a new row rather than an edit.
 - A test proves that changing a session type's price or the fee setting leaves
   existing payments' snapshotted amounts unchanged.
-- Fee tests prove a one-tier schedule charges every session the same, that a
-  regressive schedule charges the Nth settled session of the month the Nth
-  tier without back-dating, that a tier below 5% is refused at startup, and
-  that the naira minimum applies.
-- Retry tests prove that a mentee no-show with the mentor present grants
-  exactly one free rebooking inside the window, that the earning becomes
-  payable once, and that a mentor decline of the rebooking refunds the mentee.
+- Fee tests prove `flat` charges every session the same, that `lifetime` and
+  `monthly` charge the Nth counted session the Nth tier without back-dating
+  (and `monthly` restarts on the 1st), that a tier below 5% is refused at
+  startup, and that the naira minimum applies.
+- A test per row of point 9's table proves its outcome, including that the
+  earning becomes payable at most once, that a mentor absent from the retry
+  refunds the mentee in full, and that both absent keeps exactly the no-show
+  fee.
 - **Not checked by anything:** that the fees above are still current; that manual
   payouts are actually recorded in the ledger. The second needs an admin flow,
   and until one exists it is a process. Nothing checks that the legal and tax
@@ -302,9 +331,12 @@ Neutral:
   number is what they receive, which mentors like. It lost because the mentee
   then pays more than the price the mentor chose, for an audience where price
   decides; point 8 shows one price and tells the mentor their share instead.
-- **Tiers by lifetime or a trailing year** (Preply, ClassGap). They reward
-  long service and avoid a monthly reset. Not chosen because the owner asked
-  for a monthly count; a trailing window remains one setting away.
+- **Only one fee mode.** Simpler to build and explain. Not chosen: the owner
+  wants flat, lifetime and monthly all available, and one mode with a tier list
+  is the same code as three.
+- **A trailing year as a fourth mode** (ClassGap). It rewards recent service
+  without a hard monthly reset. Not built now; it is one more counting window
+  if `lifetime` makes the floor too permanent.
 - **A back-dated monthly rebate** (the whole month re-rated at the tier
   reached). It is the most generous to mentors. It lost because it rewrites
   earnings already shown and paid, which point 7's ledger does not allow.
