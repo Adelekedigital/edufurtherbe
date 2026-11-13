@@ -1,11 +1,14 @@
-# 31. Paystack first for payments; payouts abroad by hand, behind one port
+# 31. Payments v1: Paystack first, the platform holds a paid session's money until it happens, payouts abroad by hand
 
-Date: 2026-11-12
+Date: 2026-11-12 (money flow, fee and refunds added 2026-11-13, while still
+Proposed)
 
 ## Status
 
 Proposed. It blocks payments work (decision 11 asked for this record before any
-starts) and commits money, so it waits for the owner.
+starts) and commits money, so it waits for the owner. Points 6 to 10 were added
+on 2026-11-13 after the owner's answers on monetisation, so the provider and the
+money flow are reviewed together.
 
 ## Context
 
@@ -47,6 +50,29 @@ when signing:
 - **Wise and Payoneer**: payouts only. They suit paying a handful of mentors
   abroad by hand.
 
+**What is sold, and what the owner settled on 2026-11-13.** The monetisation
+review (production export, aggregates only) found that mentees mostly cannot
+pay much: the naira moved from about NGN 460 to about NGN 1,600 per dollar in
+2023-24, and the free offer is what works (NPS +85; 74% of mentees who ever
+booked did so within a day of signing up). So money comes from mentees or their
+parents paying for a **mentor's paid session type**, a discrete high-stakes
+service such as a mock visa interview or a statement-of-purpose review, and from
+sponsors, never from the free sessions. The owner's answers:
+
+- **Price comes back on session types after payments are integrated**, not
+  before. Session Types P2 declined it while nothing could collect it.
+- **Credits stay free-only** (the lean recorded on #473): a paid session is paid
+  directly, credits are never bought, and payments never touch the monthly
+  reset (decision 308).
+- **University commissions: yes, later, as a partner, not as an agency.** Out of
+  scope here; it gets its own record when it starts.
+- The platform fee was asked to be clarified; point 8 states the shape, and the
+  number is the owner's.
+
+Comparable marketplaces, from their own help pages read 2026-11-13:
+MentorCruise adds a fee of "along the lines of 20%" on top of the mentor's
+price; ADPList's paid Advance sessions take a flat 10%.
+
 ## Decision
 
 1. **Paystack is the first provider, for collections and for Nigerian payouts.**
@@ -72,6 +98,42 @@ when signing:
    verify endpoint before the ledger moves. Each event is applied once, keyed on
    the provider's event or transaction reference. The same rule holds for the
    Daily webhook today.
+6. **What v1 sells is a mentor's paid session type, paid at booking.** A session
+   type gains a price (integer minor units and a currency, decision 10), set by
+   the mentor (decision 9), in naira first. The price and the fee rate are
+   snapshotted onto the payment, so a later change rewrites nothing. A paid
+   booking is charged when it is requested, because bank transfer and USSD
+   cannot be authorised and captured later; the slot is held for a short
+   payment window and released if the charge does not complete. Free sessions
+   and credits are unchanged. The payer is the mentee's own account in v1;
+   paying for someone else (a parent, a relative abroad) is a later step.
+7. **The platform collects the whole amount and holds it until the session
+   happens; it does not split at the charge.** Paystack's split payments settle
+   the mentor's share at once, and then a decline, an expiry or a mentor no-show
+   could not be refunded from it. So a captured payment writes a **pending**
+   earning to the mentor's ledger. It becomes **payable** only when attendance
+   settles with the mentor present, and payouts are batched by hand from payable
+   earnings (decision 10; point 2 for mentors abroad).
+8. **The platform fee is a percentage taken from the price the mentee sees.**
+   The mentor sets the one all-in price the mentee pays and is shown what they
+   will receive ("you receive NGN 17,000"). The platform pays the provider's fee
+   from its share. The rate is a setting next to the credit ladder, snapshotted
+   on each payment. **Its value is the owner's**; this record proposes 15%,
+   between ADPList's 10% and MentorCruise's about 20%. Worked example at 15% on
+   a NGN 20,000 price: the mentee pays NGN 20,000, the mentor receives
+   NGN 17,000, Paystack takes about NGN 400 (1.5% + NGN 100), and the platform
+   keeps about NGN 2,600.
+9. **Refunds follow the credit refund rules, so a mentee learns one policy.**
+   Full refund on a decline, an expiry, a mentor cancellation, a mentee
+   cancellation 12 hours or more ahead, or any session the mentor did not
+   attend. A mentee cancellation under 12 hours, or a mentee no-show with the
+   mentor present, pays the mentor. Each refund reverses the pending earning in
+   the ledger; nothing is deleted. **The policy is customer-facing and needs the
+   owner's confirmation before it ships.**
+10. **Sponsors stay off the payments rail in v1.** A sponsored cohort is invoiced
+    outside the platform and delivered through support's credit grants (#224),
+    reported from admin analytics. An `invoices` table waits until sponsor
+    volume makes the manual step the bottleneck.
 
 ## Consequences
 
@@ -97,12 +159,21 @@ Bad:
   a code one.
 - Tax (VAT on fees in Nigeria; withholding or 1099-type obligations on payouts)
   is not settled here.
+- **Holding money for mentors until the session (point 7) may be regulated**
+  (escrow or marketplace rules for the entity's country). That is a legal check
+  for the owner before go-live, alongside the entity itself.
+- Refunds may not return the provider's fee, so every refund costs the platform
+  about 1.5% + NGN 100. Declines, expiries and mentor no-shows are the cost of
+  charging at booking.
+- A paid session's money depends on attendance being recorded correctly, so the
+  join-window and no-show rules become money rules as well as product ones.
 
 Neutral:
 
-- The credits model (decision 308) is unchanged. Whether credits are bought,
-  and how paid sessions relate to them, is a product decision for the pricing
-  work, not this record.
+- The credits model (decision 308) is unchanged: credits stay free-only and
+  payments never count toward the monthly reset (point 6, #473).
+- Decision 18 holds more firmly: with a fee on the booking, mentor and mentee
+  conversation stays on the platform, including through any WhatsApp agent.
 
 ### Confirmation
 
@@ -110,9 +181,15 @@ Neutral:
   import half. The name half is checked only by review.
 - A webhook test proves that an unsigned event, or one the verify call contradicts,
   leaves the ledger unchanged, and that a repeated event moves it once.
+- A ledger test proves that an earning is not payable before attendance
+  settles with the mentor present, and that each refund case in point 9
+  reverses it with a new row rather than an edit.
+- A test proves that changing a session type's price or the fee setting leaves
+  existing payments' snapshotted amounts unchanged.
 - **Not checked by anything:** that the fees above are still current; that manual
   payouts are actually recorded in the ledger. The second needs an admin flow,
-  and until one exists it is a process.
+  and until one exists it is a process. Nothing checks that the legal and tax
+  items under Bad were answered before go-live.
 
 ## Options considered
 
@@ -133,6 +210,18 @@ Neutral:
 - **Two providers from day one.** It gives the widest coverage at once. It lost
   under "build for now": the second integration would serve 13 known users while
   doubling the webhook, reconciliation and support surface.
+- **Split the payment at the charge (Paystack subaccounts).** It needs no
+  payout step at all. It lost on refunds: the mentor's share has already left
+  when a mentor declines, lets the request expire or does not attend, and in
+  the production export mentors were absent from 179 sessions and let 81
+  requests expire. It may return for mentors with a long reliable record.
+- **The fee on top of the mentor's price** (MentorCruise's shape). The mentor's
+  number is what they receive, which mentors like. It lost because the mentee
+  then pays more than the price the mentor chose, for an audience where price
+  decides; point 8 shows one price and tells the mentor their share instead.
+- **Selling credits.** It reuses the credit ledger. It lost as #473 found:
+  bought credits fight the monthly free reset, and a mentee who buys and does
+  not use them is charged for credits they would have been given.
 
 ## More information
 
@@ -142,6 +231,11 @@ Neutral:
   (flutterwave.com/ng/pricing, /gh/pricing, /tz/pricing); Stripe changelog,
   cross-border payouts, 2026-05-27; Paystack fee summaries from third-party
   reviews, because Paystack's own page was not reached.
+- Read 2026-11-13: Paystack split payments
+  (paystack.com/docs/payments/split-payments); MentorCruise fees
+  (help.mentorcruise.com/articles/what-fees-does-mentorcruise-take); ADPList
+  Advance fees (intercom.help/adplist-community/en/articles/8716947).
+- Issues #473 (paid sessions against credits) and #224 (support credit grants).
 - Revisit when a non-Paystack market has enough paying users, when manual
   payouts exceed what one operator can do in a day a month, or when the entity's
   country changes.
