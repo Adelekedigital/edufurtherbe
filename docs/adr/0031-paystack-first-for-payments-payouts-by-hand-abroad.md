@@ -6,7 +6,7 @@ Proposed)
 ## Status
 
 Proposed. It blocks payments work (decision 11 asked for this record before any
-starts) and commits money, so it waits for the owner. Points 6 to 10 were added
+starts) and commits money, so it waits for the owner. Points 6 to 12 were added
 on 2026-11-13 after the owner's answers on monetisation, so the provider and the
 money flow are reviewed together.
 
@@ -85,6 +85,18 @@ tutors 33% falling to 18% by lifetime hours taught; Upwork charged 20%, 10% and
 classes taught in the last year. **Resetting it every month is the less common
 part**: these platforms count lifetime or a trailing year.
 
+**Leland and GradApp (owner asked, 2026-11-13).** Leland, an admissions and
+career coaching marketplace, takes 20% falling to 5% as one client spends more
+with one coach, 5% when the coach brought the client, and partners with
+employers and universities (its coach help centre). GradApp (gradappai.com)
+matches a CV to ranked professors and drafts cold emails citing their papers,
+for the US, UK and Canada, free to start with no published pricing. It is a
+direct rival to the roadmap's Fundable, so Fundable is to compete on funding
+signals (professors holding grants that can pay a student, from public grant
+databases), African-applicant context, and a mentor's review of the email.
+Points 8, 10 and 11 take what touches payments; the product itself is scoped
+in its own work.
+
 Comparable marketplaces, from their own help pages read 2026-11-13:
 MentorCruise adds a fee of "along the lines of 20%" on top of the mentor's
 price; ADPList's paid Advance sessions take a flat 10%.
@@ -142,14 +154,26 @@ price; ADPList's paid Advance sessions take a flat 10%.
    pays and is shown what they will receive ("you receive NGN 17,000"); the
    mentee's price never depends on the tier. The platform pays the provider's
    fee from its share.
-   - **Three modes, chosen in configuration, each with its own tier list**
-     (from this many sessions, this rate), so switching is a setting, not a
-     code path (owner, 2026-11-13: keep all three):
+   - **Four modes, chosen in configuration, each with its own tier list**
+     (from this many sessions, or this much spend, this rate), so switching is
+     a setting, not a code path (owner, 2026-11-13: keep them all):
      - `flat`: one rate for every session. **The launch mode, at 15%** (owner).
      - `lifetime` (Preply's model, the owner's preference): the mentor's paid
        sessions settled with the mentor present since payments began. It
        rewards long service and never resets.
      - `monthly`: the same count within the calendar month, reset on the 1st.
+     - `relationship` (Leland's model): what **one mentee has paid one
+       mentor** so far, in naira, settled sessions only. The rate falls as that
+       pair's spend grows (Leland: 20% falling to 5%), so it rewards a mentor
+       for keeping a mentee, where the old data is weakest (41% reached a
+       second session).
+   - **A mentor-sourced rate, in every mode** (Leland's 5% for a coach's own
+     client): when a mentee joined through that mentor's invite link (the
+     existing invite and qualification flow, #548), every paid session between
+     the two is charged this rate (a setting, default 5%). It pays mentors to
+     bring their own audiences, which is how supply grows without paid
+     acquisition. It applies only to an account created through the link, so
+     an existing mentee cannot be re-labelled.
    - **The floor is 5% in every mode** (owner); configuration refuses a tier
      below it at startup.
    - **What counts:** only paid sessions that settled with the mentor present,
@@ -166,7 +190,8 @@ price; ADPList's paid Advance sessions take a flat 10%.
      costing the platform money once the provider's fee and refunds are paid.
    - Illustrative tiers, for the owner to set: `lifetime` 1-10 at 15%, 11-50 at
      12%, 51-200 at 9%, over 200 at 5%; `monthly` 1-4 at 15%, 5-9 at 12%, 10-19
-     at 9%, 20 and up at 5%.
+     at 9%, 20 and up at 5%; `relationship` up to NGN 100,000 at 15%, to
+     NGN 250,000 at 10%, beyond at 5%.
    Worked example at 15% on a NGN 20,000 price: the mentee pays NGN 20,000, the
    mentor receives NGN 17,000, Paystack takes about NGN 400 (1.5% + NGN 100),
    and the platform keeps about NGN 2,600. At 5% the platform keeps about
@@ -211,7 +236,19 @@ price; ADPList's paid Advance sessions take a flat 10%.
    Each refund reverses the pending earning in the ledger; nothing is deleted.
    **The policy is customer-facing: it ships as written here only once the
    owner accepts this record.**
-10. **Sponsors stay off the payments rail in v1.** A sponsored cohort is invoiced
+10. **Paid services that are delivered, not attended, wait.** A mentor's
+    review of a Fundable outreach email or a statement of purpose has no
+    session to attend, so point 7's "payable when the mentor attended" does not
+    fit it. It needs a delivery-and-accept rule (payable when the mentee
+    accepts it, or after a set number of days without a dispute), which gets
+    its own amendment when that service is built.
+11. **The AI tools' paid tier uses the same rail later** (Fundable first, then
+    the scholarship finder). Free up to a monthly limit of matches and drafts,
+    then paid in naira, because every AI call costs the platform money. It is a
+    platform sale with no mentor share, so it touches the ledger only as
+    platform revenue. Its pricing and limits are decided when Fundable is
+    scoped, not here.
+12. **Sponsors stay off the payments rail in v1.** A sponsored cohort is invoiced
     outside the platform and delivered through support's credit grants (#224),
     reported from admin analytics. An `invoices` table waits until sponsor
     volume makes the manual step the bottleneck.
@@ -292,8 +329,10 @@ Neutral:
   existing payments' snapshotted amounts unchanged.
 - Fee tests prove `flat` charges every session the same, that `lifetime` and
   `monthly` charge the Nth counted session the Nth tier without back-dating
-  (and `monthly` restarts on the 1st), that a tier below 5% is refused at
-  startup, and that the naira minimum applies.
+  (and `monthly` restarts on the 1st), that `relationship` tiers on the pair's
+  settled spend before each session, that the mentor-sourced rate applies only
+  to an account created through that mentor's link, that a tier below 5% is
+  refused at startup, and that the naira minimum applies.
 - A test per row of point 9's table proves its outcome, including that the
   earning becomes payable at most once, that a mentor absent from the retry
   refunds the mentee in full, and that both absent keeps exactly the no-show
@@ -334,7 +373,11 @@ Neutral:
 - **Only one fee mode.** Simpler to build and explain. Not chosen: the owner
   wants flat, lifetime and monthly all available, and one mode with a tier list
   is the same code as three.
-- **A trailing year as a fourth mode** (ClassGap). It rewards recent service
+- **Paying mentors 5% of what their invitees spend with other mentors**
+  (Leland). It rewards bringing people to the platform, not only to oneself.
+  Not now: it adds a payout stream with no session behind it. It is a small
+  addition to the ledger later.
+- **A trailing year as a fifth mode** (ClassGap). It rewards recent service
   without a hard monthly reset. Not built now; it is one more counting window
   if `lifetime` makes the floor too permanent.
 - **A back-dated monthly rebate** (the whole month re-rated at the tier
@@ -357,6 +400,9 @@ Neutral:
   (help.mentorcruise.com/articles/what-fees-does-mentorcruise-take); ADPList
   Advance fees (intercom.help/adplist-community/en/articles/8716947).
 - Issues #473 (paid sessions against credits) and #224 (support credit grants).
+- Read 2026-11-13: Leland coach payouts
+  (intercom.help/leland-coach-support-hub/en/articles/11101594) and product
+  updates (.../11048823); GradApp homepage (gradappai.com).
 - Read 2026-11-13, to be re-verified: Preply commission model
   (help.preply.com/articles/4171383); Upwork fee history (golance.com,
   hubstaff.com); Nigeria Tax Act 2025 summaries (PwC Nigeria sectoral analysis,
