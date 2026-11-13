@@ -113,10 +113,17 @@ price; ADPList's paid Advance sessions take a flat 10%.
    Nigerian, and Wise appears not to open business accounts for companies with
    a Nigerian address (competitor and third-party sources, 2026-11-13;
    unconfirmed with Wise). So the foreign rail is the owner's to confirm before
-   any mentor abroad is paid: Wise if it accepts the entity, otherwise a
-   domiciliary account's SWIFT transfer or a provider such as Flutterwave or
-   Airwallex. Until then a mentor abroad can sell paid sessions with a Nigerian
-   account, or keep offering free ones. Manual payouts are recorded in the
+   any mentor abroad is paid. Wise is no longer the lead (owner, 2026-11-13).
+   Candidates that market cross-border contractor payouts to Nigerian
+   businesses, each to be verified with the provider: **Raenest** (USD, GBP and
+   EUR business accounts in the company's name, payouts to 70+ countries),
+   **Flutterwave** transfers, **Nomba**'s Global Payout API (new in 2026),
+   **Airwallex** (CAC registration at sign-up), Oneremit and Eversend, with a
+   domiciliary account's SWIFT transfer (about USD 25-50 a transfer) as the
+   fallback for a handful of mentors. Chosen on: works for a Nigerian company,
+   reaches the UK, US and EU, cost per payout, FX margin, a batch or API
+   option, and CBN FX rules. Until then a mentor abroad can sell paid sessions
+   with a Nigerian account, or keep offering free ones. Manual payouts are recorded in the
    ledger with the transfer's reference (decision 10) until volume makes the
    manual step the bottleneck; the automated rail gets its own record.
 3. **Flutterwave is the named second provider**, added only when a market
@@ -142,13 +149,27 @@ price; ADPList's paid Advance sessions take a flat 10%.
    payment window and released if the charge does not complete. Free sessions
    and credits are unchanged. The payer is the mentee's own account in v1;
    paying for someone else (a parent, a relative abroad) is a later step.
-7. **The platform collects the whole amount and holds it until the session
-   happens; it does not split at the charge.** Paystack's split payments settle
-   the mentor's share at once, and then a decline, an expiry or a mentor no-show
-   could not be refunded from it. So a captured payment writes a **pending**
-   earning to the mentor's ledger. It becomes **payable** only when attendance
-   settles with the mentor present, and payouts are batched by hand from payable
-   earnings (decision 10; point 2 for mentors abroad).
+7. **The money is held until the session happens, and the provider must
+   support the hold (owner, 2026-11-13).** Without a provider-native hold the
+   platform would hold other people's money itself, which may need a licence
+   and becomes a bottleneck. So holding is a **requirement on the provider**:
+   - **Paystack: manual settlement on a mentor's subaccount.** The charge
+     splits to the mentor's subaccount, whose settlement is set to manual, so
+     the mentor's share stays with Paystack until we release it. It is not on
+     by default: Paystack enables it on request. Three things to confirm with
+     Paystack before the build: that it is enabled for us, the longest hold it
+     allows (a session can be booked up to the booking window ahead), and that
+     a held split can be refunded in full before release.
+   - **If Paystack cannot,** a licensed escrow service (Vesicash, a Lagos
+     escrow API) or another provider with a hold-and-release feature.
+     Flutterwave's escrow exists only in its older v2 API, so it does not
+     qualify.
+   - Our ledger mirrors the hold: a captured payment writes a **pending**
+     earning; it becomes **payable** when attendance settles with the mentor
+     present, and only then is the release sent. A decline, expiry or mentor
+     no-show refunds the held amount instead.
+   - A mentor abroad has no Nigerian subaccount, so their share is held in the
+     platform's Paystack balance and paid through point 2's rail.
 8. **The platform fee is a percentage taken from the price the mentee sees, set
    by a configured schedule.** The mentor sets the one all-in price the mentee
    pays and is shown what they will receive ("you receive NGN 17,000"); the
@@ -199,8 +220,12 @@ price; ADPList's paid Advance sessions take a flat 10%.
 9. **Refunds follow the credit refund rules, so a mentee learns one policy,
    with two shifts for money (owner).** Before the session: full refund on a
    decline, an expiry, a mentor cancellation, or a mentee cancellation 12 hours
-   or more ahead; a mentee cancellation under 12 hours pays the mentor, with no
-   retry. After it, by who attended:
+   or more ahead. **A mentee cancellation under 12 hours is split (owner asked
+   for a fee or a split, 2026-11-13):** the mentor receives a configured share
+   of the price (default 50%) less the platform fee on that share, and the rest
+   is refunded to the mentee; no retry. The mentor lost a slot that is hard to
+   refill at short notice, but nothing was delivered, so neither side bears it
+   all. After it, by who attended:
 
    | Session | Mentor | Mentee | Outcome |
    |---|---|---|---|
@@ -220,6 +245,9 @@ price; ADPList's paid Advance sessions take a flat 10%.
      mentor's earning stays pending meanwhile and becomes payable at most once.
      A mentor who declines, cancels or lets the rebooking expire is treated as
      absent, and the mentee is refunded in full.
+   - **On every row where the mentor is paid, the platform fee comes out of the
+     mentor's share** (point 8); on a full refund the platform keeps nothing and
+     absorbs the provider's fee.
    - **A mentor absent from the retry forfeits the payment**, even after
      attending the first slot. The payment buys one session that happens; the
      mentor promised the retry by accepting it, and a mentee who turned up
@@ -300,9 +328,11 @@ Bad:
     line per payout, and Nigerian mentors may need to give a tax id.
   - Every rate and threshold is configuration, never code, so a ruling changes
     a setting.
-- **Holding money for mentors until the session (point 7) may be regulated**
-  (escrow or marketplace rules for the entity's country). That is a legal check
-  for the owner before go-live, alongside the entity itself.
+- **The hold depends on the provider (point 7).** If Paystack will not enable
+  manual settlement, or caps the hold below the booking window, payments wait
+  for an escrow service or a shorter booking window. A provider-held balance
+  also narrows the licensing question, which is still a legal check before
+  go-live.
 - Refunds may not return the provider's fee, so every refund costs the platform
   about 1.5% + NGN 100. Declines, expiries and mentor no-shows are the cost of
   charging at booking.
@@ -361,11 +391,18 @@ Neutral:
 - **Two providers from day one.** It gives the widest coverage at once. It lost
   under "build for now": the second integration would serve 13 known users while
   doubling the webhook, reconciliation and support surface.
-- **Split the payment at the charge (Paystack subaccounts).** It needs no
+- **Split the payment at the charge with automatic settlement.** It needs no
   payout step at all. It lost on refunds: the mentor's share has already left
   when a mentor declines, lets the request expire or does not attend, and in
   the production export mentors were absent from 179 sessions and let 81
-  requests expire. It may return for mentors with a long reliable record.
+  requests expire. Point 7 keeps the split but settles it manually.
+- **The platform holds the whole amount in its own account** (this record's
+  first draft). It works with any provider. It lost when the owner required
+  the provider to hold the money, because holding others' funds ourselves may
+  need a licence and puts every release on us.
+- **A full charge on a late cancellation, or a full refund.** Simpler. Lost to
+  the split: a full charge is harsh where price decides, a full refund invites
+  cancelling at the last minute.
 - **The fee on top of the mentor's price** (MentorCruise's shape). The mentor's
   number is what they receive, which mentors like. It lost because the mentee
   then pays more than the price the mentor chose, for an audience where price
