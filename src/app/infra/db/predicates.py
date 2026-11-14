@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from sqlalchemy import and_, exists, func, or_, true
+from sqlalchemy import and_, exists, func, not_, or_, true
 
 from app.domain.attendance import PRESENCE_REPORTING
 from app.domain.enums import ApprovalStatus, ListingStatus, PrimaryRole, SignupSource
@@ -52,6 +52,24 @@ def live(user: Any) -> Any:
     rule cannot mean one thing for the mentor alias and another everywhere else.
     """
     return user.deleted_at.is_(None)
+
+
+def purge_passed(now: Any, user: Any = None) -> Any:
+    """**The one boundary** between restorable and purgeable: purge on or after
+    the date, restore strictly before it. Both read this, so no instant is
+    both. ``user`` is `User` or an alias; ``now`` a datetime or ``func.now()``."""
+    return (user if user is not None else _user()).deletion_purge_at <= now
+
+
+def restorable(now: Any, user: Any = None) -> list[Any]:
+    """A self-deleted account still inside its window: it may come back, so
+    its email and handle stay its own (account restore, new handles)."""
+    u = user if user is not None else _user()
+    return [u.deleted_at.is_not(None), u.deletion_purge_at.is_not(None), not_(purge_passed(now, u))]
+
+
+def _user() -> Any:
+    return User
 
 
 def migrated(user: Any) -> Any:

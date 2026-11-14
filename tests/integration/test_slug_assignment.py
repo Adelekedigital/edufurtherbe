@@ -149,9 +149,12 @@ async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -
 async def test_a_handle_a_deleted_account_can_restore_is_not_given_away(
     db_engine: AsyncEngine,
 ) -> None:
+    now = dt.datetime.now(dt.UTC)
     async with db_engine.begin() as conn:
-        await add_user(
-            conn, "gone.slug@example.com", slug="john-smith", deleted_at=dt.datetime.now(dt.UTC)
+        gone = await add_user(conn, "gone.slug@example.com", slug="john-smith", deleted_at=now)
+        await conn.execute(
+            text("UPDATE users SET deletion_purge_at = :p WHERE id = :u"),
+            {"p": now + dt.timedelta(days=30), "u": gone},
         )
         newcomer = await add_user(
             conn, "john.slug@example.com", first_name="John", last_name="Smith"
@@ -161,6 +164,42 @@ async def test_a_handle_a_deleted_account_can_restore_is_not_given_away(
         await session.commit()
 
     assert (await handle_of(db_engine, newcomer))[0] == "john-smith-2"
+
+
+async def test_a_handle_a_deleted_account_cannot_restore_is_free(db_engine: AsyncEngine) -> None:
+    """Deleted with no restore window (an admin removal, an import): it never
+    comes back, so its handle does not push a new person to a suffix."""
+    async with db_engine.begin() as conn:
+        await add_user(
+            conn, "removed.slug@example.com", slug="mary-jones", deleted_at=dt.datetime.now(dt.UTC)
+        )
+        newcomer = await add_user(
+            conn, "mary.slug@example.com", first_name="Mary", last_name="Jones"
+        )
+    async with AsyncSession(db_engine) as session:
+        await give_slug(session, newcomer)
+        await session.commit()
+
+    assert (await handle_of(db_engine, newcomer))[0] == "mary-jones"
+
+
+async def test_a_reload_that_brings_a_name_settles_a_placeholder(db_engine: AsyncEngine) -> None:
+    rows = transform_users([load_record(Slug=None)]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+        user_id = await conn.scalar(
+            text(
+                "UPDATE users SET slug = 'user-zzzz9999', slug_is_placeholder = true "
+                "WHERE legacy_bubble_id = :b RETURNING id"
+            ),
+            {"b": rows[0].legacy_bubble_id},
+        )
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+
+    slug, placeholder = await handle_of(db_engine, user_id)
+    assert placeholder is False
+    assert slug is not None and not slug.startswith("user-")
 
 
 async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: AsyncEngine) -> None:

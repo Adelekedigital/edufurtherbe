@@ -26,10 +26,6 @@ from app.domain.handles import RESERVED_HANDLES, fold_to_handle, random_token, s
 MAX_SLUG_LENGTH = 60
 
 
-#: The frontend's handle check for `/mentors/{handle}`. Every handle this
-#: module makes fits it; an imported one that does not is reported.
-HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-
 PLACEHOLDER_PREFIX = "user-"
 _TOKEN = re.compile(r"^[0-9a-z]{8}$")
 
@@ -100,7 +96,7 @@ def is_servable(slug: str) -> bool:
     """Can ``/mentors/{slug}`` reach this handle? It fits the frontend's
     pattern, is not a bare route word, and is not shaped like an id."""
     return (
-        bool(HANDLE_PATTERN.match(slug))
-        and slug not in RESERVED_HANDLES
-        and not looks_like_id(slug)
+        # The column CHECK holds the shape; the frontend's route also needs
+        # a letter or digit first.
+        slug[:1].isalnum() and slug not in RESERVED_HANDLES and not looks_like_id(slug)
     )

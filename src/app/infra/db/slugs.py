@@ -10,23 +10,27 @@ final (`slug_is_placeholder` false) is never written over.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import Select, exists, or_, select, text, update
+from sqlalchemy import Select, exists, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.domain.handles import random_token
 from app.domain.slugs import candidates, is_servable, name_slug, placeholder_slug
 from app.infra.db.models.user import User
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, restorable
 from app.infra.db.triggers import timestamps_from_source
 
 _UNIQUE_SLUG = "ix_users_slug_live"
 #: Far beyond any real clash count; a loop that reaches it is a bug, not data.
 _MAX_ATTEMPTS = 1000
+
+#: Another account, for the restorable-holder check inside the UPDATE.
+Held = aliased(User)
 
 #: A session (requests) or a connection (the CLI scripts); both take savepoints.
 Db = AsyncSession | AsyncConnection
@@ -35,14 +39,6 @@ Db = AsyncSession | AsyncConnection
 def _random_placeholders() -> Iterator[str]:
     while True:
         yield placeholder_slug(random_token(8))
-
-
-async def _held_by_a_deleted_account(session: Db, slug: str) -> bool:
-    return bool(
-        await session.scalar(
-            select(exists().where(User.slug == slug, User.deleted_at.is_not(None)))
-        )
-    )
 
 
 async def _claim(
@@ -56,14 +52,14 @@ async def _claim(
     for attempt, slug in enumerate(options):
         if attempt >= _MAX_ATTEMPTS:
             raise RuntimeError("no free handle after 1000 attempts")
-        if await _held_by_a_deleted_account(session, slug):
-            continue
         try:
             async with session.begin_nested():
                 written = await session.execute(
                     update(User)
                     .where(
                         User.id == user_id,
+                        # Not a handle an account that may still restore holds.
+                        ~exists().where(Held.slug == slug, *restorable(func.now(), Held)),
                         # A placeholder only fills a missing handle; a name's
                         # handle may also replace a placeholder.
                         User.slug.is_(None)
@@ -73,11 +69,27 @@ async def _claim(
                     .values(slug=slug, slug_is_placeholder=placeholder)
                     .returning(User.slug)
                 )
-                return written.scalar_one_or_none()
+                claimed = written.scalar_one_or_none()
+            if claimed is not None:
+                return claimed
+            # Nothing written: this account's handle is final (done), or a
+            # restorable account holds this option (try the next one).
+            if not await _still_open(session, user_id, placeholder=placeholder):
+                return None
         except IntegrityError as exc:
             if _UNIQUE_SLUG not in str(exc.orig):
                 raise
     return None  # pragma: no cover - `candidates` and the random stream never end
+
+
+async def _still_open(session: Db, user_id: UUID, *, placeholder: bool) -> bool:
+    """May this account still take ``placeholder``'s kind of handle?"""
+    row = (
+        await session.execute(select(User.slug, User.slug_is_placeholder).where(User.id == user_id))
+    ).one_or_none()
+    if row is None:
+        return False
+    return row.slug is None if placeholder else not _is_final(row.slug, row.slug_is_placeholder)
 
 
 async def give_placeholder(session: Db, user_id: UUID) -> str | None:
@@ -116,8 +128,20 @@ async def settle_name_slug(session: Db, user_id: UUID) -> str | None:
 
 async def give_slug(session: Db, user_id: UUID) -> str | None:
     """The account's handle from its name, else a placeholder; nothing if it
-    already has one. Does not commit."""
-    return await settle_name_slug(session, user_id) or await give_placeholder(session, user_id)
+    already has a final one. Does not commit."""
+    row = (
+        await session.execute(
+            select(User.first_name, User.last_name, User.slug, User.slug_is_placeholder).where(
+                User.id == user_id
+            )
+        )
+    ).one_or_none()
+    if row is None or _is_final(row.slug, row.slug_is_placeholder):
+        return None
+    named = await _name_handle(session, user_id, row.first_name, row.last_name)
+    if named is not None or row.slug is not None:
+        return named
+    return await give_placeholder(session, user_id)
 
 
 def _is_final(slug: str | None, placeholder: bool) -> bool:
@@ -126,26 +150,29 @@ def _is_final(slug: str | None, placeholder: bool) -> bool:
 
 
 def _missing(
-    legacy_ids: Sequence[str] | None = None,
-) -> Select[tuple[UUID, str | None, str | None]]:
-    query = select(User.id, User.first_name, User.last_name).where(User.slug.is_(None), LIVE)
-    if legacy_ids is not None:
-        query = query.where(User.legacy_bubble_id.in_(legacy_ids))
+    *, legacy_only: bool = False
+) -> Select[tuple[UUID, str | None, str | None, str | None]]:
+    """Live accounts with no handle, or a placeholder one a name may now settle."""
+    query = select(User.id, User.first_name, User.last_name, User.slug).where(
+        or_(User.slug.is_(None), User.slug_is_placeholder.is_(True)), LIVE
+    )
+    if legacy_only:
+        query = query.where(User.legacy_bubble_id.is_not(None))
     return query.order_by(User.id)
 
 
-async def give_missing_slugs(
-    session: Db, *, legacy_ids: Sequence[str] | None = None
-) -> tuple[int, int]:
-    """A handle for every live account without one (or only those loaded from
-    ``legacy_ids``): ``(from names, placeholders)``. Does not commit, and does
+async def give_missing_slugs(session: Db, *, legacy_only: bool = False) -> tuple[int, int]:
+    """A handle for every live account without one, and a name's handle for
+    one on a placeholder whose name is now known (only imported accounts with
+    ``legacy_only``): ``(from names, placeholders)``. Does not commit, and does
     not hold `updated_at`: the caller does (the backfill, or the loader, which
     already holds it)."""
     from_name = placeholders = 0
-    for user_id, first_name, last_name in (await session.execute(_missing(legacy_ids))).all():
+    rows = (await session.execute(_missing(legacy_only=legacy_only))).all()
+    for user_id, first_name, last_name, slug in rows:
         if await _name_handle(session, user_id, first_name, last_name):
             from_name += 1
-        elif await give_placeholder(session, user_id):
+        elif slug is None and await give_placeholder(session, user_id):
             placeholders += 1
     return from_name, placeholders
 
@@ -175,8 +202,10 @@ async def backfill_slugs(session: Db, *, apply: bool) -> SlugBackfill:
     quiet window (the cutover's, or a quiet moment on dev)."""
     if not apply:
         missing = (await session.execute(_missing())).all()
-        from_name = sum(1 for _, first, last in missing if name_slug(first, last))
-        placeholders = len(missing) - from_name
+        from_name = sum(1 for _, first, last, _slug in missing if name_slug(first, last))
+        placeholders = sum(
+            1 for _, first, last, slug in missing if slug is None and not name_slug(first, last)
+        )
     else:
         connection = await _connection(session)
         await connection.execute(text("SET LOCAL lock_timeout = '3s'"))

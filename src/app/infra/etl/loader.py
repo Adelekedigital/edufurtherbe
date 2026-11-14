@@ -97,9 +97,6 @@ class UserLoader:
                 await self._connection.execute(text(UPSERT_USER), parameters)
             # Every account has a handle (owner, 2026-11-14): a legacy row
             # with no slug gets one now, not at a later backfill run.
-            await give_missing_slugs(
-                self._connection,
-                legacy_ids=[row.legacy_bubble_id for row in rows if row.slug is None],
-            )
+            await give_missing_slugs(self._connection, legacy_only=True)
 
         return len(rows)

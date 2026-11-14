@@ -13,7 +13,6 @@ import pytest
 
 from app.domain.handles import RESERVED_HANDLES
 from app.domain.slugs import (
-    HANDLE_PATTERN,
     MAX_SLUG_LENGTH,
     candidates,
     is_servable,
@@ -24,7 +23,8 @@ from app.domain.slugs import (
 )
 from app.domain.transform.identity import fold_slug
 
-FE_HANDLE = HANDLE_PATTERN
+#: The frontend's handle check for `/mentors/{handle}` (its contract, 14 Nov).
+FE_HANDLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 @pytest.mark.parametrize(
