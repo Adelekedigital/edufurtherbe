@@ -129,19 +129,10 @@ async def settle_name_slug(session: Db, user_id: UUID) -> str | None:
 async def give_slug(session: Db, user_id: UUID) -> str | None:
     """The account's handle from its name, else a placeholder; nothing if it
     already has a final one. Does not commit."""
-    row = (
-        await session.execute(
-            select(User.first_name, User.last_name, User.slug, User.slug_is_placeholder).where(
-                User.id == user_id
-            )
-        )
-    ).one_or_none()
-    if row is None or _is_final(row.slug, row.slug_is_placeholder):
-        return None
-    named = await _name_handle(session, user_id, row.first_name, row.last_name)
-    if named is not None or row.slug is not None:
-        return named
-    return await give_placeholder(session, user_id)
+    named = await settle_name_slug(session, user_id)
+    # `give_placeholder` writes only over a missing handle, so a final one or
+    # an existing placeholder is left alone.
+    return named if named is not None else await give_placeholder(session, user_id)
 
 
 def _is_final(slug: str | None, placeholder: bool) -> bool:

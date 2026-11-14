@@ -58,18 +58,14 @@ def purge_passed(now: Any, user: Any = None) -> Any:
     """**The one boundary** between restorable and purgeable: purge on or after
     the date, restore strictly before it. Both read this, so no instant is
     both. ``user`` is `User` or an alias; ``now`` a datetime or ``func.now()``."""
-    return (user if user is not None else _user()).deletion_purge_at <= now
+    return (user if user is not None else User).deletion_purge_at <= now
 
 
 def restorable(now: Any, user: Any = None) -> list[Any]:
     """A self-deleted account still inside its window: it may come back, so
     its email and handle stay its own (account restore, new handles)."""
-    u = user if user is not None else _user()
+    u = user if user is not None else User
     return [u.deleted_at.is_not(None), u.deletion_purge_at.is_not(None), not_(purge_passed(now, u))]
-
-
-def _user() -> Any:
-    return User
 
 
 def migrated(user: Any) -> Any:
