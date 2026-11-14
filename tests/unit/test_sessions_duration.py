@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from tests.unit.test_sessions_transform import booking, calendar_row, plan, tracker
+from tests.unit.test_sessions_transform import OTHER, booking, calendar_row, plan, tracker
 
 from app.domain.transform.sessions import DEFAULT_DURATION_MINUTES
 
@@ -145,6 +145,9 @@ def test_a_second_tracker_for_a_loaded_booking_is_absorbed_not_quarantined() -> 
     assert result.quarantined == ()
     assert "st-2" in result.absorbed_trackers
     assert result.duplicate_trackers == ("st-2",)
+    only_duplicate = replace(result, booking_defaulted=())
+    assert only_duplicate.needs_review is True
+    assert replace(only_duplicate, duplicate_trackers=()).needs_review is False
 
 
 def test_a_booking_with_no_back_link_merges_with_the_tracker_naming_it() -> None:
@@ -186,3 +189,56 @@ def test_an_impossible_length_on_the_linked_record_is_dropped_not_guessed() -> N
 
     assert "sb-1" in [row.legacy_bubble_id for row in result.dropped]
     assert result.duration_from_mentor == ()
+
+
+def test_two_trackers_naming_one_booking_are_left_for_a_person() -> None:
+    """Neither can be told apart, so neither is merged or thrown away."""
+    result = plan(
+        [booking(SessionTracker=None)],
+        [tracker(SessionID="sb-1"), tracker(bubble_id="st-2", SessionID="sb-1")],
+    )
+
+    assert sorted(result.ambiguous_trackers) == ["st-1", "st-2"]
+    assert result.duplicate_trackers == ()
+    only_ambiguous = replace(result, booking_defaulted=(), overlapping_live_windows=())
+    assert only_ambiguous.needs_review is True
+    assert replace(only_ambiguous, ambiguous_trackers=()).needs_review is False
+
+
+def test_a_link_to_a_tracker_missing_from_the_export_falls_back_to_the_session_id() -> None:
+    result = plan(
+        [booking(SessionTracker="st-missing")],
+        [tracker(bubble_id="st-2", SessionID="sb-1")],
+    )
+
+    assert [row.legacy_bubble_id for row in result.sessions] == ["sb-1"]
+    assert "st-2" in result.absorbed_trackers
+    assert result.duplicate_trackers == ()
+
+
+def test_a_second_tracker_with_another_mentee_is_its_own_session() -> None:
+    """Same start, different mentee: not provably the same session."""
+    other = tracker(bubble_id="st-2", SessionID="sb-1", **{"Mentee(userdatatype)": OTHER})
+    result = plan([booking(SessionTracker="st-1")], [tracker(SessionID="sb-1"), other])
+
+    assert result.duplicate_trackers == ()
+    assert "st-2" in [row.legacy_bubble_id for row in result.sessions] + [
+        row.legacy_bubble_id for row in result.dropped
+    ]
+
+
+def test_a_tracker_at_another_start_does_not_borrow_the_bookings_length() -> None:
+    other = tracker(
+        bubble_id="st-2",
+        SessionID="sb-1",
+        **{"session time": "Sep 9, 2025 1:00 am", "Session Duration": None},
+    )
+    result = plan(
+        [booking(SessionTracker="st-1", Duration="60")],
+        [tracker(SessionID="sb-1"), other],
+        calendar=[calendar_row(**{"meetingDuration-TxT": "30"})],
+    )
+
+    (row,) = [r for r in result.sessions if r.legacy_bubble_id == "st-2"]
+    assert row.duration_minutes == 30
+    assert result.duration_from_mentor == ("st-2",)
