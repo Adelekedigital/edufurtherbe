@@ -114,6 +114,18 @@ def extension_for(content_type: str) -> str:
     return EXTENSIONS.get(content_type, "bin")
 
 
+def absolute_url(url: str) -> str:
+    """The address with a scheme, which is how it is parsed and fetched.
+
+    The production export writes Bubble uploads protocol-relative
+    (``//<hash>.cdn.bubble.io/...``): 300 of its 956 images. A bare host gets
+    ``https://`` too. One rule, so deciding and fetching never disagree.
+    """
+    if url.startswith("//"):
+        return f"https:{url}"
+    return url if "//" in url else f"https://{url}"
+
+
 def is_ours(url: str, storage_host: str) -> bool:
     """Is this URL already served from storage we control?
 
@@ -125,7 +137,7 @@ def is_ours(url: str, storage_host: str) -> bool:
     """
     if not url:
         return False
-    parsed = urlparse(url if "//" in url else f"https://{url}")
+    parsed = urlparse(absolute_url(url))
     return bool(parsed.netloc) and parsed.netloc.lower() == storage_host.lower()
 
 
@@ -157,7 +169,7 @@ def is_fetchable(url: str) -> bool:
     """
     if not url:
         return False
-    parsed = urlparse(url if "//" in url else f"https://{url}")
+    parsed = urlparse(absolute_url(url))
     if parsed.scheme not in {"http", "https"}:
         return False
     host = parsed.hostname  # `hostname` strips port and credentials; `netloc` does not
@@ -175,7 +187,7 @@ def host_of(url: str | None) -> str:
     """
     if not url:
         return "<no host>"
-    return (urlparse(url if "//" in url else f"https://{url}").hostname or "<no host>").lower()
+    return (urlparse(absolute_url(url)).hostname or "<no host>").lower()
 
 
 def decide(url: str | None, storage_host: str) -> AssetAction | None:
