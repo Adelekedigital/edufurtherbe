@@ -17,11 +17,17 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.enums import ConsentMethod
 from app.infra.db.models.legal import AnalyticsConsent
 
 __all__ = ["consent_accepted", "record_consent"]
 
-_COLUMNS = (AnalyticsConsent.granted, AnalyticsConsent.version, AnalyticsConsent.updated_at)
+_COLUMNS = (
+    AnalyticsConsent.granted,
+    AnalyticsConsent.version,
+    AnalyticsConsent.method,
+    AnalyticsConsent.updated_at,
+)
 
 
 def consent_accepted(user_id: Any) -> Any:
@@ -35,10 +41,19 @@ def consent_accepted(user_id: Any) -> Any:
 
 
 async def record_consent(
-    session: AsyncSession, user_id: UUID, *, granted: bool, version: str
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    granted: bool,
+    version: str,
+    method: ConsentMethod | None,
 ) -> Any:
-    """Record the caller's answer, replacing any earlier one. Does not commit."""
-    statement = insert(AnalyticsConsent).values(user_id=user_id, granted=granted, version=version)
+    """Record the caller's answer, replacing any earlier one, its method
+    included: a later answer that names none leaves none (decision 345).
+    Does not commit."""
+    statement = insert(AnalyticsConsent).values(
+        user_id=user_id, granted=granted, version=version, method=method
+    )
     return (
         await session.execute(
             statement.on_conflict_do_update(
@@ -46,6 +61,7 @@ async def record_consent(
                 set_={
                     "granted": statement.excluded.granted,
                     "version": statement.excluded.version,
+                    "method": statement.excluded.method,
                 },
             ).returning(*_COLUMNS)
         )

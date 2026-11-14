@@ -3,7 +3,7 @@
 What carries weight: acquisition is recorded **once** and never for a migrated
 account, untrusted values are coerced rather than refused, an invite is the one
 `resolve_code` finds; the consent answer is the caller's own, a decline kept
-and replaced by a later grant.
+and replaced by a later grant, with how it was given (decision 345).
 """
 
 from __future__ import annotations
@@ -277,6 +277,75 @@ async def test_a_malformed_answer_is_refused(
     _, token = await signed_in(db_engine)
 
     assert (await api_client.put(CONSENT, json=body, headers=token)).status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("method", "granted"),
+    [
+        ("accept", True),
+        ("decline", False),
+        ("close", False),
+        ("settings", True),
+        ("settings", False),
+    ],
+)
+async def test_how_the_answer_was_given_is_kept_and_read_back(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, method: str, granted: bool
+) -> None:
+    user, token = await signed_in(db_engine)
+
+    answered = await api_client.put(
+        CONSENT, json={"granted": granted, "version": "v1", "method": method}, headers=token
+    )
+
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["method"] == method
+    assert (await me(api_client, token))["analytics_consent"]["method"] == method
+    async with db_engine.begin() as conn:
+        kept = await conn.scalar(
+            text("SELECT method FROM analytics_consents WHERE user_id = :u"), {"u": user}
+        )
+    assert kept == method
+
+
+async def test_an_answer_without_a_method_reads_null_and_replaces_an_earlier_one(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    _, token = await signed_in(db_engine)
+    await api_client.put(
+        CONSENT, json={"granted": False, "version": "v1", "method": "close"}, headers=token
+    )
+
+    # A client that predates `method` answers again: the stored method is its answer's, null.
+    later = await api_client.put(CONSENT, json={"granted": True, "version": "v1"}, headers=token)
+    consent = (await me(api_client, token))["analytics_consent"]
+
+    assert later.status_code == 200, later.text
+    assert "method" in later.json()
+    assert later.json()["method"] is None
+    assert consent["method"] is None
+    assert consent["granted"] is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"granted": True, "version": "v1", "method": "banner"},
+        {"granted": True, "version": "v1", "method": "Accept"},
+        {"granted": False, "version": "v1", "method": "accept"},
+        {"granted": True, "version": "v1", "method": "decline"},
+        {"granted": True, "version": "v1", "method": "close"},
+    ],
+)
+async def test_an_unknown_or_contradicting_method_is_refused(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, body: dict[str, Any]
+) -> None:
+    _, token = await signed_in(db_engine)
+
+    refused = await api_client.put(CONSENT, json=body, headers=token)
+
+    assert refused.status_code == 422
+    assert (await me(api_client, token))["analytics_consent"] is None
 
 
 async def test_consent_needs_a_sign_in(api_client: httpx.AsyncClient) -> None:
