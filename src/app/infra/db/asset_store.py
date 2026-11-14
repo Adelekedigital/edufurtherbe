@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.errors import NotFoundError
-from app.domain.assets import AssetKind, object_path
+from app.domain.assets import AssetKind, legacy_image_url, object_path
 from app.domain.images import process
 from app.infra.db.avatar_focus_store import focus_columns
 from app.infra.db.models.user import User
@@ -78,7 +78,8 @@ class ProfileAssets:
     banner_url: str | None
 
     def url_for(self, kind: AssetKind) -> str | None:
-        return self.avatar_url if kind is AssetKind.AVATAR else self.banner_url
+        """Absolute, so deciding and fetching read the same address."""
+        return legacy_image_url(self.avatar_url if kind is AssetKind.AVATAR else self.banner_url)
 
 
 class AssetStore:
