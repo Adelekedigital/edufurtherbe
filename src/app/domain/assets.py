@@ -139,6 +139,18 @@ def legacy_image_url(value: object) -> str | None:
     return absolute_url(value)
 
 
+#: The legacy app's placeholder banner, by its upload id. 178 production
+#: profiles carry it because nobody chose another, and its host now refuses it
+#: (403, 2026-11-14). It loads as no banner, so the new app's default shows.
+LEGACY_DEFAULT_BANNER = "/f1692390494515x191075007644834430/"
+
+
+def legacy_banner_url(value: object) -> str | None:
+    """A legacy banner as stored: ``None`` for the placeholder or a blank field."""
+    url = legacy_image_url(value)
+    return None if url is None or LEGACY_DEFAULT_BANNER in url else url
+
+
 def is_ours(url: str, storage_host: str) -> bool:
     """Is this URL already served from storage we control?
 

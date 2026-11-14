@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any
 
-from app.domain.assets import legacy_image_url
+from app.domain.assets import legacy_banner_url, legacy_image_url
 from app.domain.availability import UnknownTimezoneError, normalise_timezone
 from app.domain.bubble import CREATED_AT, MODIFIED_AT, normalise_list, parse_timestamp
 from app.domain.emails import normalise_email
@@ -401,7 +401,7 @@ def to_profile(
         created_at=created,
         updated_at=modified,
         avatar_url=legacy_image_url(user_record.get(AVATAR_FIELD)),
-        banner_url=legacy_image_url(profile.get(BANNER_FIELD)),
+        banner_url=legacy_banner_url(profile.get(BANNER_FIELD)),
         about_me=profile.get("About me"),
         gender=profile.get("Gender"),
         origin_country_name=profile.get("OriginCountry(text)"),

@@ -206,3 +206,45 @@ def test_no_image_stays_no_image(blank: str | None) -> None:
     )
     assert row.avatar_url is None
     assert row.banner_url is None
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "//4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f1692390494515x191075007644834430/5559851%281%29.jpg",
+        "//4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f1692390494515x191075007644834430/5559851%281%29.jpg?fit=crop&q=100",
+    ],
+    ids=["plain", "cropped"],
+)
+def test_the_legacy_default_banner_loads_as_no_banner(placeholder: str) -> None:
+    """178 production profiles carry the legacy app's placeholder banner, which
+    its host now refuses (403). Nobody chose it, so the new app's default shows."""
+    profile = {
+        "bubble_id": "1700000000000x000000000000000053",
+        "created_at": "Sep 3, 2025 5:31 am",
+        "modified_at": "Sep 4, 2025 5:31 am",
+        " Profile banner Image": placeholder,
+    }
+    row = to_profile(
+        profile,
+        user_bubble_id=USER_ID,
+        user_record=record(),
+        export_timezone=ZoneInfo("America/New_York"),
+    )
+    assert row.banner_url is None
+
+
+def test_a_banner_someone_uploaded_is_kept() -> None:
+    profile = {
+        "bubble_id": "1700000000000x000000000000000054",
+        "created_at": "Sep 3, 2025 5:31 am",
+        "modified_at": "Sep 4, 2025 5:31 am",
+        " Profile banner Image": "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg?q=100",
+    }
+    row = to_profile(
+        profile,
+        user_bubble_id=USER_ID,
+        user_record=record(),
+        export_timezone=ZoneInfo("America/New_York"),
+    )
+    assert row.banner_url == "https://4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg?q=100"
