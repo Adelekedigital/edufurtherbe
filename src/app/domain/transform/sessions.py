@@ -395,9 +395,14 @@ class SessionPlan:
     duration_disagreements: tuple[Disagreement, ...] = ()
     #: Mentors with no `CalendarSettings` at all, given the legacy mode.
     duration_defaulted: tuple[str, ...] = ()
-    #: Sessions with no recorded length, given their mentor's usual one (or the
-    #: legacy mode, 45, for a mentor with none on record).
+    #: Sessions with no recorded length on either record, given their mentor's
+    #: usual one (owner, 2026-11-14).
     duration_from_mentor: tuple[str, ...] = ()
+    #: The same, for a mentor with no length on record: the legacy mode, 45.
+    duration_from_default: tuple[str, ...] = ()
+    #: A second tracker naming a loaded booking by its `SessionID`, at the same
+    #: start: a duplicate record of that session, absorbed.
+    duplicate_trackers: tuple[str, ...] = ()
     #: Mentors holding sessions for whom no mentor record was found, whose
     #: offerings therefore take the column defaults rather than their venue
     #: and confirmation setting.
@@ -445,6 +450,7 @@ class SessionPlan:
             or self.duration_defaulted
             or self.duration_disagreements
             or self.duration_from_mentor
+            or self.duration_from_default
             or self.booking_defaulted
         )
 
@@ -517,7 +523,9 @@ class SessionPlan:
             ("junk room names", self.junk_room_names),
             ("duration disagreements (modal wins)", self.duration_disagreements),
             ("duration defaulted to the legacy mode", self.duration_defaulted),
-            ("no recorded length: mentor's usual, else 45", self.duration_from_mentor),
+            ("no recorded length: the mentor's usual one", self.duration_from_mentor),
+            ("no recorded length, no mentor length: 45", self.duration_from_default),
+            ("duplicate trackers of a loaded booking", self.duplicate_trackers),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
@@ -569,6 +577,29 @@ def is_true(value: Any) -> bool:
 def _mentor_minutes(durations: dict[str, int], mentor: str) -> int:
     """A mentor's usual session length, or the legacy mode when none is on record."""
     return durations.get(mentor, DEFAULT_DURATION_MINUTES)
+
+
+def _is_blank(raw: Any) -> bool:
+    """Nothing recorded. A numeric 0 is a recorded value, so it is not blank."""
+    return raw is None or not str(raw).strip()
+
+
+def _length(
+    own: Any, linked: Any, durations: dict[str, int], mentor: str
+) -> tuple[int | None, Any, str | None]:
+    """A session's length: ``(minutes, the raw value read, how it was guessed)``.
+
+    Its own recorded length, else its linked record's (booking or tracker), else
+    the mentor's usual one (owner, 2026-11-14). A value that is recorded but the
+    CHECK refuses gives ``None`` minutes: a fact we cannot carry is dropped, never
+    replaced by a guess. ``how`` is ``None`` when recorded, else ``"mentor"`` or
+    ``"default"`` (a mentor with no length on record: the legacy mode).
+    """
+    for raw in (own, linked):
+        if not _is_blank(raw):
+            return _duration(raw), raw, None
+    how = "mentor" if mentor in durations else "default"
+    return _mentor_minutes(durations, mentor), own, how
 
 
 def _duration(raw: Any) -> int | None:
@@ -875,15 +906,24 @@ def plan_sessions(
         booking_by_mentor[user_anchor] = booking_defaults(record, bubble_id=anchor)
     durations, duration_disagreements = durations_by_mentor(calendar_settings)
     trackers_by_anchor = {legacy_anchor(record): record for record in trackers}
+    # A tracker names its booking by `SessionID`, also where the booking never
+    # linked back (owner, 2026-11-14: 18 production trackers). Used only when
+    # the booking's own link is blank and exactly one tracker names it.
+    back_linked = {_text(record, BOOKING_TRACKER_FIELD) for record in bookings}
+    trackers_by_session: dict[str, list[dict[str, Any]]] = {}
+    for record in trackers:
+        session_id = _text(record, TRACKER_SESSION_FIELD)
+        if session_id and legacy_anchor(record) not in back_linked:
+            trackers_by_session.setdefault(session_id, []).append(record)
 
     sessions: list[SessionRow] = []
     participants: list[ParticipantRow] = []
     events: list[SessionEventRow] = []
     quarantined: list[QuarantinedTracker] = []
     dropped: list[DroppedRow] = []
-    #: Sessions that recorded no length and take their mentor's usual one
-    #: (owner, 2026-11-14). A length that is present but impossible still drops.
-    from_mentor: list[str] = []
+    #: Sessions whose length was guessed, by how (`_length`).
+    guessed: dict[str, list[str]] = {"mentor": [], "default": []}
+    duplicates: list[str] = []
     absorbed: list[str] = []
     creator_mismatches: list[Disagreement] = []
     starts_disagreements: list[Disagreement] = []
@@ -915,10 +955,12 @@ def plan_sessions(
 
         mentor = _text(record, BOOKING_MENTOR_FIELD)
         mentee = _text(record, BOOKING_MENTEE_FIELD)
-        minutes = _duration(record.get(BOOKING_DURATION_FIELD))
 
         # Decision 315. Looked up once; a tracker is an attendance fact.
         tracker = trackers_by_anchor.get(str(record.get(BOOKING_TRACKER_FIELD) or ""))
+        if tracker is None and _text(record, BOOKING_TRACKER_FIELD) is None:
+            named_by = trackers_by_session.get(anchor, [])
+            tracker = named_by[0] if len(named_by) == 1 else None
         accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
         # A legacy `Upcoming` was confirmed in Bubble whatever the flag says, and
         # stays so when the cancel flag has overridden it. Only `Upcoming`: the
@@ -945,18 +987,14 @@ def plan_sessions(
         if starts_at is None:
             dropped.append(DroppedRow(anchor, "no session date"))
             continue
-        blank_length = minutes is None and _text(record, BOOKING_DURATION_FIELD) is None
-        if blank_length:
-            # Its own tracker's recorded length first: that is a fact, not a guess.
-            recorded = _duration(tracker.get(TRACKER_DURATION_FIELD)) if tracker else None
-            blank_length = recorded is None
-            minutes = recorded if recorded is not None else _mentor_minutes(durations, mentor)
+        minutes, length_raw, how = _length(
+            record.get(BOOKING_DURATION_FIELD),
+            tracker.get(TRACKER_DURATION_FIELD) if tracker else None,
+            durations,
+            mentor,
+        )
         if minutes is None:
-            dropped.append(
-                DroppedRow(
-                    anchor, f"duration {record.get(BOOKING_DURATION_FIELD)!r} fails the CHECK"
-                )
-            )
+            dropped.append(DroppedRow(anchor, f"duration {length_raw!r} fails the CHECK"))
             continue
 
         if mentor not in mentor_linked:
@@ -1024,8 +1062,8 @@ def plan_sessions(
         unheld = status in LIVE_SESSION_STATUSES or status is SessionStatus.EXPIRED
         participants.extend(_pending_pair(anchor, mentor, mentee) if unheld else rows)
 
-        if blank_length:
-            from_mentor.append(anchor)
+        if how is not None:
+            guessed[how].append(anchor)
         sessions.append(
             SessionRow(
                 legacy_bubble_id=anchor,
@@ -1123,17 +1161,12 @@ def plan_sessions(
     # A tracker's own `SessionID` names its booking even where the booking never
     # linked back (owner, 2026-11-14): 18 production trackers.
     bookings_by_anchor = {legacy_anchor(record): record for record in bookings}
-    loaded_bookings = {row.legacy_bubble_id for row in sessions}
+    loaded_starts = {row.legacy_bubble_id: row.starts_at for row in sessions}
     for record in trackers:
         anchor = legacy_anchor(record)
         if anchor in merged:
             continue
         own_booking = bookings_by_anchor.get(_text(record, TRACKER_SESSION_FIELD) or "")
-        if own_booking is not None and legacy_anchor(own_booking) in loaded_bookings:
-            # Its booking loaded through another tracker: a duplicate record of
-            # that session, not a second session and not missing data.
-            absorbed.append(anchor)
-            continue
         try:
             starts_at = _timestamp(
                 record, TRACKER_START_FIELD, assume=export_timezone, anchor=anchor
@@ -1144,12 +1177,20 @@ def plan_sessions(
             errors.append(str(exc))
             continue
 
+        booking_start = loaded_starts.get(legacy_anchor(own_booking)) if own_booking else None
+        if booking_start is not None and booking_start == starts_at:
+            # Its booking loaded with another tracker, at the same start: a
+            # duplicate record of that session, not missing data. A different
+            # start falls through and loads as its own session.
+            absorbed.append(anchor)
+            duplicates.append(anchor)
+            continue
+
         mentor = _text(record, TRACKER_MENTOR_FIELD)
         creator = _text(record, CREATOR_FIELD)
         mentee = _text(record, TRACKER_MENTEE_FIELD) or (
             creator if creator in known_users else None
         )
-        minutes = _duration(record.get(TRACKER_DURATION_FIELD))
 
         # Quarantine and drop mean different things and are kept apart: a
         # quarantined row *cannot be attributed* — nobody can say whose session
@@ -1168,18 +1209,14 @@ def plan_sessions(
             )
             continue
         assert mentor is not None and mentee is not None  # noqa: S101 - narrowed by `missing`
-        blank_length = minutes is None and _text(record, TRACKER_DURATION_FIELD) is None
-        if blank_length:
-            # Its booking's recorded length first: that is a fact, not a guess.
-            recorded = _duration(own_booking.get(BOOKING_DURATION_FIELD)) if own_booking else None
-            blank_length = recorded is None
-            minutes = recorded if recorded is not None else _mentor_minutes(durations, mentor)
+        minutes, length_raw, how = _length(
+            record.get(TRACKER_DURATION_FIELD),
+            own_booking.get(BOOKING_DURATION_FIELD) if own_booking else None,
+            durations,
+            mentor,
+        )
         if minutes is None:
-            dropped.append(
-                DroppedRow(
-                    anchor, f"duration {record.get(TRACKER_DURATION_FIELD)!r} fails the CHECK"
-                )
-            )
+            dropped.append(DroppedRow(anchor, f"duration {length_raw!r} fails the CHECK"))
             continue
         if mentor == mentee:
             dropped.append(DroppedRow(anchor, "mentor and mentee are the same user"))
@@ -1211,8 +1248,8 @@ def plan_sessions(
         if overrode is not None:
             attendance_overrode.append(overrode)
 
-        if blank_length:
-            from_mentor.append(anchor)
+        if how is not None:
+            guessed[how].append(anchor)
         sessions.append(
             SessionRow(
                 legacy_bubble_id=anchor,
@@ -1299,7 +1336,9 @@ def plan_sessions(
         junk_room_names=tuple(junk_rooms),
         duration_disagreements=tuple(duration_disagreements),
         duration_defaulted=tuple(defaulted),
-        duration_from_mentor=tuple(from_mentor),
+        duration_from_mentor=tuple(guessed["mentor"]),
+        duration_from_default=tuple(guessed["default"]),
+        duplicate_trackers=tuple(duplicates),
         booking_defaulted=tuple(booking_missing),
         reschedule_evidence=tuple(reschedules),
         mentors_without_link=tuple(sorted(set(mentors_without_link))),

@@ -70,7 +70,8 @@ def test_no_length_and_no_calendar_takes_the_legacy_mode() -> None:
     result = plan([], [tracker(**{"Session Duration": None})], calendar=[])
 
     assert [row.duration_minutes for row in result.sessions] == [DEFAULT_DURATION_MINUTES]
-    assert result.duration_from_mentor == ("st-1",)
+    assert result.duration_from_default == ("st-1",)
+    assert result.duration_from_mentor == ()
 
 
 def test_a_recorded_length_is_kept() -> None:
@@ -143,3 +144,45 @@ def test_a_second_tracker_for_a_loaded_booking_is_absorbed_not_quarantined() -> 
     assert [row.legacy_bubble_id for row in result.sessions] == ["sb-1"]
     assert result.quarantined == ()
     assert "st-2" in result.absorbed_trackers
+    assert result.duplicate_trackers == ("st-2",)
+
+
+def test_a_booking_with_no_back_link_merges_with_the_tracker_naming_it() -> None:
+    """The tracker's attendance and length reach the booking, not a guess."""
+    result = plan(
+        [booking(SessionTracker=None, Duration=None)],
+        [tracker(SessionID="sb-1", **{"Session Duration": "20"})],
+        calendar=[calendar_row(**{"meetingDuration-TxT": "60"})],
+    )
+
+    assert [row.legacy_bubble_id for row in result.sessions] == ["sb-1"]
+    assert [row.duration_minutes for row in result.sessions] == [20]
+    assert "st-1" in result.absorbed_trackers
+    assert result.duration_from_mentor == ()
+
+
+def test_a_second_tracker_at_a_different_start_is_its_own_session() -> None:
+    """Not provably the same session, so it is not thrown away as a duplicate."""
+    other = tracker(bubble_id="st-2", SessionID="sb-1", **{"session time": "Sep 9, 2025 1:00 am"})
+    result = plan([booking(SessionTracker="st-1")], [tracker(SessionID="sb-1"), other])
+
+    assert sorted(row.legacy_bubble_id for row in result.sessions) == ["sb-1", "st-2"]
+    assert result.duplicate_trackers == ()
+
+
+def test_a_numeric_zero_is_recorded_and_dropped_not_guessed() -> None:
+    result = plan([], [tracker(**{"Session Duration": 0})])
+
+    assert not result.sessions
+    assert [row.legacy_bubble_id for row in result.dropped] == ["st-1"]
+
+
+def test_an_impossible_length_on_the_linked_record_is_dropped_not_guessed() -> None:
+    """The booking is blank and its tracker recorded 1: a fact the CHECK refuses."""
+    result = plan(
+        [booking(Duration=None, SessionTracker="st-1")],
+        [tracker(**{"Session Duration": "1"})],
+    )
+
+    assert "sb-1" in [row.legacy_bubble_id for row in result.dropped]
+    assert result.duration_from_mentor == ()
