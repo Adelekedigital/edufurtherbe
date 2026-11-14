@@ -8,7 +8,8 @@ first name save replaces. Existing handles, imported ones included, are never
 touched. Safe to re-run: a second run finds nothing to do. The rules are in
 `app.domain.slugs` and `app.infra.db.slugs`; this only wires them up.
 
-Exit 2 when an existing handle does not fit the frontend's handle pattern:
+Exit 2 when an existing handle cannot be reached at /mentors/{handle} (off the
+frontend's pattern, a bare route word, or shaped like an id):
 a person decides what to do about it.
 """
 
@@ -38,11 +39,11 @@ async def run(apply: bool) -> int:
         await engine.dispose()
     print(f"handles from names   {result.from_name}")
     print(f"placeholder handles  {result.placeholders}")
-    print(f"handles the frontend would refuse: {len(result.off_pattern)}")
-    for slug in result.off_pattern:
+    print(f"existing handles the profile route cannot reach: {len(result.unservable)}")
+    for slug in result.unservable:
         print(f"   {slug}")
     print("written" if apply else "dry run: nothing written")
-    return EXIT_UNRESOLVED if result.off_pattern else EXIT_OK
+    return EXIT_UNRESOLVED if result.unservable else EXIT_OK
 
 
 def main() -> int:

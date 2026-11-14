@@ -6,6 +6,7 @@ saved; never changed after; imported handles never touched.
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from uuid import UUID, uuid4
 
@@ -17,6 +18,7 @@ from tests.integration.test_api_writes import url
 from tests.integration.test_first_sign_in import URL, token_for
 
 from app.infra.db.slugs import backfill_slugs, give_slug, settle_name_slug
+from app.infra.db.triggers import timestamps_from_source
 from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -131,10 +133,64 @@ async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -
     assert slug is not None and PLACEHOLDER.match(slug) and placeholder
     assert await handle_of(db_engine, kept) == ("kept-handle", False)
     assert await handle_of(db_engine, odd) == ("-odd-handle", False)
-    assert "-odd-handle" in result.off_pattern
+    assert "-odd-handle" in result.unservable
     assert result.from_name >= 1 and result.placeholders >= 1
 
     async with AsyncSession(db_engine) as session:
         again = await backfill_slugs(session)
         await session.rollback()
     assert (again.from_name, again.placeholders) == (0, 0)
+
+
+async def test_a_handle_a_deleted_account_can_restore_is_not_given_away(
+    db_engine: AsyncEngine,
+) -> None:
+    async with db_engine.begin() as conn:
+        await add_user(
+            conn, "gone.slug@example.com", slug="john-smith", deleted_at=dt.datetime.now(dt.UTC)
+        )
+        newcomer = await add_user(
+            conn, "john.slug@example.com", first_name="John", last_name="Smith"
+        )
+    async with AsyncSession(db_engine) as session:
+        await give_slug(session, newcomer)
+        await session.commit()
+
+    assert (await handle_of(db_engine, newcomer))[0] == "john-smith-2"
+
+
+async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: AsyncEngine) -> None:
+    legacy = dt.datetime(2024, 3, 1, 12, 0, tzinfo=dt.UTC)
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "dated.slug@example.com", first_name="Dated")
+        async with timestamps_from_source(conn, "users"):
+            await conn.execute(
+                text("UPDATE users SET updated_at = :t WHERE id = :u"), {"t": legacy, "u": user_id}
+            )
+    async with AsyncSession(db_engine) as session:
+        await backfill_slugs(session)
+        await session.commit()
+
+    async with db_engine.connect() as conn:
+        updated = await conn.scalar(
+            text("SELECT updated_at FROM users WHERE id = :u"), {"u": user_id}
+        )
+    assert (await handle_of(db_engine, user_id))[0] == "dated"
+    assert updated == legacy
+
+
+async def test_a_last_name_save_settles_a_placeholder_once_a_first_name_exists(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    user_id, headers = await signed_in(api_client, "lastonly.slug@example.com")
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET first_name = 'Lara' WHERE id = :u"), {"u": user_id}
+        )
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"last_name": "Croft"}, headers=headers
+    )
+
+    assert response.status_code == 204, response.text
+    assert await handle_of(db_engine, user_id) == ("lara-croft", False)

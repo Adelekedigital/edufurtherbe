@@ -10,11 +10,12 @@ from itertools import islice
 
 import pytest
 
+from app.domain.handles import RESERVED_HANDLES
 from app.domain.slugs import (
     HANDLE_PATTERN,
     MAX_SLUG_LENGTH,
-    RESERVED_SLUGS,
     candidates,
+    is_servable,
     name_slug,
     placeholder_slug,
     strip_accents,
@@ -96,17 +97,30 @@ def test_a_suffix_never_pushes_a_slug_past_the_limit() -> None:
     assert second.endswith("-2")
 
 
-@pytest.mark.parametrize("word", sorted(RESERVED_SLUGS))
+@pytest.mark.parametrize("word", sorted(RESERVED_HANDLES))
 def test_a_reserved_word_is_never_a_handle_on_its_own(word: str) -> None:
     first = next(candidates(word))
     assert first == f"{word}-2"
 
 
-def test_the_reserved_words_are_the_agreed_twelve() -> None:
+def test_the_frontends_twelve_route_words_are_reserved() -> None:
     assert {
         "me", "new", "edit", "admin", "settings", "api", "explore",
         "invite", "mentors", "mentees", "null", "undefined",
-    } == RESERVED_SLUGS  # fmt: skip
+    } <= RESERVED_HANDLES  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("slug", "servable"),
+    [
+        ("chloe-nwosu", True),
+        ("-odd", False),
+        ("admin", False),
+        ("123e4567-e89b-12d3-a456-426614174000", False),
+    ],
+)
+def test_a_handle_is_servable_only_if_the_router_can_reach_it(slug: str, servable: bool) -> None:
+    assert is_servable(slug) is servable
 
 
 def test_strip_accents_refuses_what_has_no_ascii_form() -> None:

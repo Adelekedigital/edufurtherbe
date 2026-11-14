@@ -480,8 +480,9 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:
         await session.execute(update(User).where(User.id == user_id).values(**user_values))
-        if "first_name" in user_values:
-            # A placeholder handle becomes the name's, once (owner, 2026-11-14).
+        if user_values.keys() & {"first_name", "last_name"}:
+            # A missing or placeholder handle becomes the name's, once (owner,
+            # 2026-11-14); a final one is untouched.
             await settle_name_slug(session, user_id)
     values = {key: value for key, value in payload.items() if key in PROFILE_COLUMNS}
     existing = await session.execute(
