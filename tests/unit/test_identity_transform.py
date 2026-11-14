@@ -168,3 +168,41 @@ def test_a_comma_joined_single_language_field_is_split() -> None:
         export_timezone=ZoneInfo("America/New_York"),
     )
     assert row.language_names == ("English", "Yoruba")
+
+
+def test_a_protocol_relative_image_is_stored_with_https() -> None:
+    """The production export writes Bubble uploads as ``//host/path``. Fixed once,
+    here, so no reader of the column ever sees an address without a scheme,
+    including an image the asset copy later fails to fetch."""
+    profile = {
+        "bubble_id": "1700000000000x000000000000000051",
+        "created_at": "Sep 3, 2025 5:31 am",
+        "modified_at": "Sep 4, 2025 5:31 am",
+        " Profile banner Image": " //4f8.cdn.bubble.io/f2/banner.png",
+    }
+    row = to_profile(
+        profile,
+        user_bubble_id=USER_ID,
+        user_record=record(**{"〽️User Profile image": "//4f8.cdn.bubble.io/f1/a.jpg"}),
+        export_timezone=ZoneInfo("America/New_York"),
+    )
+    assert row.avatar_url == "https://4f8.cdn.bubble.io/f1/a.jpg"
+    assert row.banner_url == "https://4f8.cdn.bubble.io/f2/banner.png"
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_no_image_stays_no_image(blank: str | None) -> None:
+    profile = {
+        "bubble_id": "1700000000000x000000000000000052",
+        "created_at": "Sep 3, 2025 5:31 am",
+        "modified_at": "Sep 4, 2025 5:31 am",
+        " Profile banner Image": blank,
+    }
+    row = to_profile(
+        profile,
+        user_bubble_id=USER_ID,
+        user_record=record(**{"〽️User Profile image": blank}),
+        export_timezone=ZoneInfo("America/New_York"),
+    )
+    assert row.avatar_url is None
+    assert row.banner_url is None
