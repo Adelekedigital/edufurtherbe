@@ -129,7 +129,7 @@ async def ledger(engine: AsyncEngine, mentee: UUID) -> list[tuple[int, str, str]
         rows = await conn.execute(
             text(
                 "SELECT delta, reason, session_id FROM credit_transactions "
-                "WHERE user_id = :u AND session_id IS NOT NULL ORDER BY created_at"
+                "WHERE user_id = :u AND session_id IS NOT NULL ORDER BY created_at, id"
             ),
             {"u": mentee},
         )

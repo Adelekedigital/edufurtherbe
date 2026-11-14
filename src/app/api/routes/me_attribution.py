@@ -52,6 +52,8 @@ async def record_own_acquisition(
         "Records the caller's answer to analytics cookies, replacing any "
         "earlier one: a decline is kept as an answer, and a later grant "
         "replaces it. `GET /me` → `analytics_consent` reads it back.\n\n"
+        "`method` says how it was given (see the field), and a later answer "
+        "replaces it too.\n\n"
         "It governs the app's own tracking in the browser. The outcomes the "
         "server records (a booking, a session held) are the platform's own "
         "records, by account id and never by name, and are counted in product "
