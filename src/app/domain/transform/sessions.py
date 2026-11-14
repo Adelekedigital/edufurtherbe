@@ -395,6 +395,8 @@ class SessionPlan:
     duration_disagreements: tuple[Disagreement, ...] = ()
     #: Mentors with no `CalendarSettings` at all, given the legacy mode.
     duration_defaulted: tuple[str, ...] = ()
+    #: Sessions with no recorded length, given their mentor's usual one.
+    duration_from_mentor: tuple[str, ...] = ()
     #: Mentors holding sessions for whom no mentor record was found, whose
     #: offerings therefore take the column defaults rather than their venue
     #: and confirmation setting.
@@ -494,6 +496,7 @@ class SessionPlan:
             ("junk room names", self.junk_room_names),
             ("duration disagreements (modal wins)", self.duration_disagreements),
             ("duration defaulted to the legacy mode", self.duration_defaulted),
+            ("no recorded length, mentor's usual one used", self.duration_from_mentor),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
@@ -540,6 +543,10 @@ def is_true(value: Any) -> bool:
     classify every one of them as present-and-not-yes rather than absent.
     """
     return str(value or "").strip().lower() in TRUE_VALUES
+
+
+def _blank(raw: Any) -> bool:
+    return not str(raw or "").strip()
 
 
 def _duration(raw: Any) -> int | None:
@@ -852,6 +859,9 @@ def plan_sessions(
     events: list[SessionEventRow] = []
     quarantined: list[QuarantinedTracker] = []
     dropped: list[DroppedRow] = []
+    #: Sessions that recorded no length and take their mentor's usual one
+    #: (owner, 2026-11-14). A length that is present but impossible still drops.
+    from_mentor: list[str] = []
     absorbed: list[str] = []
     creator_mismatches: list[Disagreement] = []
     starts_disagreements: list[Disagreement] = []
@@ -913,6 +923,9 @@ def plan_sessions(
         if starts_at is None:
             dropped.append(DroppedRow(anchor, "no session date"))
             continue
+        blank_length = minutes is None and _blank(record.get(BOOKING_DURATION_FIELD))
+        if blank_length:
+            minutes = durations.get(mentor, DEFAULT_DURATION_MINUTES)
         if minutes is None:
             dropped.append(
                 DroppedRow(
@@ -986,6 +999,8 @@ def plan_sessions(
         unheld = status in LIVE_SESSION_STATUSES or status is SessionStatus.EXPIRED
         participants.extend(_pending_pair(anchor, mentor, mentee) if unheld else rows)
 
+        if blank_length:
+            from_mentor.append(anchor)
         sessions.append(
             SessionRow(
                 legacy_bubble_id=anchor,
@@ -1117,6 +1132,10 @@ def plan_sessions(
                 QuarantinedTracker(anchor, mentor, starts_at, f"no {', no '.join(missing)}")
             )
             continue
+        blank_length = minutes is None and _blank(record.get(TRACKER_DURATION_FIELD))
+        if blank_length:
+            # `mentor` is set: a tracker without one was quarantined above.
+            minutes = durations.get(mentor or "", DEFAULT_DURATION_MINUTES)
         if minutes is None:
             dropped.append(
                 DroppedRow(
@@ -1155,6 +1174,8 @@ def plan_sessions(
         if overrode is not None:
             attendance_overrode.append(overrode)
 
+        if blank_length:
+            from_mentor.append(anchor)
         sessions.append(
             SessionRow(
                 legacy_bubble_id=anchor,
@@ -1242,6 +1263,7 @@ def plan_sessions(
         junk_room_names=tuple(junk_rooms),
         duration_disagreements=tuple(duration_disagreements),
         duration_defaulted=tuple(defaulted),
+        duration_from_mentor=tuple(from_mentor),
         booking_defaulted=tuple(booking_missing),
         reschedule_evidence=tuple(reschedules),
         mentors_without_link=tuple(sorted(set(mentors_without_link))),
