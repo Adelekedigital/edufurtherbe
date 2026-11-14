@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.attribution import CONSENT_VERSION_MAX_LENGTH
-from app.domain.enums import LegalDocumentType
+from app.domain.enums import ConsentMethod, LegalDocumentType
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -130,10 +130,21 @@ class AnalyticsConsent(TimestampMixin, Base):
     )
     granted: Mapped[bool] = mapped_column(Boolean, nullable=False)
     version: Mapped[str] = mapped_column(Text, nullable=False)
+    #: How the answer was given (decision 345); null from a client that
+    #: predates it, and for every answer recorded before it.
+    method: Mapped[ConsentMethod | None] = mapped_column(str_enum(ConsentMethod))
 
     __table_args__ = (
         CheckConstraint(
             f"char_length(version) BETWEEN 1 AND {CONSENT_VERSION_MAX_LENGTH}",
             name="version_length",
+        ),
+        CheckConstraint(
+            f"method IS NULL OR {check_is_known('method', ConsentMethod)}",
+            name="method_is_known",
+        ),
+        CheckConstraint(
+            "method IS NULL OR method = 'settings' OR (method = 'accept') = granted",
+            name="method_fits_answer",
         ),
     )

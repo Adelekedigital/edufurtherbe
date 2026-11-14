@@ -79,7 +79,7 @@ async def ledger_of(engine: AsyncEngine, user_id: UUID) -> list[Any]:
         rows = await conn.execute(
             text(
                 "SELECT delta, reason FROM credit_transactions "
-                "WHERE user_id = :u ORDER BY created_at"
+                "WHERE user_id = :u ORDER BY created_at, id"
             ),
             {"u": user_id},
         )

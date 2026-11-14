@@ -232,7 +232,7 @@ async def test_the_refunded_credit_is_a_fresh_lot(
         sources = [
             row[0]
             for row in await conn.execute(
-                text("SELECT source FROM credit_lots WHERE user_id = :u ORDER BY created_at"),
+                text("SELECT source FROM credit_lots WHERE user_id = :u ORDER BY created_at, id"),
                 {"u": mentee},
             )
         ]

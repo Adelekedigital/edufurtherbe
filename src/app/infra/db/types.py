@@ -43,6 +43,7 @@ from app.domain.enums import (
     AvailabilityExceptionType,
     AwardFunding,
     ConferencingProvider,
+    ConsentMethod,
     ConversationStatus,
     CoverArt,
     CoverColor,
@@ -249,6 +250,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
     SignupChannel: frozenset({"ck_users_signup_channel_is_known"}),
     AuthMethod: frozenset({"ck_users_auth_method_is_known"}),
     EntryPoint: frozenset({"ck_sessions_entry_point_is_known"}),
+    ConsentMethod: frozenset({"ck_analytics_consents_method_is_known"}),
     # Which email a person switched on or off (Messages PRD, decision 303).
     NotificationPreferenceType: frozenset(
         {"ck_notification_channel_preferences_notification_type_is_known"}
