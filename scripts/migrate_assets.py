@@ -49,7 +49,6 @@ from app.domain.assets import (
     AssetAction,
     AssetKind,
     AssetReport,
-    absolute_url,
     decide,
     host_of,
     object_path,
@@ -107,7 +106,7 @@ def rehost(
     url = profile.url_for(kind)
     if url is None:
         return None
-    fetched = source.fetch(absolute_url(url))
+    fetched = source.fetch(url)
     if fetched is None:
         return None
 

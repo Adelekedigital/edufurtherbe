@@ -335,10 +335,23 @@ def test_a_protocol_relative_address_is_fetched_over_https() -> None:
         ("https://lh3.googleusercontent.com/a/x", "https://lh3.googleusercontent.com/a/x"),
         ("http://lh3.googleusercontent.com/a/x", "http://lh3.googleusercontent.com/a/x"),
         ("lh3.googleusercontent.com/a/x", "https://lh3.googleusercontent.com/a/x"),
+        (
+            "lh3.googleusercontent.com/a/x?next=https://y",
+            "https://lh3.googleusercontent.com/a/x?next=https://y",
+        ),
+        ("app.edufurther.org/f1//img.jpg", "https://app.edufurther.org/f1//img.jpg"),
+        (" //4f8.cdn.bubble.io/f1/a.jpg\n", "https://4f8.cdn.bubble.io/f1/a.jpg"),
     ],
-    ids=["https-kept", "http-kept", "bare-host"],
+    ids=[
+        "https-kept",
+        "http-kept",
+        "bare-host",
+        "bare-host-url-in-query",
+        "bare-host-double-slash-path",
+        "padded",
+    ],
 )
-def test_an_address_with_a_scheme_is_left_alone(url: str, expected: str) -> None:
+def test_every_address_gets_exactly_one_scheme(url: str, expected: str) -> None:
     assert absolute_url(url) == expected
 
 
