@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from itertools import count
+from itertools import chain, count
 from uuid import UUID
 
-from app.domain.handles import RESERVED_HANDLES, fold_to_handle, strip_marks
+from app.domain.handles import RESERVED_HANDLES, fold_to_handle, random_token, strip_marks
 
 #: The column CHECK's bound (`slug_is_url_safe`), and the agreed maximum.
 MAX_SLUG_LENGTH = 60
@@ -38,7 +38,7 @@ def strip_accents(value: str) -> str | None:
     """``value`` with its accents removed, or ``None`` if a character has no
     ASCII form (``ø``, ``ß``, ``山``). Decision 311's rule, shared with the
     import's `fold_slug`, which must never alter a handle beyond its accents."""
-    bare = strip_marks(value)
+    bare = strip_marks(value, form="NFD")
     return bare if bare.isascii() else None
 
 
@@ -60,6 +60,8 @@ def name_slug(first_name: str | None, last_name: str | None) -> str | None:
     (Chloé → chloe) and any other run of characters becomes one ``-``. Cut to the limit at a
     ``-`` where there is one. A UUID-shaped result is refused.
     """
+    if not (first_name or "").strip():
+        return None
     slug = fold_to_handle(" ".join(part for part in (first_name, last_name) if part))
     if len(slug) > MAX_SLUG_LENGTH:
         cut = slug[: MAX_SLUG_LENGTH + 1]
@@ -78,15 +80,17 @@ def placeholder_slug(token: str) -> str:
 
 
 def candidates(base: str) -> Iterator[str]:
-    """``base``, then ``base-2``, ``base-3``…, each within the limit.
+    """``base``, then ``base-2`` to ``base-9``, then ``base-`` and 4 random
+    characters for as long as it takes, each within the limit.
 
-    A reserved word is never offered on its own, so ``admin`` starts at
-    ``admin-2``.
+    Counting stops at 9 so a common name (or seeded test accounts, which are
+    never deleted) costs a few tries, not one more each time. A reserved word
+    is never offered on its own, so ``admin`` starts at ``admin-2``.
     """
     if base not in RESERVED_HANDLES and not looks_like_id(base):
         yield base
-    for n in count(2):
-        suffix = f"-{n}"
+    suffixes = chain((f"-{n}" for n in range(2, 10)), (f"-{random_token(4)}" for _ in count()))
+    for suffix in suffixes:
         option = base[: MAX_SLUG_LENGTH - len(suffix)].rstrip("-") + suffix
         if not looks_like_id(option):
             yield option

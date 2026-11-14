@@ -19,6 +19,7 @@ from tests.integration.test_first_sign_in import URL, token_for
 from tests.integration.test_identity_load import record as load_record
 
 from app.domain.transform import transform_users
+from app.infra.db.account_purge import purge_account, restore_account
 from app.infra.db.slugs import backfill_slugs, give_slug, settle_name_slug
 from app.infra.db.triggers import timestamps_from_source
 from app.infra.etl.loader import UserLoader
@@ -235,11 +236,67 @@ async def test_a_dry_run_backfill_writes_nothing(db_engine: AsyncEngine) -> None
     assert await handle_of(db_engine, user_id) == (None, False)
 
 
-async def test_a_last_name_alone_makes_a_handle(db_engine: AsyncEngine) -> None:
+async def test_a_last_name_alone_waits_for_a_first_name(db_engine: AsyncEngine) -> None:
+    """A handle is named after the person: without a first name it stays a
+    placeholder, so a later first name still makes the real one."""
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "lastname.slug@example.com", last_name="Okafor")
     async with AsyncSession(db_engine) as session:
         await give_slug(session, user_id)
         await session.commit()
 
-    assert await handle_of(db_engine, user_id) == ("okafor", False)
+    slug, placeholder = await handle_of(db_engine, user_id)
+    assert slug is not None and PLACEHOLDER.match(slug) and placeholder
+
+
+async def test_a_loaded_account_without_a_legacy_slug_gets_one_at_load(
+    db_engine: AsyncEngine,
+) -> None:
+    rows = transform_users([load_record(Slug=None)]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+        slug = await conn.scalar(
+            text("SELECT slug FROM users WHERE legacy_bubble_id = :b"),
+            {"b": rows[0].legacy_bubble_id},
+        )
+
+    assert slug is not None
+
+
+async def test_a_restored_account_without_a_handle_gets_one(db_engine: AsyncEngine) -> None:
+    now = dt.datetime.now(dt.UTC)
+    async with db_engine.begin() as conn:
+        user_id = await add_user(
+            conn, "restore.slug@example.com", first_name="Remy", deleted_at=now
+        )
+        await conn.execute(
+            text("UPDATE users SET deletion_purge_at = :p WHERE id = :u"),
+            {"p": now + dt.timedelta(days=30), "u": user_id},
+        )
+    async with AsyncSession(db_engine) as session:
+        assert await restore_account(session, user_id, now=now)
+        await session.commit()
+
+    assert await handle_of(db_engine, user_id) == ("remy", False)
+
+
+async def test_a_purged_account_holds_no_handle_and_no_placeholder_flag(
+    db_engine: AsyncEngine,
+) -> None:
+    now = dt.datetime.now(dt.UTC)
+    async with db_engine.begin() as conn:
+        user_id = await add_user(
+            conn, "purge.slug@example.com", deleted_at=now - dt.timedelta(days=31)
+        )
+        await conn.execute(
+            text(
+                "UPDATE users SET slug = 'user-purge123', slug_is_placeholder = true, "
+                "deletion_purge_at = :p WHERE id = :u"
+            ),
+            {"p": now - dt.timedelta(minutes=1), "u": user_id},
+        )
+    async with AsyncSession(db_engine) as session:
+        assert await purge_account(session, user_id, now=now) is not None
+        await session.commit()
+
+    assert await handle_of(db_engine, user_id) == (None, False)

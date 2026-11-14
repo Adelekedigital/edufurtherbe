@@ -11,6 +11,7 @@ import re
 import secrets
 import string
 import unicodedata
+from typing import Literal
 
 #: Lowercase letters and digits: the random part of a default invite code and
 #: of a placeholder profile handle.
@@ -33,13 +34,15 @@ RESERVED_HANDLES = frozenset(
 )  # fmt: skip
 
 
-def strip_marks(text: str) -> str:
-    """``text`` decomposed (NFKD) with its combining marks dropped: ``Zoë`` to
-    ``Zoe``, ``ﬁ`` to ``fi``. The one decomposition every fold here builds on:
-    handles, the import's accent rule and search (rule 8)."""
-    return "".join(
-        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
-    )
+def strip_marks(text: str, *, form: Literal["NFKD", "NFD"] = "NFKD") -> str:
+    """``text`` decomposed with its combining marks dropped: ``Zoë`` to ``Zoe``.
+
+    The one decomposition every fold here builds on (rule 8). NFKD, the
+    default, also unfolds compatibility forms (``ﬁ`` to ``fi``) for handles
+    made from names and for search. NFD touches accents only: the import's
+    rule, which must never alter a legacy handle beyond its accents.
+    """
+    return "".join(ch for ch in unicodedata.normalize(form, text) if not unicodedata.combining(ch))
 
 
 def fold_to_handle(text: str) -> str:

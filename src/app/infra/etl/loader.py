@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.enums import SignupSource
 from app.domain.transform import UserRow
+from app.infra.db.slugs import give_missing_slugs
 from app.infra.db.triggers import timestamps_from_source
 
 __all__ = ["UPSERT_USER", "UserLoader", "timestamps_from_source"]
@@ -94,5 +95,11 @@ class UserLoader:
                 # Every account this loads came from the old platform.
                 parameters["signup_source"] = SignupSource.MIGRATED.value
                 await self._connection.execute(text(UPSERT_USER), parameters)
+            # Every account has a handle (owner, 2026-11-14): a legacy row
+            # with no slug gets one now, not at a later backfill run.
+            await give_missing_slugs(
+                self._connection,
+                legacy_ids=[row.legacy_bubble_id for row in rows if row.slug is None],
+            )
 
         return len(rows)

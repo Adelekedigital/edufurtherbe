@@ -6,6 +6,7 @@ its handle pattern and never look like a UUID.
 
 from __future__ import annotations
 
+import re
 from itertools import islice
 
 import pytest
@@ -34,7 +35,6 @@ FE_HANDLE = HANDLE_PATTERN
         ("  Ada ", " Lovelace  ", "ada-lovelace"),
         ("Mary-Jane", "O'Neil", "mary-jane-o-neil"),
         ("Ada", None, "ada"),
-        (None, "Okafor", "okafor"),
         ("Søren", "Kierkegaard", "s-ren-kierkegaard"),
     ],
 )
@@ -47,7 +47,7 @@ def test_a_name_becomes_a_readable_handle(
 
 
 @pytest.mark.parametrize(
-    ("first", "last"), [(None, None), ("", "  "), ("山田", "太郎"), ("---", "!!")]
+    ("first", "last"), [(None, None), ("", "  "), ("山田", "太郎"), ("---", "!!"), (None, "Okafor")]
 )
 def test_a_name_with_nothing_usable_gives_none(first: str | None, last: str | None) -> None:
     assert name_slug(first, last) is None
@@ -134,6 +134,20 @@ def test_strip_accents_refuses_what_has_no_ascii_form() -> None:
 def test_the_import_still_folds_exactly_as_before() -> None:
     assert fold_slug("Bánkólé-Wright") == "bankole-wright"
     assert fold_slug("Søren") is None
+
+
+@pytest.mark.parametrize("legacy", ["\ufb01ona", "ada\u00b2", "\uff41\uff44\uff41"])
+def test_the_import_refuses_compatibility_forms_rather_than_rewriting_them(legacy: str) -> None:
+    """Decision 311: only accents. A ligature or a full-width letter would
+    load as a different handle and break the shared link."""
+    assert fold_slug(legacy) is None
+
+
+def test_counting_stops_at_nine_then_suffixes_are_random() -> None:
+    options = list(islice(candidates("demo"), 12))
+
+    assert options[:9] == ["demo"] + [f"demo-{n}" for n in range(2, 10)]
+    assert all(re.fullmatch(r"demo-[a-z0-9]{4}", o) for o in options[9:])
 
 
 @pytest.mark.parametrize(

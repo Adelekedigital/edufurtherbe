@@ -83,6 +83,7 @@ from app.infra.db.models.user import (
 from app.infra.db.models.writing_assist import WritingAssistRequest
 from app.infra.db.outbox import forget_unsent_analytics
 from app.infra.db.predicates import LIVE
+from app.infra.db.slugs import give_slug
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,7 @@ async def purge_account(
             first_name=None,
             last_name=None,
             slug=None,
+            slug_is_placeholder=False,
             auth_id=None,
             last_active_at=None,
             deletion_purge_at=None,
@@ -358,4 +360,8 @@ async def restore_account(session: AsyncSession, user_id: UUID, *, now: dt.datet
     except IntegrityError as exc:
         await session.rollback()
         raise ConflictError("this account's email or handle now belongs to a live account") from exc
-    return restored.first() is not None
+    if restored.first() is None:
+        return False
+    # Deleted before every account had a handle: it comes back with one.
+    await give_slug(session, user_id)
+    return True

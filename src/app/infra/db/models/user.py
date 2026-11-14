@@ -185,6 +185,13 @@ class User(TimestampMixin, Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL AND slug IS NOT NULL"),
         ),
+        # Handles a self-deleted account may still restore: a new handle skips
+        # them (`infra.db.slugs`), and this keeps that check off a full scan.
+        Index(
+            "ix_users_slug_deleted",
+            "slug",
+            postgresql_where=text("deleted_at IS NOT NULL AND slug IS NOT NULL"),
+        ),
         # No DESC. A single-column btree is scanned in either direction, so
         # `ORDER BY last_active_at DESC` uses this index exactly as well as a
         # descending one would — and an expression index is one more thing for

@@ -10,11 +10,11 @@ final (`slug_is_placeholder` false) is never written over.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import exists, or_, select, text, update
+from sqlalchemy import Select, exists, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
@@ -125,6 +125,31 @@ def _is_final(slug: str | None, placeholder: bool) -> bool:
     return slug is not None and not placeholder
 
 
+def _missing(
+    legacy_ids: Sequence[str] | None = None,
+) -> Select[tuple[UUID, str | None, str | None]]:
+    query = select(User.id, User.first_name, User.last_name).where(User.slug.is_(None), LIVE)
+    if legacy_ids is not None:
+        query = query.where(User.legacy_bubble_id.in_(legacy_ids))
+    return query.order_by(User.id)
+
+
+async def give_missing_slugs(
+    session: Db, *, legacy_ids: Sequence[str] | None = None
+) -> tuple[int, int]:
+    """A handle for every live account without one (or only those loaded from
+    ``legacy_ids``): ``(from names, placeholders)``. Does not commit, and does
+    not hold `updated_at`: the caller does (the backfill, or the loader, which
+    already holds it)."""
+    from_name = placeholders = 0
+    for user_id, first_name, last_name in (await session.execute(_missing(legacy_ids))).all():
+        if await _name_handle(session, user_id, first_name, last_name):
+            from_name += 1
+        elif await give_placeholder(session, user_id):
+            placeholders += 1
+    return from_name, placeholders
+
+
 @dataclass(frozen=True)
 class SlugBackfill:
     """What a backfill gave out, and existing handles the router cannot serve."""
@@ -148,26 +173,15 @@ async def backfill_slugs(session: Db, *, apply: bool) -> SlugBackfill:
     hold takes an exclusive lock on ``users`` until the caller commits, so it
     gives up after 3 s rather than queue live traffic behind it: run it in a
     quiet window (the cutover's, or a quiet moment on dev)."""
-    missing = (
-        await session.execute(
-            select(User.id, User.first_name, User.last_name)
-            .where(User.slug.is_(None), LIVE)
-            .order_by(User.id)
-        )
-    ).all()
-    from_name = placeholders = 0
     if not apply:
+        missing = (await session.execute(_missing())).all()
         from_name = sum(1 for _, first, last in missing if name_slug(first, last))
         placeholders = len(missing) - from_name
     else:
         connection = await _connection(session)
         await connection.execute(text("SET LOCAL lock_timeout = '3s'"))
         async with timestamps_from_source(connection, "users"):
-            for user_id, first_name, last_name in missing:
-                if await _name_handle(session, user_id, first_name, last_name):
-                    from_name += 1
-                elif await give_placeholder(session, user_id):
-                    placeholders += 1
+            from_name, placeholders = await give_missing_slugs(session)
     handles = (
         (await session.execute(select(User.slug).where(User.slug.is_not(None), LIVE)))
         .scalars()
