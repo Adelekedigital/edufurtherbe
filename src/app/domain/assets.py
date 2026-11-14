@@ -26,7 +26,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import UUID
 
 
@@ -142,13 +142,21 @@ def legacy_image_url(value: object) -> str | None:
 #: The legacy app's placeholder banner, by its upload id. 178 production
 #: profiles carry it because nobody chose another, and its host now refuses it
 #: (403, 2026-11-14). It loads as no banner, so the new app's default shows.
-LEGACY_DEFAULT_BANNER = "/f1692390494515x191075007644834430/"
+LEGACY_DEFAULT_BANNER_ID = "f1692390494515x191075007644834430"
+
+
+def is_legacy_default_banner(value: object) -> bool:
+    """Is this the placeholder? Read from the decoded path, never the query,
+    so a resizer's encoded copy matches and a mention in a parameter does not."""
+    url = legacy_image_url(value)
+    if url is None:
+        return False
+    return f"/{LEGACY_DEFAULT_BANNER_ID}/" in unquote(urlparse(url).path)
 
 
 def legacy_banner_url(value: object) -> str | None:
     """A legacy banner as stored: ``None`` for the placeholder or a blank field."""
-    url = legacy_image_url(value)
-    return None if url is None or LEGACY_DEFAULT_BANNER in url else url
+    return None if is_legacy_default_banner(value) else legacy_image_url(value)
 
 
 def is_ours(url: str, storage_host: str) -> bool:
@@ -257,6 +265,8 @@ class AssetReport:
     """
 
     copied: int = 0
+    #: Placeholder banners pointed at nothing, so the default shows.
+    cleared: int = 0
     skipped: int = 0
     absent: int = 0
     failed: tuple[str, ...] = ()
@@ -270,6 +280,7 @@ class AssetReport:
         return "\n".join(
             [
                 f"copied  {self.copied}",
+                f"cleared {self.cleared} (the legacy placeholder banner)",
                 f"skipped {self.skipped} (already ours)",
                 f"absent  {self.absent} (no image, or the source would not serve it)",
                 f"failed  {len(self.failed)}",

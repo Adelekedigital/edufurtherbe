@@ -136,7 +136,7 @@ async def migrate(
     ]
     print(f"{len(profiles)} profiles, {len(jobs)} image URLs")
 
-    copied = skipped = absent = 0
+    copied = skipped = absent = cleared = 0
     refused_hosts: set[str] = set()
     failed: list[str] = []
     limit = asyncio.Semaphore(workers)
@@ -146,6 +146,12 @@ async def migrate(
             return kind, await asyncio.to_thread(rehost, profile, kind, source, storage)
 
     for profile in profiles:
+        if profile.has_placeholder_banner:
+            # Loaded before the placeholder rule: clear it, never fetch it.
+            if dry_run or await store.record(profile.user_id, AssetKind.BANNER, None):
+                cleared += 1
+            else:
+                failed.append(f"{profile.email} {AssetKind.BANNER}: placeholder not cleared")
         pending = [
             (kind, decide(profile.url_for(kind), storage.host))
             for kind in AssetKind
@@ -192,6 +198,7 @@ async def migrate(
     report = AssetReport(
         refused_hosts=tuple(sorted(refused_hosts)),
         copied=copied,
+        cleared=cleared,
         skipped=skipped,
         absent=absent,
         failed=tuple(failed),

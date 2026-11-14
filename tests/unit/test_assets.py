@@ -20,7 +20,9 @@ from app.domain.assets import (
     extension_for,
     host_of,
     is_fetchable,
+    is_legacy_default_banner,
     is_ours,
+    legacy_banner_url,
     object_path,
     sniff_content_type,
 )
@@ -375,3 +377,45 @@ def test_a_protocol_relative_address_reports_its_host() -> None:
 
 def test_a_protocol_relative_address_on_our_storage_is_ours() -> None:
     assert is_ours(f"//{OURS}/storage/v1/object/public/profile-images/x.jpg", OURS) is True
+
+
+# --------------------------------------------------------------------------
+# The legacy placeholder banner
+# --------------------------------------------------------------------------
+
+PLACEHOLDER_ID = "f1692390494515x191075007644834430"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"//4f8.cdn.bubble.io/{PLACEHOLDER_ID}/5559851%281%29.jpg",
+        f"//4f8.cdn.bubble.io/{PLACEHOLDER_ID}/5559851%281%29.jpg?fit=crop&q=100",
+        f"https://d1muf25xaso8hp.cloudfront.net/https%3A%2F%2F4f8.cdn.bubble.io%2F{PLACEHOLDER_ID}%2F5559851.jpg",
+    ],
+    ids=["plain", "cropped", "encoded-in-a-resizer"],
+)
+def test_the_placeholder_banner_is_recognised_in_every_form(url: str) -> None:
+    assert is_legacy_default_banner(url) is True
+    assert legacy_banner_url(url) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg",
+        f"//4f8.cdn.bubble.io/f1708330527710x5635/IMG.jpeg?from=/{PLACEHOLDER_ID}/",
+        None,
+        "",
+        "   ",
+        42,
+    ],
+    ids=["an-upload", "id-only-in-the-query", "none", "empty", "blank", "not-text"],
+)
+def test_anything_else_is_not_the_placeholder(value: object) -> None:
+    assert is_legacy_default_banner(value) is False
+
+
+def test_an_uploaded_banner_is_kept_with_https() -> None:
+    url = "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg"
+    assert legacy_banner_url(url) == f"https:{url}"

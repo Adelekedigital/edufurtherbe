@@ -21,7 +21,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.core.errors import NotFoundError
-from app.domain.assets import AssetKind, legacy_image_url, object_path
+from app.domain.assets import (
+    AssetKind,
+    is_legacy_default_banner,
+    legacy_banner_url,
+    legacy_image_url,
+    object_path,
+)
 from app.domain.images import process
 from app.infra.db.avatar_focus_store import focus_columns
 from app.infra.db.models.user import User
@@ -78,8 +84,15 @@ class ProfileAssets:
     banner_url: str | None
 
     def url_for(self, kind: AssetKind) -> str | None:
-        """Absolute, so deciding and fetching read the same address."""
-        return legacy_image_url(self.avatar_url if kind is AssetKind.AVATAR else self.banner_url)
+        """Absolute, so deciding and fetching read the same address. The
+        placeholder banner reads as no banner, as it does at load."""
+        if kind is AssetKind.AVATAR:
+            return legacy_image_url(self.avatar_url)
+        return legacy_banner_url(self.banner_url)
+
+    @property
+    def has_placeholder_banner(self) -> bool:
+        return is_legacy_default_banner(self.banner_url)
 
 
 class AssetStore:
@@ -96,8 +109,8 @@ class AssetStore:
             for row in rows
         ]
 
-    async def record(self, user_id: UUID, kind: AssetKind, url: str) -> bool:
-        """Point the column at the re-hosted object.
+    async def record(self, user_id: UUID, kind: AssetKind, url: str | None) -> bool:
+        """Point the column at the re-hosted object, or at nothing (``None``).
 
         **The trigger is held off**, for the same reason provisioning holds it:
         ``user_profiles.updated_at`` carries Bubble's Modified Date, and moving a
