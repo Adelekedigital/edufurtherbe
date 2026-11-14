@@ -395,7 +395,8 @@ class SessionPlan:
     duration_disagreements: tuple[Disagreement, ...] = ()
     #: Mentors with no `CalendarSettings` at all, given the legacy mode.
     duration_defaulted: tuple[str, ...] = ()
-    #: Sessions with no recorded length, given their mentor's usual one.
+    #: Sessions with no recorded length, given their mentor's usual one (or the
+    #: legacy mode, 45, for a mentor with none on record).
     duration_from_mentor: tuple[str, ...] = ()
     #: Mentors holding sessions for whom no mentor record was found, whose
     #: offerings therefore take the column defaults rather than their venue
@@ -426,6 +427,26 @@ class SessionPlan:
     @property
     def ok(self) -> bool:
         return not self.errors
+
+    @property
+    def needs_review(self) -> bool:
+        """Loaded, but something here is for a person to decide (exit 2).
+
+        Quarantined trackers are somebody's history that did not migrate; an
+        overlapping window aborts the load; a defaulted duration is a mentor
+        whose offering was guessed at, and a session with no recorded length
+        took a guessed one; a defaulted venue means no mentor record was found,
+        which in the loader has one plausible cause: the wrong Thing name.
+        """
+        return bool(
+            self.quarantined
+            or self.dropped
+            or self.overlapping_live_windows
+            or self.duration_defaulted
+            or self.duration_disagreements
+            or self.duration_from_mentor
+            or self.booking_defaulted
+        )
 
     def accounted_for_bookings(self) -> tuple[str, ...]:
         """Every booking anchor this run reached a decision about.
@@ -496,7 +517,7 @@ class SessionPlan:
             ("junk room names", self.junk_room_names),
             ("duration disagreements (modal wins)", self.duration_disagreements),
             ("duration defaulted to the legacy mode", self.duration_defaulted),
-            ("no recorded length, mentor's usual one used", self.duration_from_mentor),
+            ("no recorded length: mentor's usual, else 45", self.duration_from_mentor),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
@@ -545,8 +566,9 @@ def is_true(value: Any) -> bool:
     return str(value or "").strip().lower() in TRUE_VALUES
 
 
-def _blank(raw: Any) -> bool:
-    return not str(raw or "").strip()
+def _mentor_minutes(durations: dict[str, int], mentor: str) -> int:
+    """A mentor's usual session length, or the legacy mode when none is on record."""
+    return durations.get(mentor, DEFAULT_DURATION_MINUTES)
 
 
 def _duration(raw: Any) -> int | None:
@@ -923,9 +945,12 @@ def plan_sessions(
         if starts_at is None:
             dropped.append(DroppedRow(anchor, "no session date"))
             continue
-        blank_length = minutes is None and _blank(record.get(BOOKING_DURATION_FIELD))
+        blank_length = minutes is None and _text(record, BOOKING_DURATION_FIELD) is None
         if blank_length:
-            minutes = durations.get(mentor, DEFAULT_DURATION_MINUTES)
+            # Its own tracker's recorded length first: that is a fact, not a guess.
+            recorded = _duration(tracker.get(TRACKER_DURATION_FIELD)) if tracker else None
+            blank_length = recorded is None
+            minutes = recorded if recorded is not None else _mentor_minutes(durations, mentor)
         if minutes is None:
             dropped.append(
                 DroppedRow(
@@ -1095,9 +1120,19 @@ def plan_sessions(
 
     # --------------------------------------------------------- orphan trackers
     merged = set(absorbed)
+    # A tracker's own `SessionID` names its booking even where the booking never
+    # linked back (owner, 2026-11-14): 18 production trackers.
+    bookings_by_anchor = {legacy_anchor(record): record for record in bookings}
+    loaded_bookings = {row.legacy_bubble_id for row in sessions}
     for record in trackers:
         anchor = legacy_anchor(record)
         if anchor in merged:
+            continue
+        own_booking = bookings_by_anchor.get(_text(record, TRACKER_SESSION_FIELD) or "")
+        if own_booking is not None and legacy_anchor(own_booking) in loaded_bookings:
+            # Its booking loaded through another tracker: a duplicate record of
+            # that session, not a second session and not missing data.
+            absorbed.append(anchor)
             continue
         try:
             starts_at = _timestamp(
@@ -1132,10 +1167,13 @@ def plan_sessions(
                 QuarantinedTracker(anchor, mentor, starts_at, f"no {', no '.join(missing)}")
             )
             continue
-        blank_length = minutes is None and _blank(record.get(TRACKER_DURATION_FIELD))
+        assert mentor is not None and mentee is not None  # noqa: S101 - narrowed by `missing`
+        blank_length = minutes is None and _text(record, TRACKER_DURATION_FIELD) is None
         if blank_length:
-            # `mentor` is set: a tracker without one was quarantined above.
-            minutes = durations.get(mentor or "", DEFAULT_DURATION_MINUTES)
+            # Its booking's recorded length first: that is a fact, not a guess.
+            recorded = _duration(own_booking.get(BOOKING_DURATION_FIELD)) if own_booking else None
+            blank_length = recorded is None
+            minutes = recorded if recorded is not None else _mentor_minutes(durations, mentor)
         if minutes is None:
             dropped.append(
                 DroppedRow(
@@ -1147,7 +1185,6 @@ def plan_sessions(
             dropped.append(DroppedRow(anchor, "mentor and mentee are the same user"))
             continue
 
-        assert mentor is not None and mentee is not None  # noqa: S101 - narrowed by `missing`
         assert starts_at is not None and minutes is not None  # noqa: S101
         if mentor not in mentor_linked:
             mentors_without_link.append(mentor)
@@ -1221,10 +1258,9 @@ def plan_sessions(
     booking_missing: list[str] = []
     session_types: list[SessionTypeRow] = []
     for mentor in sorted({row.mentor_bubble_id for row in sessions}):
-        minutes = durations.get(mentor)
-        if minutes is None:
+        if mentor not in durations:
             defaulted.append(mentor)
-            minutes = DEFAULT_DURATION_MINUTES
+        minutes = _mentor_minutes(durations, mentor)
         # A mentor with sessions but no mentor record cannot happen — sessions
         # are keyed on a mentor-linked user — but the export is junk-filled test
         # data and this loop must not raise on a missing key. Falling back to the
