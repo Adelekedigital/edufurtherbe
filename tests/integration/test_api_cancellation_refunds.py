@@ -36,7 +36,7 @@ async def refunds_of(engine: AsyncEngine, session_id: str) -> list[str]:
         rows = await conn.execute(
             text(
                 "SELECT reason FROM credit_transactions "
-                "WHERE session_id = :i AND delta > 0 ORDER BY created_at"
+                "WHERE session_id = :i AND delta > 0 ORDER BY created_at, id"
             ),
             {"i": session_id},
         )

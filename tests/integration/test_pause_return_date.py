@@ -680,7 +680,7 @@ async def sent_stages(engine: AsyncEngine, mentor: UUID) -> list[str]:
             text(
                 "SELECT payload->>'stage' FROM outbox_events "
                 "WHERE event_type = 'mentor_return_reminder' AND entity_id = :u "
-                "ORDER BY created_at"
+                "ORDER BY created_at, id"
             ),
             {"u": mentor},
         )
@@ -804,7 +804,7 @@ async def payload_of(engine: AsyncEngine, mentor: UUID) -> list[dict[str, Any]]:
             text(
                 "SELECT payload FROM outbox_events "
                 "WHERE event_type = 'mentor_return_reminder' AND entity_id = :u "
-                "ORDER BY created_at"
+                "ORDER BY created_at, id"
             ),
             {"u": mentor},
         )
