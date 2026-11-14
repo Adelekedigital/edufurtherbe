@@ -58,6 +58,7 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
 from app.infra.db.offerings import live_offering_ids
+from app.infra.db.slugs import settle_name_slug
 
 GOAL_COLUMNS = (
     "degree_goal_id",
@@ -479,6 +480,9 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:
         await session.execute(update(User).where(User.id == user_id).values(**user_values))
+        if "first_name" in user_values:
+            # A placeholder handle becomes the name's, once (owner, 2026-11-14).
+            await settle_name_slug(session, user_id)
     values = {key: value for key, value in payload.items() if key in PROFILE_COLUMNS}
     existing = await session.execute(
         select(UserProfile.user_id).where(UserProfile.user_id == user_id)

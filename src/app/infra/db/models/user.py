@@ -117,6 +117,11 @@ class User(TimestampMixin, Base):
     # without breaking every URL that used it. Carried anyway, deliberately —
     # the alternative is discarding live profile links.
     slug: Mapped[str | None] = mapped_column(Text)
+    #: The handle is a `user-…` placeholder from first sign-in, replaced once
+    #: by one made from the name (`domain.slugs`); false means final.
+    slug_is_placeholder: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     # UX hint. NEVER an authorization check — see PrimaryRole.
     primary_role: Mapped[PrimaryRole] = mapped_column(
