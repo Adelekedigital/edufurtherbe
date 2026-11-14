@@ -403,9 +403,6 @@ class SessionPlan:
     #: A second tracker naming a loaded booking by its `SessionID`, at the same
     #: start: a duplicate record of that session, absorbed.
     duplicate_trackers: tuple[str, ...] = ()
-    #: Two or more trackers naming one booking by `SessionID` with the same
-    #: parties: none is merged, each loads on its own, for a person to decide.
-    ambiguous_trackers: tuple[str, ...] = ()
     #: Mentors holding sessions for whom no mentor record was found, whose
     #: offerings therefore take the column defaults rather than their venue
     #: and confirmation setting.
@@ -455,7 +452,6 @@ class SessionPlan:
             or self.duration_from_mentor
             or self.duration_from_default
             or self.duplicate_trackers
-            or self.ambiguous_trackers
             or self.booking_defaulted
         )
 
@@ -531,7 +527,6 @@ class SessionPlan:
             ("no recorded length: the mentor's usual one", self.duration_from_mentor),
             ("no recorded length, no mentor length: 45", self.duration_from_default),
             ("duplicate trackers of a loaded booking", self.duplicate_trackers),
-            ("trackers naming the same booking, none merged", self.ambiguous_trackers),
             ("venue and confirmation defaulted (no mentor record)", self.booking_defaulted),
             ("reschedule evidence, unlinkable", self.reschedule_evidence),
             ("session mentors with no mentor link", self.mentors_without_link),
@@ -585,43 +580,14 @@ def _mentor_minutes(durations: dict[str, int], mentor: str) -> int:
     return durations.get(mentor, DEFAULT_DURATION_MINUTES)
 
 
-def tracker_links(
-    bookings: list[dict[str, Any]], trackers: list[dict[str, Any]]
-) -> tuple[dict[str, dict[str, Any]], tuple[str, ...]]:
-    """Each booking's tracker, decided once for both loops (rule 8).
-
-    A booking's own ``SessionTracker`` link wins. Where it is blank, or names a
-    tracker the export does not hold, the one
-    tracker whose ``SessionID`` names the booking and records the same mentor
-    (and the same mentee, or none) is its tracker (owner, 2026-11-14). Two or
-    more such trackers cannot be told apart: they are returned as ambiguous,
-    for a person to decide, and the booking keeps no tracker.
-    """
-    by_anchor = {legacy_anchor(record): record for record in trackers}
-    links: dict[str, dict[str, Any]] = {}
-    for booking in bookings:
-        tracker = by_anchor.get(_text(booking, BOOKING_TRACKER_FIELD) or "")
-        if tracker is not None:
-            links[legacy_anchor(booking)] = tracker
-    claimed = {legacy_anchor(record) for record in links.values()}
-    naming: dict[str, list[dict[str, Any]]] = {}
-    for record in trackers:
-        session_id = _text(record, TRACKER_SESSION_FIELD)
-        if session_id and legacy_anchor(record) not in claimed:
-            naming.setdefault(session_id, []).append(record)
-    ambiguous: list[str] = []
-    for booking in bookings:
-        anchor = legacy_anchor(booking)
-        if anchor in links:
-            # Linked already. A link to a tracker missing from the export is
-            # treated as blank, so the tracker naming it can still be found.
-            continue
-        candidates = [t for t in naming.get(anchor, []) if _same_parties(booking, t)]
-        if len(candidates) == 1:
-            links[anchor] = candidates[0]
-        elif candidates:
-            ambiguous.extend(legacy_anchor(t) for t in candidates)
-    return links, tuple(ambiguous)
+def _start_or_none(
+    record: dict[str, Any], field_name: str, *, assume: dt.tzinfo, anchor: str
+) -> dt.datetime | None:
+    """A start time for a comparison only: unparseable reads as unknown."""
+    try:
+        return _timestamp(record, field_name, assume=assume, anchor=anchor)
+    except TransformError:
+        return None
 
 
 def _same_parties(booking: dict[str, Any], tracker: dict[str, Any]) -> bool:
@@ -959,7 +925,9 @@ def plan_sessions(
             continue
         booking_by_mentor[user_anchor] = booking_defaults(record, bubble_id=anchor)
     durations, duration_disagreements = durations_by_mentor(calendar_settings)
-    links, ambiguous = tracker_links(bookings, trackers)
+    trackers_by_anchor = {legacy_anchor(record): record for record in trackers}
+    # Trackers some booking links directly: never another booking's duplicate.
+    linked_trackers = {_text(record, BOOKING_TRACKER_FIELD) for record in bookings}
 
     sessions: list[SessionRow] = []
     participants: list[ParticipantRow] = []
@@ -1002,7 +970,7 @@ def plan_sessions(
         mentee = _text(record, BOOKING_MENTEE_FIELD)
 
         # Decision 315. Looked up once; a tracker is an attendance fact.
-        tracker = links.get(anchor)
+        tracker = trackers_by_anchor.get(str(record.get(BOOKING_TRACKER_FIELD) or ""))
         accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
         # A legacy `Upcoming` was confirmed in Bubble whatever the flag says, and
         # stays so when the cancel flag has overridden it. Only `Upcoming`: the
@@ -1029,9 +997,13 @@ def plan_sessions(
         if starts_at is None:
             dropped.append(DroppedRow(anchor, "no session date"))
             continue
+        same_start_tracker = tracker is not None and starts_at == _start_or_none(
+            tracker, TRACKER_START_FIELD, assume=export_timezone, anchor=anchor
+        )
         minutes, length_raw, how = _length(
             record.get(BOOKING_DURATION_FIELD),
-            tracker.get(TRACKER_DURATION_FIELD) if tracker else None,
+            # A length is borrowed only from the same session's record.
+            tracker.get(TRACKER_DURATION_FIELD) if tracker and same_start_tracker else None,
             durations,
             mentor,
         )
@@ -1202,12 +1174,13 @@ def plan_sessions(
     merged = set(absorbed)
     bookings_by_anchor = {legacy_anchor(record): record for record in bookings}
     loaded = {row.legacy_bubble_id: row for row in sessions}
-    ambiguous_set = set(ambiguous)
     for record in trackers:
         anchor = legacy_anchor(record)
         if anchor in merged:
             continue
-        own_booking = bookings_by_anchor.get(_text(record, TRACKER_SESSION_FIELD) or "")
+        # The booking its own `SessionID` names (owner, 2026-11-14).
+        booking_anchor = _text(record, TRACKER_SESSION_FIELD) or ""
+        own_booking = bookings_by_anchor.get(booking_anchor)
         try:
             starts_at = _timestamp(
                 record, TRACKER_START_FIELD, assume=export_timezone, anchor=anchor
@@ -1218,17 +1191,27 @@ def plan_sessions(
             errors.append(str(exc))
             continue
 
-        # The booking its `SessionID` names, when that is provably the same
-        # session: loaded, with its own tracker, at this start, same parties.
+        # Provably the same session as the booking its `SessionID` names: same
+        # start and parties. Then a loaded booking that kept its own tracker
+        # makes this a duplicate, and a booking that did not load lends its
+        # recorded length. A tracker some booking links directly is never
+        # another booking's duplicate.
         same_session = (
             own_booking is not None
-            and anchor not in ambiguous_set
-            and legacy_anchor(own_booking) in links
-            and legacy_anchor(own_booking) in loaded
-            and loaded[legacy_anchor(own_booking)].starts_at == starts_at
+            and starts_at is not None
+            and starts_at
+            == _start_or_none(
+                own_booking, BOOKING_START_FIELD, assume=export_timezone, anchor=booking_anchor
+            )
             and _same_parties(own_booking, record)
         )
-        if same_session:
+        booking_loaded = booking_anchor in loaded
+        if (
+            same_session
+            and booking_loaded
+            and anchor not in linked_trackers
+            and _text(own_booking or {}, BOOKING_TRACKER_FIELD) in trackers_by_anchor
+        ):
             # A second record of a session that already loaded with its own
             # tracker: absorbed, and listed for a person to confirm.
             absorbed.append(anchor)
@@ -1262,9 +1245,7 @@ def plan_sessions(
             record.get(TRACKER_DURATION_FIELD),
             # A length is borrowed only from the same session's booking.
             own_booking.get(BOOKING_DURATION_FIELD)
-            if own_booking is not None
-            and legacy_anchor(own_booking) not in loaded
-            and _same_parties(own_booking, record)
+            if own_booking is not None and same_session and not booking_loaded
             else None,
             durations,
             mentor,
@@ -1393,7 +1374,6 @@ def plan_sessions(
         duration_from_mentor=tuple(guessed["mentor"]),
         duration_from_default=tuple(guessed["default"]),
         duplicate_trackers=tuple(duplicates),
-        ambiguous_trackers=ambiguous,
         booking_defaulted=tuple(booking_missing),
         reschedule_evidence=tuple(reschedules),
         mentors_without_link=tuple(sorted(set(mentors_without_link))),

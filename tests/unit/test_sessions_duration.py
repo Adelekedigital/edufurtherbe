@@ -150,20 +150,6 @@ def test_a_second_tracker_for_a_loaded_booking_is_absorbed_not_quarantined() -> 
     assert replace(only_duplicate, duplicate_trackers=()).needs_review is False
 
 
-def test_a_booking_with_no_back_link_merges_with_the_tracker_naming_it() -> None:
-    """The tracker's attendance and length reach the booking, not a guess."""
-    result = plan(
-        [booking(SessionTracker=None, Duration=None)],
-        [tracker(SessionID="sb-1", **{"Session Duration": "20"})],
-        calendar=[calendar_row(**{"meetingDuration-TxT": "60"})],
-    )
-
-    assert [row.legacy_bubble_id for row in result.sessions] == ["sb-1"]
-    assert [row.duration_minutes for row in result.sessions] == [20]
-    assert "st-1" in result.absorbed_trackers
-    assert result.duration_from_mentor == ()
-
-
 def test_a_second_tracker_at_a_different_start_is_its_own_session() -> None:
     """Not provably the same session, so it is not thrown away as a duplicate."""
     other = tracker(bubble_id="st-2", SessionID="sb-1", **{"session time": "Sep 9, 2025 1:00 am"})
@@ -189,31 +175,6 @@ def test_an_impossible_length_on_the_linked_record_is_dropped_not_guessed() -> N
 
     assert "sb-1" in [row.legacy_bubble_id for row in result.dropped]
     assert result.duration_from_mentor == ()
-
-
-def test_two_trackers_naming_one_booking_are_left_for_a_person() -> None:
-    """Neither can be told apart, so neither is merged or thrown away."""
-    result = plan(
-        [booking(SessionTracker=None)],
-        [tracker(SessionID="sb-1"), tracker(bubble_id="st-2", SessionID="sb-1")],
-    )
-
-    assert sorted(result.ambiguous_trackers) == ["st-1", "st-2"]
-    assert result.duplicate_trackers == ()
-    only_ambiguous = replace(result, booking_defaulted=(), overlapping_live_windows=())
-    assert only_ambiguous.needs_review is True
-    assert replace(only_ambiguous, ambiguous_trackers=()).needs_review is False
-
-
-def test_a_link_to_a_tracker_missing_from_the_export_falls_back_to_the_session_id() -> None:
-    result = plan(
-        [booking(SessionTracker="st-missing")],
-        [tracker(bubble_id="st-2", SessionID="sb-1")],
-    )
-
-    assert [row.legacy_bubble_id for row in result.sessions] == ["sb-1"]
-    assert "st-2" in result.absorbed_trackers
-    assert result.duplicate_trackers == ()
 
 
 def test_a_second_tracker_with_another_mentee_is_its_own_session() -> None:
@@ -242,3 +203,46 @@ def test_a_tracker_at_another_start_does_not_borrow_the_bookings_length() -> Non
     (row,) = [r for r in result.sessions if r.legacy_bubble_id == "st-2"]
     assert row.duration_minutes == 30
     assert result.duration_from_mentor == ("st-2",)
+
+
+def test_a_tracker_borrows_a_dropped_bookings_length_only_at_the_same_start() -> None:
+    """Another start is not provably the same session: its length is guessed."""
+    result = plan(
+        [booking(**{"Session Initiator": None, "Duration": "60"})],
+        [
+            tracker(
+                SessionID="sb-1",
+                **{"Session Duration": None, "session time": "Sep 9, 2025 1:00 am"},
+            )
+        ],
+        calendar=[calendar_row(**{"meetingDuration-TxT": "30"})],
+    )
+
+    assert [row.duration_minutes for row in result.sessions] == [30]
+    assert result.duration_from_mentor == ("st-1",)
+
+
+def test_a_tracker_a_dropped_booking_links_is_not_anothers_duplicate() -> None:
+    """Booking sb-2 links st-2 directly but is dropped; st-2's SessionID names
+    sb-1, which loaded with st-1. st-2 is sb-2's history, not sb-1's duplicate."""
+    result = plan(
+        [
+            booking(SessionTracker="st-1"),
+            booking(bubble_id="sb-2", SessionTracker="st-2", **{"Session Initiator": None}),
+        ],
+        [tracker(SessionID="sb-1"), tracker(bubble_id="st-2", SessionID="sb-1")],
+    )
+
+    assert result.duplicate_trackers == ()
+    assert "st-2" in [row.legacy_bubble_id for row in result.sessions]
+
+
+def test_a_blank_booking_does_not_take_a_length_from_a_tracker_at_another_start() -> None:
+    result = plan(
+        [booking(Duration=None, SessionTracker="st-1")],
+        [tracker(**{"Session Duration": "20", "session time": "Sep 9, 2025 1:00 am"})],
+        calendar=[calendar_row(**{"meetingDuration-TxT": "60"})],
+    )
+
+    assert [row.duration_minutes for row in result.sessions] == [60]
+    assert result.duration_from_mentor == ("sb-1",)
