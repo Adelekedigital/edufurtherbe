@@ -39,7 +39,7 @@ provider split.
   to any time.
 - **Links:**
   - `sessionUrl`, `dashboardUrl`, `calendarUrl`, `bookLink` and `reviewLink`
-    are full URLs into the app (`https://edufurther-app.vercel.app/...` on dev).
+    are full URLs into the app (`https://staging.edufurther.org/...` on dev, `https://app.edufurther.org/...` on production).
   - Meeting links are **never** in email. They're withheld until the join
     window, so `location` is a label only ("Google Meet", "EduFurther video").
 - **Some values can be empty**: the topic, booking message, reason and location
