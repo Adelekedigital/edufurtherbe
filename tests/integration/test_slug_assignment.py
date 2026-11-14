@@ -16,9 +16,12 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.test_api_writes import url
 from tests.integration.test_first_sign_in import URL, token_for
+from tests.integration.test_identity_load import record as load_record
 
+from app.domain.transform import transform_users
 from app.infra.db.slugs import backfill_slugs, give_slug, settle_name_slug
 from app.infra.db.triggers import timestamps_from_source
+from app.infra.etl.loader import UserLoader
 from conftest import add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -125,7 +128,7 @@ async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -
         kept = await add_user(conn, "bf3.slug@example.com", slug="kept-handle", first_name="Kat")
         odd = await add_user(conn, "bf4.slug@example.com", slug="-odd-handle")
     async with AsyncSession(db_engine) as session:
-        result = await backfill_slugs(session)
+        result = await backfill_slugs(session, apply=True)
         await session.commit()
 
     assert (await handle_of(db_engine, named)) == ("grace-hopper", False)
@@ -137,7 +140,7 @@ async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -
     assert result.from_name >= 1 and result.placeholders >= 1
 
     async with AsyncSession(db_engine) as session:
-        again = await backfill_slugs(session)
+        again = await backfill_slugs(session, apply=True)
         await session.rollback()
     assert (again.from_name, again.placeholders) == (0, 0)
 
@@ -168,7 +171,7 @@ async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: Async
                 text("UPDATE users SET updated_at = :t WHERE id = :u"), {"t": legacy, "u": user_id}
             )
     async with AsyncSession(db_engine) as session:
-        await backfill_slugs(session)
+        await backfill_slugs(session, apply=True)
         await session.commit()
 
     async with db_engine.connect() as conn:
@@ -194,3 +197,49 @@ async def test_a_last_name_save_settles_a_placeholder_once_a_first_name_exists(
 
     assert response.status_code == 204, response.text
     assert await handle_of(db_engine, user_id) == ("lara-croft", False)
+
+
+async def test_a_reload_with_a_legacy_slug_makes_it_final(db_engine: AsyncEngine) -> None:
+    """A placeholder the backfill gave is replaced by the legacy slug a later
+    load brings, and that handle is final: a later name save keeps it."""
+    rows = transform_users([load_record(Slug=None)]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+        user_id = await conn.scalar(
+            text(
+                "UPDATE users SET slug = 'user-abcd1234', slug_is_placeholder = true "
+                "WHERE legacy_bubble_id = :b RETURNING id"
+            ),
+            {"b": rows[0].legacy_bubble_id},
+        )
+
+    reloaded = transform_users([load_record(Slug="ada-okafor")]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(reloaded)
+    assert await handle_of(db_engine, user_id) == ("ada-okafor", False)
+
+    without = transform_users([load_record(Slug=None)]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(without)
+    assert await handle_of(db_engine, user_id) == ("ada-okafor", False)
+
+
+async def test_a_dry_run_backfill_writes_nothing(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "dry.slug@example.com", first_name="Dry")
+    async with AsyncSession(db_engine) as session:
+        result = await backfill_slugs(session, apply=False)
+        await session.commit()
+
+    assert result.from_name >= 1
+    assert await handle_of(db_engine, user_id) == (None, False)
+
+
+async def test_a_last_name_alone_makes_a_handle(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as conn:
+        user_id = await add_user(conn, "lastname.slug@example.com", last_name="Okafor")
+    async with AsyncSession(db_engine) as session:
+        await give_slug(session, user_id)
+        await session.commit()
+
+    assert await handle_of(db_engine, user_id) == ("okafor", False)

@@ -14,7 +14,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
@@ -88,7 +88,7 @@ async def give_placeholder(session: Db, user_id: UUID) -> str | None:
 async def _name_handle(
     session: Db, user_id: UUID, first_name: str | None, last_name: str | None
 ) -> str | None:
-    base = name_slug(first_name, last_name) if first_name else None
+    base = name_slug(first_name, last_name)
     if base is None:
         return None
     return await _claim(session, user_id, candidates(base), placeholder=False)
@@ -103,17 +103,26 @@ async def settle_name_slug(session: Db, user_id: UUID) -> str | None:
     transaction holds the name and the handle together.
     """
     row = (
-        await session.execute(select(User.first_name, User.last_name).where(User.id == user_id))
+        await session.execute(
+            select(User.first_name, User.last_name, User.slug, User.slug_is_placeholder).where(
+                User.id == user_id
+            )
+        )
     ).one_or_none()
-    if row is None:
+    if row is None or _is_final(row.slug, row.slug_is_placeholder):
         return None
     return await _name_handle(session, user_id, row.first_name, row.last_name)
 
 
 async def give_slug(session: Db, user_id: UUID) -> str | None:
     """The account's handle from its name, else a placeholder; nothing if it
-    already has a final one. Does not commit."""
+    already has one. Does not commit."""
     return await settle_name_slug(session, user_id) or await give_placeholder(session, user_id)
+
+
+def _is_final(slug: str | None, placeholder: bool) -> bool:
+    """A shortcut only; the UPDATE's own WHERE is what guarantees it."""
+    return slug is not None and not placeholder
 
 
 @dataclass(frozen=True)
@@ -129,12 +138,16 @@ async def _connection(session: Db) -> AsyncConnection:
     return await session.connection() if isinstance(session, AsyncSession) else session
 
 
-async def backfill_slugs(session: Db) -> SlugBackfill:
+async def backfill_slugs(session: Db, *, apply: bool) -> SlugBackfill:
     """A handle for every live account without one: from its name, else a
     placeholder. Existing handles, imported ones included, are never touched,
     and neither is `updated_at`: a migrated row's carries the legacy Modified
-    Date, and giving it a handle is not an edit. Does not commit; a dry run is
-    the caller's rollback."""
+    Date, and giving it a handle is not an edit. Does not commit.
+
+    Without ``apply`` it only counts and writes nothing. With it, the trigger
+    hold takes an exclusive lock on ``users`` until the caller commits, so it
+    gives up after 3 s rather than queue live traffic behind it: run it in a
+    quiet window (the cutover's, or a quiet moment on dev)."""
     missing = (
         await session.execute(
             select(User.id, User.first_name, User.last_name)
@@ -143,12 +156,18 @@ async def backfill_slugs(session: Db) -> SlugBackfill:
         )
     ).all()
     from_name = placeholders = 0
-    async with timestamps_from_source(await _connection(session), "users"):
-        for user_id, first_name, last_name in missing:
-            if await _name_handle(session, user_id, first_name, last_name):
-                from_name += 1
-            elif await give_placeholder(session, user_id):
-                placeholders += 1
+    if not apply:
+        from_name = sum(1 for _, first, last in missing if name_slug(first, last))
+        placeholders = len(missing) - from_name
+    else:
+        connection = await _connection(session)
+        await connection.execute(text("SET LOCAL lock_timeout = '3s'"))
+        async with timestamps_from_source(connection, "users"):
+            for user_id, first_name, last_name in missing:
+                if await _name_handle(session, user_id, first_name, last_name):
+                    from_name += 1
+                elif await give_placeholder(session, user_id):
+                    placeholders += 1
     handles = (
         (await session.execute(select(User.slug).where(User.slug.is_not(None), LIVE)))
         .scalars()

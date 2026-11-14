@@ -71,10 +71,9 @@ def by_handle(handle: str) -> Any:
     statement, one spread of `mentor_is_public()`, and no branch that can carry a
     different set of clauses.
 
-    A slug that happens to be a valid UUID string would be unreachable, since the
-    parse wins. `^[a-z0-9-]+$` permits one, so that is a real if unlikely shape —
-    there is no slug write path yet, and when one arrives it should refuse
-    UUID-shaped slugs rather than this guessing.
+    A slug that parses as a UUID would be unreachable, since the parse wins. The
+    write path (`domain.slugs`) refuses exactly what this parse accepts
+    (`looks_like_id`), and the backfill reports an imported one.
     """
     try:
         return User.id == UUID(handle)

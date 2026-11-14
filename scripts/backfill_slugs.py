@@ -30,7 +30,7 @@ async def run(apply: bool) -> int:
     engine = create_database_engine(get_settings())
     try:
         async with AsyncSession(engine) as session:
-            result = await backfill_slugs(session)
+            result = await backfill_slugs(session, apply=apply)
             if apply:
                 await session.commit()
             else:

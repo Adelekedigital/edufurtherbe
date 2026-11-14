@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from app.domain.handles import strip_marks
+
 #: More words than this adds nothing a mentee means and only costs the query.
 MAX_SEARCH_TERMS = 8
 #: Longer than any real name, school or subject word.
@@ -122,5 +124,5 @@ def fold(text: str) -> str:
     **Every word is kept**: a mentor's programme name may name the subject as
     its ninth word, and the query cap (`MAX_SEARCH_TERMS`) is a search's bound.
     """
-    bare = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    bare = strip_marks(text)
     return " ".join(search_terms(bare, max_terms=None))

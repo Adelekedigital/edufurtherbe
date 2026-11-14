@@ -130,10 +130,6 @@ HANDLE_MAX_LENGTH = 30
 #: the pattern each say one thing.
 _HANDLE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
-#: Words a handle may not be: the app's own routes and words, and the values a
-#: client bug renders as text. The link is ``/invite/{code}``, so a handle that
-#: reads as an official page or a broken one is refused.
-
 #: How long a retired code stays out of everyone else's reach. Its owner may
 #: take it back at any time; after this, anyone may pick it.
 RETIRED_CODE_HOLD = timedelta(days=30)

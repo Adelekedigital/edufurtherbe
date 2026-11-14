@@ -59,7 +59,8 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     email_verified_at = EXCLUDED.email_verified_at,
     first_name        = EXCLUDED.first_name,
     last_name         = EXCLUDED.last_name,
-    slug              = EXCLUDED.slug,
+    slug              = COALESCE(EXCLUDED.slug, users.slug),
+    slug_is_placeholder = (EXCLUDED.slug IS NULL AND users.slug_is_placeholder),
     last_active_at    = EXCLUDED.last_active_at,
     signup_source     = EXCLUDED.signup_source
 """

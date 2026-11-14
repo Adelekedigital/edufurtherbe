@@ -33,6 +33,15 @@ RESERVED_HANDLES = frozenset(
 )  # fmt: skip
 
 
+def strip_marks(text: str) -> str:
+    """``text`` decomposed (NFKD) with its combining marks dropped: ``Zoë`` to
+    ``Zoe``, ``ﬁ`` to ``fi``. The one decomposition every fold here builds on:
+    handles, the import's accent rule and search (rule 8)."""
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
+    )
+
+
 def fold_to_handle(text: str) -> str:
     """``text`` as lowercase ``[a-z0-9]`` runs joined by one ``-``.
 
@@ -40,10 +49,7 @@ def fold_to_handle(text: str) -> str:
     character (``ø``, ``山``, punctuation, space) separates. Never starts or
     ends with ``-``; empty when nothing usable is left.
     """
-    decomposed = unicodedata.normalize("NFKD", text)
-    ascii_text = "".join(
-        ch if ch.isascii() else ("" if unicodedata.combining(ch) else " ") for ch in decomposed
-    )
+    ascii_text = "".join(ch if ch.isascii() else " " for ch in strip_marks(text))
     return _NOT_HANDLE.sub("-", ascii_text.lower()).strip("-")
 
 

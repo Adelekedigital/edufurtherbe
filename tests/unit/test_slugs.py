@@ -16,6 +16,7 @@ from app.domain.slugs import (
     MAX_SLUG_LENGTH,
     candidates,
     is_servable,
+    looks_like_id,
     name_slug,
     placeholder_slug,
     strip_accents,
@@ -133,3 +134,22 @@ def test_strip_accents_refuses_what_has_no_ascii_form() -> None:
 def test_the_import_still_folds_exactly_as_before() -> None:
     assert fold_slug("Bánkólé-Wright") == "bankole-wright"
     assert fold_slug("Søren") is None
+
+
+@pytest.mark.parametrize(
+    "handle",
+    [
+        "123e4567-e89b-12d3-a456-426614174000",
+        "123e4567e89b12d3a456426614174000",
+        "deadbeefcafebeadfaceabbadadfeed1",
+    ],
+)
+def test_anything_the_resolver_reads_as_an_id_is_refused(handle: str) -> None:
+    """The resolver asks `UUID(handle)`, which takes 32 hex digits with or
+    without hyphens; a handle it would read as an id could never be reached."""
+    assert looks_like_id(handle)
+    assert not is_servable(handle)
+
+
+def test_a_hex_only_name_never_becomes_an_id_shaped_handle() -> None:
+    assert name_slug("Dead Beef Cafe Bead", "Face Abba Dada Feed") is None

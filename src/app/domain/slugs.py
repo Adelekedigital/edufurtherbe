@@ -16,11 +16,11 @@ tried in the order `candidates` gives.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Iterator
 from itertools import count
+from uuid import UUID
 
-from app.domain.handles import RESERVED_HANDLES, fold_to_handle
+from app.domain.handles import RESERVED_HANDLES, fold_to_handle, strip_marks
 
 #: The column CHECK's bound (`slug_is_url_safe`), and the agreed maximum.
 MAX_SLUG_LENGTH = 60
@@ -32,17 +32,25 @@ HANDLE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 PLACEHOLDER_PREFIX = "user-"
 _TOKEN = re.compile(r"^[0-9a-z]{8}$")
-_UUID_SHAPE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def strip_accents(value: str) -> str | None:
     """``value`` with its accents removed, or ``None`` if a character has no
     ASCII form (``ø``, ``ß``, ``山``). Decision 311's rule, shared with the
     import's `fold_slug`, which must never alter a handle beyond its accents."""
-    decomposed = unicodedata.normalize("NFD", value)
-    if any(not ch.isascii() and not unicodedata.combining(ch) for ch in decomposed):
-        return None
-    return "".join(ch for ch in decomposed if ch.isascii())
+    bare = strip_marks(value)
+    return bare if bare.isascii() else None
+
+
+def looks_like_id(handle: str) -> bool:
+    """Would ``/mentors/{handle}`` read this as an id? Asked exactly as the
+    resolver asks it (`UUID(handle)`), which also takes 32 hex digits with
+    the hyphens anywhere or none."""
+    try:
+        UUID(handle)
+    except ValueError:
+        return False
+    return True
 
 
 def name_slug(first_name: str | None, last_name: str | None) -> str | None:
@@ -57,7 +65,7 @@ def name_slug(first_name: str | None, last_name: str | None) -> str | None:
         cut = slug[: MAX_SLUG_LENGTH + 1]
         slug = cut[: cut.rfind("-")] if "-" in cut else slug[:MAX_SLUG_LENGTH]
         slug = slug.strip("-")
-    if not slug or _UUID_SHAPE.match(slug):
+    if not slug or looks_like_id(slug):
         return None
     return slug
 
@@ -75,11 +83,13 @@ def candidates(base: str) -> Iterator[str]:
     A reserved word is never offered on its own, so ``admin`` starts at
     ``admin-2``.
     """
-    if base not in RESERVED_HANDLES:
+    if base not in RESERVED_HANDLES and not looks_like_id(base):
         yield base
     for n in count(2):
         suffix = f"-{n}"
-        yield base[: MAX_SLUG_LENGTH - len(suffix)].rstrip("-") + suffix
+        option = base[: MAX_SLUG_LENGTH - len(suffix)].rstrip("-") + suffix
+        if not looks_like_id(option):
+            yield option
 
 
 def is_servable(slug: str) -> bool:
@@ -88,5 +98,5 @@ def is_servable(slug: str) -> bool:
     return (
         bool(HANDLE_PATTERN.match(slug))
         and slug not in RESERVED_HANDLES
-        and not (_UUID_SHAPE.match(slug))
+        and not looks_like_id(slug)
     )
