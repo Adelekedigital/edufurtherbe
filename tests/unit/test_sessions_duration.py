@@ -183,9 +183,7 @@ def test_a_second_tracker_with_another_mentee_is_its_own_session() -> None:
     result = plan([booking(SessionTracker="st-1")], [tracker(SessionID="sb-1"), other])
 
     assert result.duplicate_trackers == ()
-    assert "st-2" in [row.legacy_bubble_id for row in result.sessions] + [
-        row.legacy_bubble_id for row in result.dropped
-    ]
+    assert "st-2" in [row.legacy_bubble_id for row in result.sessions]
 
 
 def test_a_tracker_at_another_start_does_not_borrow_the_bookings_length() -> None:
@@ -246,3 +244,20 @@ def test_a_blank_booking_does_not_take_a_length_from_a_tracker_at_another_start(
 
     assert [row.duration_minutes for row in result.sessions] == [60]
     assert result.duration_from_mentor == ("sb-1",)
+
+
+def test_a_tracker_beside_a_booking_that_loaded_without_one_is_for_a_person() -> None:
+    """Same session as a booking that loaded with no tracker: it loads with the
+    booking's recorded length, and the run is flagged rather than merged."""
+    result = plan(
+        [booking(SessionTracker=None, Duration="60")],
+        [tracker(SessionID="sb-1", **{"Session Duration": None})],
+        calendar=[calendar_row(**{"meetingDuration-TxT": "30"})],
+    )
+
+    (beside,) = [row for row in result.sessions if row.legacy_bubble_id == "st-1"]
+    assert beside.duration_minutes == 60
+    assert result.trackers_beside_booking == ("st-1",)
+    flagged = replace(result, booking_defaulted=(), overlapping_live_windows=())
+    assert flagged.needs_review is True
+    assert replace(flagged, trackers_beside_booking=()).needs_review is False
