@@ -67,7 +67,13 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
-from app.infra.db.models.platform import FeatureInterest, IdempotencyKey, UserActivityDay
+from app.infra.db.models.platform import (
+    FeatureInterest,
+    IdempotencyKey,
+    MentorProfileShare,
+    MentorProfileVisit,
+    UserActivityDay,
+)
 from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.referrals import Referral
 from app.infra.db.models.scholarships import UserAward
@@ -117,6 +123,9 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (PushSubscription, PushSubscription.user_id),
     (AnalyticsConsent, AnalyticsConsent.user_id),
     (UserActivityDay, UserActivityDay.user_id),
+    # A purged mentor's link visits and shares count nothing (decision 346).
+    (MentorProfileVisit, MentorProfileVisit.mentor_user_id),
+    (MentorProfileShare, MentorProfileShare.mentor_user_id),
 )
 
 
