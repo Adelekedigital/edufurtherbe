@@ -14,7 +14,8 @@ Tracked from launch, because a visit nobody recorded cannot be backfilled.
 
 Rule 10 keeps a ``uuid`` id on each and re-declares the dedupe as ``UNIQUE``,
 which also serves reading one mentor's days. Both cascade with the mentor.
-Insert only, so ``created_at`` alone.
+Insert only, so ``created_at`` alone. Every constraint name is written out, so
+each one the database holds appears verbatim in source.
 
 Expand only: nothing reads or writes either table until the code that does ships.
 """
@@ -32,7 +33,8 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _common() -> list[sa.SchemaItem]:
+def _columns() -> list[sa.Column[object]]:
+    """The columns both tables open with."""
     return [
         sa.Column("id", sa.Uuid(), server_default=sa.text("uuid_generate_v7()"), nullable=False),
         sa.Column("mentor_user_id", sa.Uuid(), nullable=False),
@@ -42,37 +44,33 @@ def _common() -> list[sa.SchemaItem]:
     ]
 
 
-def _tail(table: str) -> list[sa.SchemaItem]:
-    return [
-        sa.Column(
-            "created_at",
-            sa.TIMESTAMP(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f(f"pk_{table}")),
-        sa.ForeignKeyConstraint(
-            ["mentor_user_id"],
-            ["users.id"],
-            name=op.f(f"fk_{table}_mentor_user_id_users"),
-            ondelete="CASCADE",
-        ),
-        sa.CheckConstraint(
-            "octet_length(visitor_key) = 32", name=op.f(f"ck_{table}_visitor_key_is_a_digest")
-        ),
-    ]
+def _created_at() -> sa.Column[object]:
+    return sa.Column(
+        "created_at", sa.TIMESTAMP(timezone=True), server_default=sa.text("now()"), nullable=False
+    )
 
 
 def upgrade() -> None:
     op.execute("SET lock_timeout = '3s'")
     op.create_table(
         "mentor_profile_visits",
-        *_common(),
+        *_columns(),
         sa.Column("via", sa.Text(), nullable=True),
         sa.Column("referrer_host", sa.Text(), nullable=True),
-        *_tail("mentor_profile_visits"),
+        _created_at(),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_mentor_profile_visits")),
+        sa.ForeignKeyConstraint(
+            ["mentor_user_id"],
+            ["users.id"],
+            name=op.f("fk_mentor_profile_visits_mentor_user_id_users"),
+            ondelete="CASCADE",
+        ),
         sa.UniqueConstraint(
             "mentor_user_id", "day", "visitor_key", name="uq_mentor_profile_visits_visitor_day"
+        ),
+        sa.CheckConstraint(
+            "octet_length(visitor_key) = 32",
+            name=op.f("ck_mentor_profile_visits_visitor_key_is_a_digest"),
         ),
         sa.CheckConstraint(
             "via IS NULL OR via IN ('copy', 'share', 'invite')",
@@ -85,16 +83,27 @@ def upgrade() -> None:
     )
     op.create_table(
         "mentor_profile_shares",
-        *_common(),
+        *_columns(),
         sa.Column("method", sa.Text(), nullable=False),
         sa.Column("own", sa.Boolean(), nullable=False),
-        *_tail("mentor_profile_shares"),
+        _created_at(),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_mentor_profile_shares")),
+        sa.ForeignKeyConstraint(
+            ["mentor_user_id"],
+            ["users.id"],
+            name=op.f("fk_mentor_profile_shares_mentor_user_id_users"),
+            ondelete="CASCADE",
+        ),
         sa.UniqueConstraint(
             "mentor_user_id",
             "day",
             "visitor_key",
             "method",
             name="uq_mentor_profile_shares_visitor_day_method",
+        ),
+        sa.CheckConstraint(
+            "octet_length(visitor_key) = 32",
+            name=op.f("ck_mentor_profile_shares_visitor_key_is_a_digest"),
         ),
         sa.CheckConstraint(
             "method IN ('copy', 'native')", name=op.f("ck_mentor_profile_shares_method_is_known")
