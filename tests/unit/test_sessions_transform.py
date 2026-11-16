@@ -555,37 +555,6 @@ def test_a_tracker_whose_parties_are_the_same_user_is_dropped() -> None:
 
 
 # --------------------------------------------------------------------------
-# Duration, and the column CHECK
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("value", ["1", "4", "481", "", None, "forty-five"])
-def test_a_duration_the_check_would_refuse_is_dropped(value: str | None) -> None:
-    """Two dev trackers carry `1` and `4`. PR 2 proved the CHECK refuses them,
-    so they are dropped here rather than aborting the load."""
-    result = plan([], [tracker(**{"Session Duration": value})])
-
-    assert not result.sessions
-    assert [row.legacy_bubble_id for row in result.dropped] == ["st-1"]
-
-
-def test_quarantine_and_drop_are_not_the_same_bucket() -> None:
-    """A quarantined row cannot be attributed; a dropped one is fully
-    attributed and fails a constraint. Folding them together buries a CHECK
-    violation inside 'unattributable'."""
-    result = plan(
-        [],
-        [
-            tracker(bubble_id="st-1", **{"Mentee(userdatatype)": None, "Creator": "(App admin)"}),
-            tracker(bubble_id="st-2", **{"Session Duration": "1"}),
-        ],
-    )
-
-    assert [held.legacy_bubble_id for held in result.quarantined] == ["st-1"]
-    assert [row.legacy_bubble_id for row in result.dropped] == ["st-2"]
-
-
-# --------------------------------------------------------------------------
 # Meeting venue and room id
 # --------------------------------------------------------------------------
 

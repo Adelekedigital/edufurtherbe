@@ -23,9 +23,10 @@ That is a reportable outcome, not a crash and not a reason to stop.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import UUID
 
 
@@ -114,6 +115,50 @@ def extension_for(content_type: str) -> str:
     return EXTENSIONS.get(content_type, "bin")
 
 
+_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+
+
+def absolute_url(url: str) -> str:
+    """The address, trimmed and with exactly one scheme.
+
+    The production export writes Bubble uploads protocol-relative
+    (``//<hash>.cdn.bubble.io/...``): 300 of its 956 images. Those get
+    ``https:``, and a bare host gets ``https://``. A scheme is read from the
+    start of the address, so ``//`` later in a path or query changes nothing.
+    """
+    url = url.strip()
+    if url.startswith("//"):
+        return f"https:{url}"
+    return url if _SCHEME.match(url) else f"https://{url}"
+
+
+def legacy_image_url(value: object) -> str | None:
+    """A legacy image field as stored: absolute, or ``None`` when blank."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return absolute_url(value)
+
+
+#: The legacy app's placeholder banner, by its upload id. 178 production
+#: profiles carry it because nobody chose another, and its host now refuses it
+#: (403, 2026-11-14). It loads as no banner, so the new app's default shows.
+LEGACY_DEFAULT_BANNER_ID = "f1692390494515x191075007644834430"
+
+
+def is_legacy_default_banner(value: object) -> bool:
+    """Is this the placeholder? Read from the decoded path, never the query,
+    so a resizer's encoded copy matches and a mention in a parameter does not."""
+    url = legacy_image_url(value)
+    if url is None:
+        return False
+    return f"/{LEGACY_DEFAULT_BANNER_ID}/" in unquote(urlparse(url).path)
+
+
+def legacy_banner_url(value: object) -> str | None:
+    """A legacy banner as stored: ``None`` for the placeholder or a blank field."""
+    return None if is_legacy_default_banner(value) else legacy_image_url(value)
+
+
 def is_ours(url: str, storage_host: str) -> bool:
     """Is this URL already served from storage we control?
 
@@ -125,7 +170,7 @@ def is_ours(url: str, storage_host: str) -> bool:
     """
     if not url:
         return False
-    parsed = urlparse(url if "//" in url else f"https://{url}")
+    parsed = urlparse(absolute_url(url))
     return bool(parsed.netloc) and parsed.netloc.lower() == storage_host.lower()
 
 
@@ -157,7 +202,7 @@ def is_fetchable(url: str) -> bool:
     """
     if not url:
         return False
-    parsed = urlparse(url if "//" in url else f"https://{url}")
+    parsed = urlparse(absolute_url(url))
     if parsed.scheme not in {"http", "https"}:
         return False
     host = parsed.hostname  # `hostname` strips port and credentials; `netloc` does not
@@ -175,7 +220,7 @@ def host_of(url: str | None) -> str:
     """
     if not url:
         return "<no host>"
-    return (urlparse(url if "//" in url else f"https://{url}").hostname or "<no host>").lower()
+    return (urlparse(absolute_url(url)).hostname or "<no host>").lower()
 
 
 def decide(url: str | None, storage_host: str) -> AssetAction | None:
@@ -220,6 +265,8 @@ class AssetReport:
     """
 
     copied: int = 0
+    #: Placeholder banners pointed at nothing, so the default shows.
+    cleared: int = 0
     skipped: int = 0
     absent: int = 0
     failed: tuple[str, ...] = ()
@@ -233,6 +280,7 @@ class AssetReport:
         return "\n".join(
             [
                 f"copied  {self.copied}",
+                f"cleared {self.cleared} (the legacy placeholder banner)",
                 f"skipped {self.skipped} (already ours)",
                 f"absent  {self.absent} (no image, or the source would not serve it)",
                 f"failed  {len(self.failed)}",

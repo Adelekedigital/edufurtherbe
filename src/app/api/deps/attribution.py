@@ -37,7 +37,9 @@ async def recorded_consent(
     body: AnalyticsConsentWrite, user: CurrentUserDep, session: SessionDep
 ) -> Any:
     """Record the caller's answer, replacing an earlier one. Commits."""
-    row = await record_consent(session, user["id"], granted=body.granted, version=body.version)
+    row = await record_consent(
+        session, user["id"], granted=body.granted, version=body.version, method=body.method
+    )
     await session.commit()
     return row
 

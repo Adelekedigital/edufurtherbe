@@ -17,9 +17,16 @@ from tests.conftest import user as legacy_user
 from app.domain.enums import PrimaryRole
 from app.domain.transform import TransformError, to_user, transform_users
 from app.domain.transform.identity import (
+    AVATAR_FIELD as AVATAR,
+)
+from app.domain.transform.identity import (
+    BANNER_FIELD as BANNER,
+)
+from app.domain.transform.identity import (
     ONBOARDING_COMPLETED_FIELD,
     ROLE_FIELD,
     UNCHOSEN_ROLE,
+    ProfileRow,
     to_onboarding,
     to_profile,
 )
@@ -149,22 +156,64 @@ def test_distinct_slugs_pass() -> None:
     assert report.ok
 
 
-# --- languages (decision 316) ----------------------------------------------
+# --- profiles ---------------------------------------------------------------
 
 
-def test_a_comma_joined_single_language_field_is_split() -> None:
-    """The production export joins several names into the "single" field too."""
+def profile_row(profile_fields: dict[str, Any], **user_fields: Any) -> ProfileRow:
+    """`to_profile` over one legacy profile, with only the fields a test names."""
     profile = {
         "bubble_id": "1700000000000x000000000000000050",
         "created_at": "Sep 3, 2025 5:31 am",
         "modified_at": "Sep 4, 2025 5:31 am",
-        "list-Language": "",
-        "Language": "English , Yoruba",
+        **profile_fields,
     }
-    row = to_profile(
+    return to_profile(
         profile,
         user_bubble_id=USER_ID,
-        user_record=record(),
+        user_record=record(**user_fields),
         export_timezone=ZoneInfo("America/New_York"),
     )
+
+
+PLACEHOLDER = "//4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f1692390494515x191075007644834430"
+
+
+def test_a_comma_joined_single_language_field_is_split() -> None:
+    """The production export joins several names into the "single" field too (decision 316)."""
+    row = profile_row({"list-Language": "", "Language": "English , Yoruba"})
     assert row.language_names == ("English", "Yoruba")
+
+
+def test_a_protocol_relative_image_is_stored_with_https() -> None:
+    """The production export writes Bubble uploads as ``//host/path``. Fixed once,
+    here, so no reader of the column ever sees an address without a scheme,
+    including an image the asset copy later fails to fetch."""
+    row = profile_row(
+        {BANNER: " //4f8.cdn.bubble.io/f2/banner.png"},
+        **{AVATAR: "//4f8.cdn.bubble.io/f1/a.jpg"},
+    )
+    assert row.avatar_url == "https://4f8.cdn.bubble.io/f1/a.jpg"
+    assert row.banner_url == "https://4f8.cdn.bubble.io/f2/banner.png"
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_no_image_stays_no_image(blank: str | None) -> None:
+    row = profile_row({BANNER: blank}, **{AVATAR: blank})
+    assert row.avatar_url is None
+    assert row.banner_url is None
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [f"{PLACEHOLDER}/5559851%281%29.jpg", f"{PLACEHOLDER}/5559851%281%29.jpg?fit=crop&q=100"],
+    ids=["plain", "cropped"],
+)
+def test_the_legacy_default_banner_loads_as_no_banner(placeholder: str) -> None:
+    """178 production profiles carry the legacy app's placeholder banner, which
+    its host now refuses (403). Nobody chose it, so the new app's default shows."""
+    assert profile_row({BANNER: placeholder}).banner_url is None
+
+
+def test_a_banner_someone_uploaded_is_kept() -> None:
+    row = profile_row({BANNER: "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg?q=100"})
+    assert row.banner_url == "https://4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg?q=100"

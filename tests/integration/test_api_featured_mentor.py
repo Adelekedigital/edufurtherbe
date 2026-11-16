@@ -35,7 +35,7 @@ async def featured_on(engine: AsyncEngine, now: dt.datetime) -> UUID | None:
 async def weeks_rows(engine: AsyncEngine) -> list[tuple[dt.date, UUID]]:
     async with engine.begin() as conn:
         rows = await conn.execute(
-            text("SELECT week_start, mentor_user_id FROM featured_mentors ORDER BY created_at")
+            text("SELECT week_start, mentor_user_id FROM featured_mentors ORDER BY created_at, id")
         )
         return [(row.week_start, row.mentor_user_id) for row in rows]
 

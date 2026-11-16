@@ -93,7 +93,7 @@ async def told(engine: AsyncEngine, user: UUID) -> list[str]:
         rows = await conn.execute(
             text(
                 "SELECT event_type FROM outbox_events "
-                "WHERE payload ->> 'recipient_id' = :u ORDER BY created_at"
+                "WHERE payload ->> 'recipient_id' = :u ORDER BY created_at, id"
             ),
             {"u": str(user)},
         )

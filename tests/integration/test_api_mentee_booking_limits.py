@@ -40,13 +40,24 @@ WITH_MENTOR = "/problems/booking-with-mentor-exists"
 LIMIT = "/problems/booking-limit-reached"
 
 
+#: Slots this close to the clock are left out: one read at 19:59 can cross the
+#: minimum-notice line before it is booked, which failed CI at 20:00:20Z on
+#: 2026-11-14 with "that time is not available".
+CLOCK_MARGIN = dt.timedelta(hours=2)
+
+
 async def slots(client: httpx.AsyncClient, mentor: UUID, session_type: UUID) -> list[str]:
     response = await client.get(
         f"/api/v1/users/{mentor}/availability/slots",
         params={"session_type_id": str(session_type)},
     )
     assert response.status_code == 200, response.text
-    return [str(s["start"]) for s in response.json()["data"]]
+    clear_of_the_clock = dt.datetime.now(dt.UTC) + CLOCK_MARGIN
+    return [
+        str(s["start"])
+        for s in response.json()["data"]
+        if dt.datetime.fromisoformat(str(s["start"])) > clear_of_the_clock
+    ]
 
 
 async def book(

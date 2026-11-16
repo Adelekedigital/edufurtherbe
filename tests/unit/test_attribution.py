@@ -16,10 +16,11 @@ from app.domain.analytics_events import (
 )
 from app.domain.attribution import (
     auth_method_from,
+    method_fits,
     signup_channel,
     signup_source,
 )
-from app.domain.enums import AuthMethod, EntryPoint, SignupChannel, SignupSource
+from app.domain.enums import AuthMethod, ConsentMethod, EntryPoint, SignupChannel, SignupSource
 from app.infra.auth.dev_tokens import mint_dev_token
 from app.infra.auth.supabase import SupabaseTokenVerifier
 
@@ -189,3 +190,24 @@ def test_the_consent_answer_is_optional_on_me(openapi_spec: dict[str, Any]) -> N
 
     assert "analytics_consent" in schema["properties"]
     assert "analytics_consent" not in schema.get("required", [])
+
+
+# --------------------------------------------------------------------------
+# How a consent answer was given (decision 345)
+
+#: Which answers each method may give; every member must be here.
+FITS = {
+    ConsentMethod.ACCEPT: {True},
+    ConsentMethod.DECLINE: {False},
+    ConsentMethod.CLOSE: {False},
+    ConsentMethod.SETTINGS: {True, False},
+    None: {True, False},
+}
+
+
+@pytest.mark.parametrize("method", [*ConsentMethod, None])
+@pytest.mark.parametrize("granted", [True, False])
+def test_a_method_fits_only_the_answers_it_can_give(
+    method: ConsentMethod | None, granted: bool
+) -> None:
+    assert method_fits(method, granted=granted) is (granted in FITS[method])

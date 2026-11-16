@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
-from app.domain.attribution import CONSENT_VERSION_MAX_LENGTH
-from app.domain.enums import SignupChannel, SignupSource
+from app.domain.attribution import CONSENT_VERSION_MAX_LENGTH, method_fits
+from app.domain.enums import ConsentMethod, SignupChannel, SignupSource
 
 __all__ = ["AcquisitionRead", "AcquisitionWrite", "AnalyticsConsentRead", "AnalyticsConsentWrite"]
 
@@ -89,6 +89,21 @@ class AnalyticsConsentWrite(BaseModel):
         max_length=CONSENT_VERSION_MAX_LENGTH,
         description="Which consent text was answered, as the client names it.",
     )
+    method: ConsentMethod | None = Field(
+        default=None,
+        description=(
+            "How the answer was given: `accept` or `decline` from the banner's buttons, "
+            "`close` from its X (essential only), `settings` from the Settings switch. "
+            "Must fit `granted` (`accept` grants; `decline` and `close` do not), else `422`. "
+            "Omitted, it is stored as null."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _method_fits_answer(self) -> AnalyticsConsentWrite:
+        if not method_fits(self.method, granted=self.granted):
+            raise ValueError(f"method {self.method} cannot give granted={self.granted}")
+        return self
 
 
 class AnalyticsConsentRead(BaseModel):
@@ -96,8 +111,16 @@ class AnalyticsConsentRead(BaseModel):
 
     granted: bool
     version: str
+    method: ConsentMethod | None = Field(
+        description="How the answer was given; null when the client did not say."
+    )
     answered_at: datetime = Field(description="When this answer was given.")
 
     @classmethod
     def from_row(cls, row: Any) -> AnalyticsConsentRead:
-        return cls(granted=row.granted, version=row.version, answered_at=row.updated_at)
+        return cls(
+            granted=row.granted,
+            version=row.version,
+            method=row.method,
+            answered_at=row.updated_at,
+        )

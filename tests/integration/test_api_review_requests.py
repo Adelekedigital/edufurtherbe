@@ -120,7 +120,7 @@ class World:
             rows = await conn.execute(
                 text(
                     "SELECT entity_id, payload FROM outbox_events "
-                    "WHERE event_type = :t ORDER BY created_at"
+                    "WHERE event_type = :t ORDER BY created_at, id"
                 ),
                 {"t": str(notification)},
             )

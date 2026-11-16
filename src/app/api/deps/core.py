@@ -237,6 +237,7 @@ CURRENT_USER = text(f"""
            (a.roles IS NOT NULL) AS is_admin,
            ac.granted AS analytics_consent_granted,
            ac.version AS analytics_consent_version,
+           ac.method AS analytics_consent_method,
            ac.updated_at AS analytics_consent_updated_at,
            ({_SENDABLE}) AS analytics_sendable
     FROM users u
@@ -254,7 +255,7 @@ CURRENT_USER = text(f"""
 
 
 def analytics_consent_of(user: dict[str, Any]) -> Any | None:
-    """The caller's analytics answer (`granted`, `version`, `updated_at`) from
+    """The caller's analytics answer (`granted`, `version`, `method`, `updated_at`) from
     their `CURRENT_USER` row, or ``None`` when they never gave one: what `/me`
     returns, read with the caller rather than by a second query."""
     if user["analytics_consent_version"] is None:
@@ -262,6 +263,7 @@ def analytics_consent_of(user: dict[str, Any]) -> Any | None:
     return SimpleNamespace(
         granted=user["analytics_consent_granted"],
         version=user["analytics_consent_version"],
+        method=user["analytics_consent_method"],
         updated_at=user["analytics_consent_updated_at"],
     )
 

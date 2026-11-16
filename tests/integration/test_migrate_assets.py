@@ -60,6 +60,7 @@ class FakeBubble:
         self.refuse = refuse or set()
         self.gets: list[str] = []
         self.heads: list[str] = []
+        self.schemes: list[str] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         name = request.url.path.rsplit("/", 1)[-1]
@@ -68,6 +69,7 @@ class FakeBubble:
             self.heads.append(name)
             return httpx.Response(403)
         self.gets.append(name)
+        self.schemes.append(request.url.scheme)
         if name in self.refuse:
             return httpx.Response(401)
         if name not in self.files:
@@ -205,6 +207,89 @@ async def test_a_bubble_image_is_rehosted_and_the_row_repointed(
         assert url is not None and url.startswith(f"{SUPABASE}/storage/v1/object/public/{BUCKET}/")
     assert f"users/{user_id}/avatar-" in str(avatar)
     assert f"users/{user_id}/banner-" in str(banner)
+
+
+@pytest.mark.asyncio
+async def test_a_protocol_relative_upload_is_fetched_over_https_and_rehosted(
+    db_engine: AsyncEngine, script: ModuleType
+) -> None:
+    """How the production export writes 300 of its images: ``//host/path``.
+
+    The dress run on 2026-11-14 refused every one as an unrecognised host.
+    """
+    bubble = FakeBubble({"a.jpeg": JPEG})
+    storage = FakeStorage()
+    user_id = await seed(
+        db_engine,
+        "ada@example.com",
+        avatar="//4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f1/a.jpeg",
+    )
+
+    report = await script.migrate(
+        AssetStore(db_engine),
+        source_for(bubble),
+        storage_for(storage),
+        workers=1,
+        dry_run=False,
+    )
+
+    assert report.copied == 1
+    assert report.refused_hosts == ()
+    assert bubble.schemes == ["https"]
+    avatar, _ = await urls(db_engine, user_id)
+    assert avatar is not None
+    assert avatar.startswith(f"{SUPABASE}/storage/v1/object/public/{BUCKET}/")
+
+
+@pytest.mark.asyncio
+async def test_the_placeholder_banner_is_cleared_not_fetched(
+    db_engine: AsyncEngine, script: ModuleType
+) -> None:
+    """Rows loaded before the placeholder rule hold its 403 address. The copy
+    clears it, so the new app's default banner shows, and never asks for it."""
+    bubble = FakeBubble({"a.jpeg": JPEG})
+    storage = FakeStorage()
+    user_id = await seed(
+        db_engine,
+        "ada@example.com",
+        avatar=f"{BUBBLE}/f1/a.jpeg",
+        banner="//4f8.cdn.bubble.io/f1692390494515x191075007644834430/5559851%281%29.jpg",
+    )
+
+    report = await script.migrate(
+        AssetStore(db_engine),
+        source_for(bubble),
+        storage_for(storage),
+        workers=1,
+        dry_run=False,
+    )
+
+    assert report.cleared == 1
+    assert report.copied == 1
+    assert bubble.gets == ["a.jpeg"]
+    avatar, banner = await urls(db_engine, user_id)
+    assert banner is None
+    assert avatar is not None
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_counts_the_placeholder_but_keeps_it(
+    db_engine: AsyncEngine, script: ModuleType
+) -> None:
+    placeholder = "//4f8.cdn.bubble.io/f1692390494515x191075007644834430/5559851%281%29.jpg"
+    user_id = await seed(db_engine, "ada@example.com", banner=placeholder)
+
+    report = await script.migrate(
+        AssetStore(db_engine),
+        source_for(FakeBubble({})),
+        storage_for(FakeStorage()),
+        workers=1,
+        dry_run=True,
+    )
+
+    assert report.cleared == 1
+    _, banner = await urls(db_engine, user_id)
+    assert banner == placeholder
 
 
 @pytest.mark.asyncio

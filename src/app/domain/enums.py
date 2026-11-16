@@ -1055,6 +1055,20 @@ class FunnelFigureUnit(StrEnum):
     PERCENT = "percent"
 
 
+class ConsentMethod(StrEnum):
+    """How an analytics-consent answer was given (decision 345).
+
+    ``close`` is the banner's X (essential only), kept apart from a chosen
+    ``decline``; ``settings`` is the Settings switch. Which answer each may
+    carry is `domain.attribution.method_fits`.
+    """
+
+    ACCEPT = "accept"
+    DECLINE = "decline"
+    CLOSE = "close"
+    SETTINGS = "settings"
+
+
 class EntryPoint(StrEnum):
     """Where in the app a booking began (`sessions.entry_point`).
 

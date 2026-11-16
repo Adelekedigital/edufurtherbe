@@ -89,7 +89,7 @@ async def lots_of(engine: AsyncEngine, user_id: UUID) -> list[tuple[str, int, An
         rows = await conn.execute(
             text(
                 "SELECT source, quantity_remaining, expires_at FROM credit_lots "
-                "WHERE user_id = :u ORDER BY created_at"
+                "WHERE user_id = :u ORDER BY created_at, id"
             ),
             {"u": user_id},
         )
@@ -101,7 +101,7 @@ async def authorisations_for(engine: AsyncEngine, user_id: UUID) -> list[tuple[U
         rows = await conn.execute(
             text(
                 "SELECT granted_by, note FROM admin_credit_grants WHERE user_id = :u "
-                "ORDER BY created_at"
+                "ORDER BY created_at, id"
             ),
             {"u": user_id},
         )

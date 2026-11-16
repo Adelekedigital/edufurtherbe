@@ -75,7 +75,7 @@ async def balance_of(engine: AsyncEngine, user_id: UUID) -> int:
 async def sources_of(engine: AsyncEngine, user_id: UUID) -> list[str]:
     async with engine.begin() as conn:
         rows = await conn.execute(
-            text("SELECT source FROM credit_lots WHERE user_id = :u ORDER BY created_at"),
+            text("SELECT source FROM credit_lots WHERE user_id = :u ORDER BY created_at, id"),
             {"u": user_id},
         )
         return [row[0] for row in rows]

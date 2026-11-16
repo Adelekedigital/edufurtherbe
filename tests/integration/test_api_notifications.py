@@ -123,7 +123,7 @@ async def queued(engine: AsyncEngine, session_id: str) -> list[dict[str, Any]]:
                 await conn.execute(
                     text(
                         "SELECT event_type, destination, status, attempts, payload, error_detail "
-                        "FROM outbox_events WHERE entity_id = :i ORDER BY created_at"
+                        "FROM outbox_events WHERE entity_id = :i ORDER BY created_at, id"
                     ),
                     {"i": session_id},
                 )

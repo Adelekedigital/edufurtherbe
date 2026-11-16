@@ -716,15 +716,17 @@ async def test_me_reads_the_consent_from_the_callers_row() -> None:
     answered = {
         "analytics_consent_granted": False,
         "analytics_consent_version": "v2",
+        "analytics_consent_method": "close",
         "analytics_consent_updated_at": "2026-11-11T09:00:00Z",
     }
     unanswered = dict.fromkeys(answered)
 
     consent = analytics_consent_of(answered)
 
-    assert (consent.granted, consent.version, consent.updated_at) == (
+    assert (consent.granted, consent.version, consent.method, consent.updated_at) == (
         False,
         "v2",
+        "close",
         "2026-11-11T09:00:00Z",
     )
     assert analytics_consent_of(unanswered) is None

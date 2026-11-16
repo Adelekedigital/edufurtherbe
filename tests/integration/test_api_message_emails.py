@@ -143,7 +143,7 @@ async def rows(engine: AsyncEngine) -> list[tuple[str, str]]:
         found = await conn.execute(
             text(
                 "SELECT event_type, status FROM outbox_events "
-                "WHERE event_type LIKE 'message_%' ORDER BY created_at"
+                "WHERE event_type LIKE 'message_%' ORDER BY created_at, id"
             )
         )
         return [(str(a), str(b)) for a, b in found]

@@ -44,7 +44,9 @@ async def told(engine: AsyncEngine, session_id: str) -> list[str]:
     """What the booking queued about itself."""
     async with engine.connect() as conn:
         rows = await conn.execute(
-            text("SELECT event_type FROM outbox_events WHERE entity_id = :i ORDER BY created_at"),
+            text(
+                "SELECT event_type FROM outbox_events WHERE entity_id = :i ORDER BY created_at, id"
+            ),
             {"i": session_id},
         )
         return [str(row[0]) for row in rows]

@@ -139,20 +139,8 @@ def main() -> int:
         return EXIT_REFUSED
 
     # A run that loaded cleanly but left something for a human is not a clean
-    # run. Quarantined trackers are somebody's session history that did not
-    # migrate; an overlapping window will abort the load outright; a defaulted
-    # duration is a mentor whose offering was guessed at. Returning 0 would let a
-    # freeze-window runbook read any of those as success.
-    unresolved = bool(
-        plan.quarantined
-        or plan.dropped
-        or plan.overlapping_live_windows
-        or plan.duration_defaulted
-        or plan.duration_disagreements
-        # A defaulted venue means a mentor record was not found, which in this
-        # script has exactly one plausible cause: the wrong Thing name above.
-        or plan.booking_defaulted
-    )
+    # run: returning 0 would let a freeze-window runbook read it as success.
+    unresolved = plan.needs_review
 
     if args.dry_run:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK

@@ -15,12 +15,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from enum import StrEnum
 
-from app.domain.enums import AuthMethod, EntryPoint, SignupChannel, SignupSource
+from app.domain.enums import AuthMethod, ConsentMethod, EntryPoint, SignupChannel, SignupSource
 
 __all__ = [
     "CONSENT_VERSION_MAX_LENGTH",
     "auth_method_from",
     "entry_point_or_none",
+    "method_fits",
     "signup_channel",
     "signup_source",
 ]
@@ -67,6 +68,25 @@ def entry_point_or_none(raw: object) -> object:
     if raw is None or isinstance(raw, EntryPoint):
         return raw
     return _member(EntryPoint, raw)
+
+
+#: The one answer each consent method can give, ``None`` for either. Every
+#: member is listed, so a new one fails here until somebody decides.
+_METHOD_ANSWER: dict[ConsentMethod, bool | None] = {
+    ConsentMethod.ACCEPT: True,
+    ConsentMethod.DECLINE: False,
+    ConsentMethod.CLOSE: False,
+    ConsentMethod.SETTINGS: None,
+}
+
+
+def method_fits(method: ConsentMethod | None, *, granted: bool) -> bool:
+    """Whether ``method`` could have given this answer (decision 345); no
+    method at all fits either."""
+    if method is None:
+        return True
+    answer = _METHOD_ANSWER[method]
+    return answer is None or answer == granted
 
 
 #: Supabase's `amr` methods that mean a code sent to the address

@@ -14,12 +14,15 @@ from app.domain.assets import (
     AssetAction,
     AssetKind,
     AssetReport,
+    absolute_url,
     decide,
     digest,
     extension_for,
     host_of,
     is_fetchable,
+    is_legacy_default_banner,
     is_ours,
+    legacy_banner_url,
     object_path,
     sniff_content_type,
 )
@@ -308,3 +311,111 @@ def test_the_report_surfaces_refused_hosts() -> None:
 
     assert "refused 1" in report.summary()
     assert any("attacker.test" in line for line in report.failures())
+
+
+# --------------------------------------------------------------------------
+# Protocol-relative addresses, as the production export writes Bubble uploads
+# --------------------------------------------------------------------------
+
+#: How the 8 Nov production export stores 300 of its 956 images: no scheme.
+PROTOCOL_RELATIVE = "//4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io/f1709512246600x2/IMG.jpg"
+
+
+def test_a_protocol_relative_bubble_upload_is_copied() -> None:
+    """The dress run refused all 300 of these as an unrecognised host."""
+    assert is_fetchable(PROTOCOL_RELATIVE) is True
+    assert decide(PROTOCOL_RELATIVE, OURS) is AssetAction.COPY
+
+
+def test_a_protocol_relative_address_is_fetched_over_https() -> None:
+    assert absolute_url(PROTOCOL_RELATIVE) == f"https:{PROTOCOL_RELATIVE}"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://lh3.googleusercontent.com/a/x", "https://lh3.googleusercontent.com/a/x"),
+        ("http://lh3.googleusercontent.com/a/x", "http://lh3.googleusercontent.com/a/x"),
+        ("lh3.googleusercontent.com/a/x", "https://lh3.googleusercontent.com/a/x"),
+        (
+            "lh3.googleusercontent.com/a/x?next=https://y",
+            "https://lh3.googleusercontent.com/a/x?next=https://y",
+        ),
+        ("app.edufurther.org/f1//img.jpg", "https://app.edufurther.org/f1//img.jpg"),
+        (" //4f8.cdn.bubble.io/f1/a.jpg\n", "https://4f8.cdn.bubble.io/f1/a.jpg"),
+    ],
+    ids=[
+        "https-kept",
+        "http-kept",
+        "bare-host",
+        "bare-host-url-in-query",
+        "bare-host-double-slash-path",
+        "padded",
+    ],
+)
+def test_every_address_gets_exactly_one_scheme(url: str, expected: str) -> None:
+    assert absolute_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "//attacker.test/x.png",
+        "//169.254.169.254/latest/meta-data/",
+        "//cdn.bubble.io.attacker.test/x.png",
+        "//4f8.cdn.bubble.io@attacker.test/x.png",
+    ],
+    ids=["unknown-host", "metadata", "suffix-not-on-dot-boundary", "credentials-smuggle"],
+)
+def test_a_protocol_relative_address_is_still_held_to_the_allowlist(url: str) -> None:
+    assert is_fetchable(url) is False
+
+
+def test_a_protocol_relative_address_reports_its_host() -> None:
+    assert host_of(PROTOCOL_RELATIVE) == "4f8dee3b4728dbdfcf1f333770d80d0d.cdn.bubble.io"
+
+
+def test_a_protocol_relative_address_on_our_storage_is_ours() -> None:
+    assert is_ours(f"//{OURS}/storage/v1/object/public/profile-images/x.jpg", OURS) is True
+
+
+# --------------------------------------------------------------------------
+# The legacy placeholder banner
+# --------------------------------------------------------------------------
+
+PLACEHOLDER_ID = "f1692390494515x191075007644834430"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"//4f8.cdn.bubble.io/{PLACEHOLDER_ID}/5559851%281%29.jpg",
+        f"//4f8.cdn.bubble.io/{PLACEHOLDER_ID}/5559851%281%29.jpg?fit=crop&q=100",
+        f"https://d1muf25xaso8hp.cloudfront.net/https%3A%2F%2F4f8.cdn.bubble.io%2F{PLACEHOLDER_ID}%2F5559851.jpg",
+    ],
+    ids=["plain", "cropped", "encoded-in-a-resizer"],
+)
+def test_the_placeholder_banner_is_recognised_in_every_form(url: str) -> None:
+    assert is_legacy_default_banner(url) is True
+    assert legacy_banner_url(url) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg",
+        f"//4f8.cdn.bubble.io/f1708330527710x5635/IMG.jpeg?from=/{PLACEHOLDER_ID}/",
+        None,
+        "",
+        "   ",
+        42,
+    ],
+    ids=["an-upload", "id-only-in-the-query", "none", "empty", "blank", "not-text"],
+)
+def test_anything_else_is_not_the_placeholder(value: object) -> None:
+    assert is_legacy_default_banner(value) is False
+
+
+def test_an_uploaded_banner_is_kept_with_https() -> None:
+    url = "//4f8.cdn.bubble.io/f1708330527710x5635/IMG_1945.jpeg"
+    assert legacy_banner_url(url) == f"https:{url}"

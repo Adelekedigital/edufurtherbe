@@ -79,7 +79,7 @@ async def queued(engine: AsyncEngine, session_id: UUID) -> list[dict[str, Any]]:
         rows = await conn.execute(
             text(
                 "SELECT payload FROM outbox_events "
-                "WHERE entity_id = :s AND event_type = :n ORDER BY created_at"
+                "WHERE entity_id = :s AND event_type = :n ORDER BY created_at, id"
             ),
             {"s": session_id, "n": NOTIFICATION},
         )

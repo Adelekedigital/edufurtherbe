@@ -82,7 +82,8 @@ async def outbox_types(engine: AsyncEngine, session_id: str) -> list[str]:
         rows = await conn.execute(
             text(
                 "SELECT event_type FROM outbox_events WHERE entity_id = :i "
-                "AND event_type NOT IN ('session_requested', 'session_booked') ORDER BY created_at"
+                "AND event_type NOT IN ('session_requested', 'session_booked') "
+                "ORDER BY created_at, id"
             ),
             {"i": session_id},
         )

@@ -262,7 +262,7 @@ async def queued_for(engine: AsyncEngine, user_id: UUID) -> list[tuple[str, Any]
                 await conn.execute(
                     text(
                         "SELECT event_type, payload FROM outbox_events "
-                        "WHERE payload ->> 'recipient_id' = :u ORDER BY created_at"
+                        "WHERE payload ->> 'recipient_id' = :u ORDER BY created_at, id"
                     ),
                     {"u": str(user_id)},
                 )
