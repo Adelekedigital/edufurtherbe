@@ -77,6 +77,27 @@ async def test_the_first_name_saved_replaces_the_placeholder_once(
     assert await handle_of(db_engine, user_id) == ("chloe-nwosu", False)
 
 
+async def test_a_first_name_alone_waits_for_the_last_name(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A handle is final, so it waits for both names (owner, 16 Nov): `ada`
+    alone would use up the short handles for common names."""
+    user_id, headers = await signed_in(api_client, "first.only@example.com")
+    before, _ = await handle_of(db_engine, user_id)
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"first_name": "Ada"}, headers=headers
+    )
+    assert response.status_code == 204, response.text
+    assert await handle_of(db_engine, user_id) == (before, True)
+
+    response = await api_client.patch(
+        url(user_id, "profile"), json={"last_name": "Okafor"}, headers=headers
+    )
+    assert response.status_code == 204, response.text
+    assert await handle_of(db_engine, user_id) == ("ada-okafor", False)
+
+
 async def test_a_name_that_gives_nothing_keeps_the_placeholder(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
@@ -103,7 +124,7 @@ async def test_an_imported_handle_is_final_even_before_a_name(db_engine: AsyncEn
     assert await handle_of(db_engine, user_id) == ("user-legacyab", False)
 
 
-async def test_a_clash_counts_up_and_a_reserved_word_is_suffixed(db_engine: AsyncEngine) -> None:
+async def test_a_clash_counts_up(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         first = await add_user(
             conn, "ada1.slug@example.com", first_name="Ada", last_name="Lovelace"
@@ -111,15 +132,13 @@ async def test_a_clash_counts_up_and_a_reserved_word_is_suffixed(db_engine: Asyn
         second = await add_user(
             conn, "ada2.slug@example.com", first_name="Ada", last_name="Lovelace"
         )
-        reserved = await add_user(conn, "admin.slug@example.com", first_name="Admin")
     async with AsyncSession(db_engine) as session:
-        for user_id in (first, second, reserved):
+        for user_id in (first, second):
             await give_slug(session, user_id)
         await session.commit()
 
     assert (await handle_of(db_engine, first))[0] == "ada-lovelace"
     assert (await handle_of(db_engine, second))[0] == "ada-lovelace-2"
-    assert (await handle_of(db_engine, reserved))[0] == "admin-2"
 
 
 async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -> None:
@@ -205,7 +224,9 @@ async def test_a_reload_that_brings_a_name_settles_a_placeholder(db_engine: Asyn
 async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: AsyncEngine) -> None:
     legacy = dt.datetime(2024, 3, 1, 12, 0, tzinfo=dt.UTC)
     async with db_engine.begin() as conn:
-        user_id = await add_user(conn, "dated.slug@example.com", first_name="Dated")
+        user_id = await add_user(
+            conn, "dated.slug@example.com", first_name="Dated", last_name="Row"
+        )
         async with timestamps_from_source(conn, "users"):
             await conn.execute(
                 text("UPDATE users SET updated_at = :t WHERE id = :u"), {"t": legacy, "u": user_id}
@@ -218,7 +239,7 @@ async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: Async
         updated = await conn.scalar(
             text("SELECT updated_at FROM users WHERE id = :u"), {"u": user_id}
         )
-    assert (await handle_of(db_engine, user_id))[0] == "dated"
+    assert (await handle_of(db_engine, user_id))[0] == "dated-row"
     assert updated == legacy
 
 
@@ -264,6 +285,49 @@ async def test_a_reload_with_a_legacy_slug_makes_it_final(db_engine: AsyncEngine
     assert await handle_of(db_engine, user_id) == ("ada-okafor", False)
 
 
+async def test_a_legacy_slug_another_account_holds_is_not_taken(db_engine: AsyncEngine) -> None:
+    """A clash with a live account's handle, or one a self-deleted account can
+    still restore, gives the imported account its own handle instead of
+    aborting the load or blocking the restore."""
+    async with db_engine.begin() as conn:
+        live_id = await add_user(conn, "holder.live@example.com", slug="ada-okafor")
+        gone_id = await add_user(conn, "holder.gone@example.com", slug="bayo-ade")
+        await conn.execute(
+            text(
+                "UPDATE users SET deleted_at = now(), "
+                "deletion_purge_at = now() + interval '30 days' WHERE id = :u"
+            ),
+            {"u": gone_id},
+        )
+    rows = transform_users(
+        [
+            load_record(Slug="ada-okafor"),
+            load_record(
+                Slug="bayo-ade",
+                bubble_id="1700000000000x999999999999999999",
+                email="bayo.import@example.com",
+            ),
+        ]
+    ).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+        handles = dict(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT legacy_bubble_id, slug FROM users WHERE legacy_bubble_id = ANY(:b)"
+                    ),
+                    {"b": [r.legacy_bubble_id for r in rows]},
+                )
+            ).all()
+        )
+
+    assert await handle_of(db_engine, live_id) == ("ada-okafor", False)
+    assert set(handles) == {r.legacy_bubble_id for r in rows}
+    assert "ada-okafor" not in handles.values() and "bayo-ade" not in handles.values()
+    assert all(slug for slug in handles.values())
+
+
 async def test_a_reload_never_moves_a_final_handle(db_engine: AsyncEngine) -> None:
     """A handle settled in the app (backfill or a name save) is published in
     links; a later load bringing a different legacy slug must not replace it."""
@@ -287,7 +351,7 @@ async def test_a_reload_never_moves_a_final_handle(db_engine: AsyncEngine) -> No
 
 async def test_a_dry_run_backfill_writes_nothing(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
-        user_id = await add_user(conn, "dry.slug@example.com", first_name="Dry")
+        user_id = await add_user(conn, "dry.slug@example.com", first_name="Dry", last_name="Run")
     async with AsyncSession(db_engine) as session:
         result = await backfill_slugs(session, apply=False)
         await session.commit()
@@ -327,7 +391,7 @@ async def test_a_restored_account_without_a_handle_gets_one(db_engine: AsyncEngi
     now = dt.datetime.now(dt.UTC)
     async with db_engine.begin() as conn:
         user_id = await add_user(
-            conn, "restore.slug@example.com", first_name="Remy", deleted_at=now
+            conn, "restore.slug@example.com", first_name="Remy", last_name="Lebeau", deleted_at=now
         )
         await conn.execute(
             text("UPDATE users SET deletion_purge_at = :p WHERE id = :u"),
@@ -337,7 +401,7 @@ async def test_a_restored_account_without_a_handle_gets_one(db_engine: AsyncEngi
         assert await restore_account(session, user_id, now=now)
         await session.commit()
 
-    assert await handle_of(db_engine, user_id) == ("remy", False)
+    assert await handle_of(db_engine, user_id) == ("remy-lebeau", False)
 
 
 async def test_a_purged_account_holds_no_handle_and_no_placeholder_flag(

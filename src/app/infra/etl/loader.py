@@ -31,11 +31,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict
 
-from sqlalchemy import text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.enums import SignupSource
 from app.domain.transform import UserRow
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE, restorable
 from app.infra.db.slugs import OPEN_HANDLE_SQL, give_missing_slugs
 from app.infra.db.triggers import timestamps_from_source
 
@@ -75,6 +77,23 @@ class UserLoader:
 
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
+        #: Bubble ids whose legacy slug another account already held, so they
+        #: were given their own handle instead; the script names them.
+        self.slugs_held_elsewhere: list[str] = []
+
+    async def _held_elsewhere(self, rows: Sequence[UserRow]) -> dict[str, str | None]:
+        """Each batch slug another account holds: a live one, or a self-deleted
+        one that may still restore (every other handle writer skips those too).
+        Maps slug to its holder's Bubble id, ``None`` for an app account."""
+        slugs = [row.slug for row in rows if row.slug]
+        if not slugs:
+            return {}
+        held = await self._connection.execute(
+            select(User.slug, User.legacy_bubble_id).where(
+                User.slug.in_(slugs), or_(LIVE, and_(*restorable(func.now())))
+            )
+        )
+        return {slug: holder for slug, holder in held.all() if slug is not None}
 
     async def load(self, rows: Sequence[UserRow]) -> int:
         """Upsert every row and return how many were written.
@@ -86,9 +105,15 @@ class UserLoader:
         if not rows:
             return 0
 
+        held = await self._held_elsewhere(rows)
         async with timestamps_from_source(self._connection, "users"):
             for row in rows:
                 parameters = asdict(row)
+                if row.slug in held and held[row.slug] != row.legacy_bubble_id:
+                    # Taking it would abort the load on the unique index, or
+                    # block a restore; `give_missing_slugs` below gives one.
+                    parameters["slug"] = None
+                    self.slugs_held_elsewhere.append(row.legacy_bubble_id)
                 # The enum member is a StrEnum, so it is already its own wire
                 # value; passing the member itself would send the *name* on some
                 # drivers — the exact defect the deleted `pg_enum` helper

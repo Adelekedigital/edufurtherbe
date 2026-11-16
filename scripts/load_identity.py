@@ -71,7 +71,11 @@ async def load(plan: IdentityPlan) -> int:
     engine = create_async_engine(resolve_async_dsn(get_settings()))
     try:
         async with engine.begin() as connection:
-            users_written = await UserLoader(connection).load(plan.users)
+            user_loader = UserLoader(connection)
+            users_written = await user_loader.load(plan.users)
+            # Ids only, like the duplicate slugs: each got its own handle.
+            for bubble_id in user_loader.slugs_held_elsewhere:
+                print(f"   SLUG HELD ELSEWHERE, own handle given: {bubble_id}")
             ids = await user_id_map(connection)
 
             country_reference, language_reference = await reference_maps(connection)

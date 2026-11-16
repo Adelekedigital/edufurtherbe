@@ -177,10 +177,11 @@ class TestDefaultCode:
     def test_accents_and_spaces_fold_into_the_handle_alphabet(self) -> None:
         assert re.fullmatch(r"zoe-angstrom-[a-z0-9]{4}", default_code("  Zoë  Ångström! "))
 
-    def test_a_letter_with_no_ascii_form_separates(self) -> None:
-        """The fold shared with profile handles (#684): `ø` separates, as any
-        other character outside a-z0-9 does."""
-        assert re.fullmatch(r"s-ren-[a-z0-9]{4}", default_code("Søren"))
+    def test_a_latin_letter_without_an_accent_form_is_spelled_out(self) -> None:
+        """The fold shared with profile handles (#684): `ø`, `ł` and `ß` have
+        no decomposition, so they are spelled as a reader would, not dropped."""
+        assert re.fullmatch(r"soren-[a-z0-9]{4}", default_code("Søren"))
+        assert re.fullmatch(r"lukasz-weiss-[a-z0-9]{4}", default_code("Łukasz Weiß"))
 
     @pytest.mark.parametrize("name", [None, "", "   ", "李雷", "---", "!!!"])
     def test_a_name_with_nothing_usable_becomes_friend(self, name: str | None) -> None:

@@ -34,8 +34,9 @@ FE_HANDLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
         ("Bánkólé", "Wright", "bankole-wright"),
         ("  Ada ", " Lovelace  ", "ada-lovelace"),
         ("Mary-Jane", "O'Neil", "mary-jane-o-neil"),
-        ("Ada", None, "ada"),
-        ("Søren", "Kierkegaard", "s-ren-kierkegaard"),
+        ("Søren", "Kierkegaard", "soren-kierkegaard"),
+        ("Łukasz", "Weiß", "lukasz-weiss"),
+        ("Æsa", "Đorđević", "aesa-dordevic"),
     ],
 )
 def test_a_name_becomes_a_readable_handle(
@@ -47,7 +48,16 @@ def test_a_name_becomes_a_readable_handle(
 
 
 @pytest.mark.parametrize(
-    ("first", "last"), [(None, None), ("", "  "), ("山田", "太郎"), ("---", "!!"), (None, "Okafor")]
+    ("first", "last"),
+    [
+        (None, None),
+        ("", "  "),
+        ("山田", "太郎"),
+        ("---", "!!"),
+        (None, "Okafor"),
+        ("Ada", None),
+        ("Ada", "  "),
+    ],
 )
 def test_a_name_with_nothing_usable_gives_none(first: str | None, last: str | None) -> None:
     assert name_slug(first, last) is None
@@ -62,7 +72,7 @@ def test_a_long_name_is_cut_at_a_hyphen_within_the_limit() -> None:
 
 
 def test_a_single_overlong_word_is_cut_at_the_limit() -> None:
-    slug = name_slug("a" * 80, None)
+    slug = name_slug("a" * 80, "b")
     assert slug == "a" * MAX_SLUG_LENGTH
 
 

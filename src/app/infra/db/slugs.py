@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Select, exists, func, select, text, update
@@ -109,21 +110,25 @@ async def _name_handle(
     return await _claim(session, user_id, candidates(base), placeholder=False)
 
 
-async def settle_name_slug(session: Db, user_id: UUID) -> str | None:
-    """Replace a missing or placeholder handle, once, by one from the saved name.
+#: What `settle_name_slug` needs to know about the account, in this order.
+NAME_AND_HANDLE = (User.first_name, User.last_name, User.slug, User.slug_is_placeholder)
+
+
+async def settle_name_slug(session: Db, user_id: UUID, known: Any = None) -> str | None:
+    """Replace a missing or placeholder handle, once, by one from the saved names.
 
     Does nothing when the handle is final (the update's own WHERE says so), or
-    when there is no first name or it gives nothing usable (the placeholder
-    stays, and the next name save tries again). Does not commit; the caller's
-    transaction holds the name and the handle together.
+    when both names are not there yet or give nothing usable (the placeholder
+    stays, and the next name save tries again). ``known`` is the account's
+    `NAME_AND_HANDLE` row when the caller already has it (the name write's own
+    RETURNING), saving a read. Does not commit; the caller's transaction holds
+    the names and the handle together.
     """
-    row = (
-        await session.execute(
-            select(User.first_name, User.last_name, User.slug, User.slug_is_placeholder).where(
-                User.id == user_id
-            )
-        )
-    ).one_or_none()
+    row = known
+    if row is None:
+        row = (
+            await session.execute(select(*NAME_AND_HANDLE).where(User.id == user_id))
+        ).one_or_none()
     if row is None or _is_final(row.slug, row.slug_is_placeholder):
         return None
     return await _name_handle(session, user_id, row.first_name, row.last_name)

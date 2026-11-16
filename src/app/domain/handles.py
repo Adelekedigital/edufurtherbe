@@ -45,14 +45,29 @@ def strip_marks(text: str, *, form: Literal["NFKD", "NFD"] = "NFKD") -> str:
     return "".join(ch for ch in unicodedata.normalize(form, text) if not unicodedata.combining(ch))
 
 
+#: Latin letters with no decomposition, spelled as a reader would: without
+#: this ``Søren`` folds to ``s-ren`` and ``Łukasz`` to ``ukasz``. Names only;
+#: the import's fold (NFD, accents only) never uses it.
+_SPELLED = str.maketrans(
+    {
+        "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d",
+        "Ð": "D", "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe",
+        "Œ": "OE", "þ": "th", "Þ": "Th", "\u0131": "i", "ħ": "h", "Ħ": "H",
+        "ŋ": "n", "Ŋ": "N",
+    }
+)  # fmt: skip
+
+
 def fold_to_handle(text: str) -> str:
     """``text`` as lowercase ``[a-z0-9]`` runs joined by one ``-``.
 
-    NFKD then dropping the combining marks takes ``Zoë`` to ``zoe``; any other
-    character (``ø``, ``山``, punctuation, space) separates. Never starts or
-    ends with ``-``; empty when nothing usable is left.
+    NFKD then dropping the combining marks takes ``Zoë`` to ``zoe``; a Latin
+    letter with no decomposition is spelled out (``ø`` to ``o``, ``ß`` to
+    ``ss``); any other character (``山``, punctuation, space) separates. Never
+    starts or ends with ``-``; empty when nothing usable is left.
     """
-    ascii_text = "".join(ch if ch.isascii() else " " for ch in strip_marks(text))
+    spelled = strip_marks(text.translate(_SPELLED))
+    ascii_text = "".join(ch if ch.isascii() else " " for ch in spelled)
     return _NOT_HANDLE.sub("-", ascii_text.lower()).strip("-")
 
 

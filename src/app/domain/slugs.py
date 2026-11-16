@@ -2,8 +2,8 @@
 
 Every account has one. An account is created at first sign-in, before it has
 a name, so it starts with a placeholder (``user-`` and 8 random base36
-characters); the first time a first name is saved, the placeholder is replaced
-once by a handle made from the name. After that a handle never changes, even
+characters); the first time both names are saved, the placeholder is replaced
+once by a handle made from them. After that a handle never changes, even
 when the name does: links to it are shared. Imported handles are kept as they
 were (decision 311 folds only their accents).
 
@@ -52,11 +52,13 @@ def looks_like_id(handle: str) -> bool:
 def name_slug(first_name: str | None, last_name: str | None) -> str | None:
     """A handle from a name, or ``None`` when the name gives nothing usable.
 
-    The shared fold (`domain.handles.fold_to_handle`): accents fold away
-    (Chloé → chloe) and any other run of characters becomes one ``-``. Cut to the limit at a
+    Both names are needed (owner, 2026-11-16): a handle is final, and a first
+    name alone would use up the short handles for common names. The shared
+    fold (`domain.handles.fold_to_handle`): accents fold away (Chloé → chloe)
+    and any other run of characters becomes one ``-``. Cut to the limit at a
     ``-`` where there is one. A UUID-shaped result is refused.
     """
-    if not (first_name or "").strip():
+    if not (first_name or "").strip() or not (last_name or "").strip():
         return None
     slug = fold_to_handle(" ".join(part for part in (first_name, last_name) if part))
     if len(slug) > MAX_SLUG_LENGTH:
