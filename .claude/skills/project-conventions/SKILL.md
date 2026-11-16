@@ -814,6 +814,41 @@ Tests marked `db` read `TEST_DATABASE_URL` and **skip** without it, so the suite
 runs on a machine with no Docker. CI sets `REQUIRE_DB_TESTS=1`, which turns that
 skip into a failure.
 
+### Railway access (owner, 2026-11-16)
+
+The Railway CLI authenticates with **one project token per environment**, kept
+in the operator's Windows **User** environment. Never print, log or commit a token.
+
+| Variable | Railway environment | Service |
+|---|---|---|
+| `RL_TOKEN_EDUFURTHER_DEV` | `development` | `edufurtherbe-dev` |
+| `RL_TOKEN_EDUFURTHER_PROD` | `production` | `edufurtherbe-prod` |
+
+- Pass the token as `RAILWAY_TOKEN` for one command, then remove it. Each token
+  sees only its own environment, so a dev token can never touch production.
+- A session started before a token was set does not inherit it. Read it from
+  the User scope instead of the session environment.
+- `RL_TOKEN_EDUFURTHER` (no suffix) is not a Railway token; Railway rejects it.
+- Production stays the owner's to change: these tokens are for reads and for
+  the steps the cutover plan assigns to the backend, not for editing
+  production settings unasked.
+
+```powershell
+# PowerShell
+$env:RAILWAY_TOKEN = [Environment]::GetEnvironmentVariable("RL_TOKEN_EDUFURTHER_DEV", "User")
+railway status                                   # shows Environment: development
+railway run --service edufurtherbe-dev -- uv run python scripts/<script>.py
+Remove-Item Env:RAILWAY_TOKEN
+```
+
+```bash
+# Git Bash: read the User-scope value through PowerShell, for one command only
+RAILWAY_TOKEN="$(powershell.exe -NoProfile -Command '[Environment]::GetEnvironmentVariable("RL_TOKEN_EDUFURTHER_PROD","User")' | tr -d '\r')" \
+  railway status
+```
+
+Verified 2026-11-16: `railway status` and `railway variables --service <service> --json` work with each token.
+
 ## Where the truth lives
 
 | Doc | Covers | Canonical copy |
