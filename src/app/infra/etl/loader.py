@@ -36,12 +36,12 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.enums import SignupSource
 from app.domain.transform import UserRow
-from app.infra.db.slugs import give_missing_slugs
+from app.infra.db.slugs import OPEN_HANDLE_SQL, give_missing_slugs
 from app.infra.db.triggers import timestamps_from_source
 
 __all__ = ["UPSERT_USER", "UserLoader", "timestamps_from_source"]
 
-UPSERT_USER = """
+UPSERT_USER = f"""
 INSERT INTO users (
     legacy_bubble_id, email, primary_role, timezone,
     created_at, updated_at, email_verified_at,
@@ -60,11 +60,14 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     email_verified_at = EXCLUDED.email_verified_at,
     first_name        = EXCLUDED.first_name,
     last_name         = EXCLUDED.last_name,
-    slug              = COALESCE(EXCLUDED.slug, users.slug),
+    -- A final handle is published in links: an import never moves it.
+    slug              = CASE WHEN {OPEN_HANDLE_SQL}
+                             THEN COALESCE(EXCLUDED.slug, users.slug)
+                             ELSE users.slug END,
     slug_is_placeholder = (EXCLUDED.slug IS NULL AND users.slug_is_placeholder),
     last_active_at    = EXCLUDED.last_active_at,
     signup_source     = EXCLUDED.signup_source
-"""
+"""  # noqa: S608  # nosec B608 - only the module constant OPEN_HANDLE_SQL; values are bound
 
 
 class UserLoader:

@@ -14,7 +14,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import Select, exists, func, or_, select, text, update
+from sqlalchemy import Select, exists, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 from sqlalchemy.orm import aliased
@@ -28,6 +28,11 @@ from app.infra.db.triggers import timestamps_from_source
 _UNIQUE_SLUG = "ix_users_slug_live"
 #: Far beyond any real clash count; a loop that reaches it is a bug, not data.
 _MAX_ATTEMPTS = 1000
+
+#: A handle that may still be replaced: missing, or a placeholder. One rule for
+#: every writer, raw SQL so the loader's upsert shares it; a final handle never moves.
+OPEN_HANDLE_SQL = "(users.slug IS NULL OR users.slug_is_placeholder)"
+_OPEN_HANDLE = text(OPEN_HANDLE_SQL)
 
 #: Another account, for the restorable-holder check inside the UPDATE.
 Held = aliased(User)
@@ -62,9 +67,7 @@ async def _claim(
                         ~exists().where(Held.slug == slug, *restorable(func.now(), Held)),
                         # A placeholder only fills a missing handle; a name's
                         # handle may also replace a placeholder.
-                        User.slug.is_(None)
-                        if placeholder
-                        else or_(User.slug.is_(None), User.slug_is_placeholder.is_(True)),
+                        User.slug.is_(None) if placeholder else _OPEN_HANDLE,
                     )
                     .values(slug=slug, slug_is_placeholder=placeholder)
                     .returning(User.slug)
@@ -144,9 +147,7 @@ def _missing(
     *, legacy_only: bool = False
 ) -> Select[tuple[UUID, str | None, str | None, str | None]]:
     """Live accounts with no handle, or a placeholder one a name may now settle."""
-    query = select(User.id, User.first_name, User.last_name, User.slug).where(
-        or_(User.slug.is_(None), User.slug_is_placeholder.is_(True)), LIVE
-    )
+    query = select(User.id, User.first_name, User.last_name, User.slug).where(_OPEN_HANDLE, LIVE)
     if legacy_only:
         query = query.where(User.legacy_bubble_id.is_not(None))
     return query.order_by(User.id)

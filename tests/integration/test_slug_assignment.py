@@ -264,6 +264,27 @@ async def test_a_reload_with_a_legacy_slug_makes_it_final(db_engine: AsyncEngine
     assert await handle_of(db_engine, user_id) == ("ada-okafor", False)
 
 
+async def test_a_reload_never_moves_a_final_handle(db_engine: AsyncEngine) -> None:
+    """A handle settled in the app (backfill or a name save) is published in
+    links; a later load bringing a different legacy slug must not replace it."""
+    rows = transform_users([load_record(Slug=None)]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(rows)
+        user_id = await conn.scalar(
+            text(
+                "UPDATE users SET slug = 'ada-settled', slug_is_placeholder = false "
+                "WHERE legacy_bubble_id = :b RETURNING id"
+            ),
+            {"b": rows[0].legacy_bubble_id},
+        )
+
+    reloaded = transform_users([load_record(Slug="ada-okafor")]).rows
+    async with db_engine.begin() as conn:
+        await UserLoader(conn).load(reloaded)
+
+    assert await handle_of(db_engine, user_id) == ("ada-settled", False)
+
+
 async def test_a_dry_run_backfill_writes_nothing(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         user_id = await add_user(conn, "dry.slug@example.com", first_name="Dry")
