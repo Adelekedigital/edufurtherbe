@@ -58,6 +58,8 @@ from app.infra.db.models.missed_reasons import SessionMissedReason
 from app.infra.db.models.platform import (
     FeatureInterest,
     IdempotencyKey,
+    MentorProfileShare,
+    MentorProfileVisit,
     NotificationChannelPreference,
     OutboxEvent,
     UserActivityDay,
@@ -133,6 +135,8 @@ __all__ = [
     "MentorGuideCountry",
     "MentorNextAvailability",
     "MentorProfile",
+    "MentorProfileShare",
+    "MentorProfileVisit",
     "MentorServiceOffering",
     "MentorStatusEvent",
     "Message",

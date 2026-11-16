@@ -62,6 +62,7 @@ from app.domain.enums import (
     LegalDocumentType,
     LinkKind,
     LinkPlatform,
+    LinkVia,
     ListingStatus,
     LookupStatus,
     MeetingProvider,
@@ -83,6 +84,7 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
     SessionTypeIcon,
+    ShareMethod,
     SignupChannel,
     SignupSource,
     UnlistedReason,
@@ -270,6 +272,9 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
         {"ck_email_line_overrides_line_is_known", "ck_email_line_edits_line_is_known"}
     ),
     EmailEditAction: frozenset({"ck_email_line_edits_action_is_known"}),
+    # A mentor profile link's visits and shares (decision 346).
+    LinkVia: frozenset({"ck_mentor_profile_visits_via_is_known"}),
+    ShareMethod: frozenset({"ck_mentor_profile_shares_method_is_known"}),
 }
 
 # Vocabularies with no single database column to constrain, and why.
