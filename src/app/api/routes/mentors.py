@@ -30,7 +30,14 @@ from typing import Any
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import MentorPageDep, MentorReviewsDep, PublicMentorDep, SimilarMentorsDep
+from app.api.deps import (
+    MentorPageDep,
+    MentorReviewsDep,
+    PublicMentorDep,
+    ShareRecordedDep,
+    SimilarMentorsDep,
+    VisitRecordedDep,
+)
 from app.api.deps.mentors import MAX_AVAILABLE_WITHIN_DAYS, MIN_AVAILABLE_WITHIN_DAYS
 from app.api.schemas.common import Page
 from app.api.schemas.mentors import (
@@ -283,3 +290,68 @@ async def read_similar_mentors(
     # by `PerViewerHeadersMiddleware` regardless.
     response.headers["Cache-Control"] = "public, max-age=60"
     return Page(data=[SimilarMentorRead.from_similar(row) for row in similar], next_cursor=None)
+
+
+def _link_event_responses(refused: str) -> dict[int | str, dict[str, str]]:
+    """A link-tracking write's answers besides its `204`: the profile's `404`,
+    and the `422` that route's body can earn."""
+    return {
+        **PUBLIC_RESPONSES,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": refused},
+    }
+
+
+@router.post(
+    "/{handle}/visits",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Record a visit to a mentor's profile",
+    openapi_extra=OPTIONAL_TOKEN,
+    description=(
+        "Call once when a mentor's public profile page loads (decisions 346, 347). "
+        "**Public**: a guest's visit counts. Send the bearer token when you have "
+        "one; it only says who is looking.\n\n"
+        "**Always `204` for a mentor the read would show**, whether or not "
+        "anything was stored:\n\n"
+        "- One visit per visitor per mentor per UTC day. A repeat stores nothing, "
+        "and the first visit's `via` and `referrer_host` are kept. A visitor is "
+        "the signed-in user, or for a guest their address and browser, hashed "
+        "with a daily key: nothing that identifies them is stored.\n"
+        "- A mentor looking at their own profile is not a visit.\n"
+        "- A profile only its owner or an admin may read records nothing.\n"
+        "- Past the server's budget, events are dropped.\n\n"
+        "**`404` exactly when `GET /mentors/{handle}` is `404`** for an anonymous "
+        "caller: the same handles (id or slug), the same live mentors.\n\n"
+        "`via` is the `?via=` the link carried (`copy`, `share` or `invite`) and "
+        "`referrer_host` the host of `document.referrer`. Both are optional, "
+        "and a value up to 2,048 characters that is not one of these is stored as "
+        "null, never refused (longer is a `422`). "
+        "In an admin's preview it is refused like any write."
+    ),
+    responses=_link_event_responses(
+        "An unknown field, a hint that is not a string, or one over 2,048 characters."
+    ),
+)
+async def record_visit(_: VisitRecordedDep) -> Response:
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{handle}/shares",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Record a share of a mentor's profile link",
+    openapi_extra=OPTIONAL_TOKEN,
+    description=(
+        "Call when someone copies or shares a mentor's profile link, beside the "
+        "client's `link_shared` event, so shares are counted in our own database "
+        "too (decisions 346, 347). **Public**, like the visit.\n\n"
+        "**Always `204` for a mentor the read would show.** One share per person "
+        "per mentor per `method` per UTC day; a repeat stores nothing. Whether the "
+        "mentor shared their own profile is decided from the bearer token: `own` "
+        "in the body is accepted and ignored. A profile only its owner or an admin "
+        "may read records nothing, and past the server's budget events are "
+        "dropped. `404` exactly as for a visit; an unknown `method` is a `422`."
+    ),
+    responses=_link_event_responses("A missing or unknown `method`, or an unknown field."),
+)
+async def record_share(_: ShareRecordedDep) -> Response:
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

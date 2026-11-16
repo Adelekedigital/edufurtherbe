@@ -155,6 +155,9 @@ EXPECTED_MODELS = {
     "EmailLineEdit",
     # The days each person used the platform (decision 342).
     "UserActivityDay",
+    # A mentor profile link's visits and shares (decision 346).
+    "MentorProfileVisit",
+    "MentorProfileShare",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -193,6 +196,9 @@ APPEND_ONLY = frozenset(
         "EmailLineEdit",
         # An activity day is the fact that someone used the platform that day.
         "UserActivityDay",
+        # A visit or a share is a fact about one day; nothing edits it.
+        "MentorProfileVisit",
+        "MentorProfileShare",
     }
 )
 

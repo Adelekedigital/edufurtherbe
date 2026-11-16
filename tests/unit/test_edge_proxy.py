@@ -149,7 +149,9 @@ def test_a_blank_secret_is_unset_and_locks_nothing(blank: str) -> None:
     assert configured.edge_proxy_secrets() == ()
 
 
-@pytest.mark.parametrize("name", ["edge_proxy_secret", "edge_proxy_next_secret"])
+@pytest.mark.parametrize(
+    "name", ["edge_proxy_secret", "edge_proxy_next_secret", "visitor_key_secret"]
+)
 @pytest.mark.parametrize(
     "value",
     [

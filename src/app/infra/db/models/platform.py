@@ -27,10 +27,11 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.domain.enums import NotificationPreferenceType
+from app.domain.enums import LinkVia, NotificationPreferenceType, ShareMethod
+from app.domain.link_tracking import MAX_REFERRER_HOST, VISITOR_KEY_BYTES
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -380,4 +381,92 @@ class UserActivityDay(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "day", name="uq_user_activity_days_user_day"),
         Index("ix_user_activity_days_day_user_id", "day", "user_id"),
+    )
+
+
+class MentorProfileVisit(Base):
+    """One visitor's first look at a mentor's public profile on one UTC day
+    (decision 346). Insert only; our own record of profile visits from launch.
+
+    ``visitor_key`` is a keyed hash of who was looking, never who they are: the
+    signed-in user, or a guest's address and browser, hashed with a secret, the
+    day and the mentor (``domain.link_tracking.visitor_key``). ``UNIQUE
+    (mentor_user_id, day, visitor_key)`` makes a repeat on the same day a no-op,
+    so recording is ``ON CONFLICT DO NOTHING`` and a race cannot count twice.
+    ``via`` and ``referrer_host`` are the first visit's. Goes with the mentor.
+    """
+
+    __tablename__ = "mentor_profile_visits"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    day: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    visitor_key: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    signed_in: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    via: Mapped[LinkVia | None] = mapped_column(str_enum(LinkVia))
+    referrer_host: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "mentor_user_id", "day", "visitor_key", name="uq_mentor_profile_visits_visitor_day"
+        ),
+        CheckConstraint(
+            f"octet_length(visitor_key) = {VISITOR_KEY_BYTES}", name="visitor_key_is_a_digest"
+        ),
+        CheckConstraint(f"via IS NULL OR {check_is_known('via', LinkVia)}", name="via_is_known"),
+        CheckConstraint(
+            "referrer_host IS NULL OR "
+            f"char_length(referrer_host) BETWEEN 1 AND {MAX_REFERRER_HOST}",
+            name="referrer_host_fits",
+        ),
+    )
+
+
+class MentorProfileShare(Base):
+    """One person sharing a mentor's profile link one way on one UTC day
+    (decision 346): the database's copy of the client's ``link_shared``.
+
+    The same ``visitor_key`` as a visit, and ``UNIQUE (mentor_user_id, day,
+    visitor_key, method)``, so sharing again the same way that day is a no-op.
+    ``own`` is whether the mentor shared their own profile, decided by the
+    server from the token. Goes with the mentor.
+    """
+
+    __tablename__ = "mentor_profile_shares"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    mentor_user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    day: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    visitor_key: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    signed_in: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    method: Mapped[ShareMethod] = mapped_column(str_enum(ShareMethod), nullable=False)
+    own: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "mentor_user_id",
+            "day",
+            "visitor_key",
+            "method",
+            name="uq_mentor_profile_shares_visitor_day_method",
+        ),
+        CheckConstraint(
+            f"octet_length(visitor_key) = {VISITOR_KEY_BYTES}", name="visitor_key_is_a_digest"
+        ),
+        CheckConstraint(check_is_known("method", ShareMethod), name="method_is_known"),
+        CheckConstraint("signed_in OR NOT own", name="own_is_signed_in"),
     )
