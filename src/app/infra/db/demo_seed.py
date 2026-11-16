@@ -31,6 +31,7 @@ from app.domain.enums import AdminRole, ApplicationStage, PrimaryRole
 from app.domain.sessions import first_stage
 from app.infra.db.offerings import set_session_type_offerings
 from app.infra.db.provisioning_store import GRANT
+from app.infra.db.slugs import give_slug
 from app.infra.db.stages import write_session_type_stages
 
 __all__ = [
@@ -260,6 +261,7 @@ async def seed_e2e_accounts(
                 "VALUES (:e, 'E2E', :l, :r) RETURNING id",
                 {"e": e2e_email(ref, run), "l": ref, "r": account.role.value},
             )
+            await give_slug(session, user)
         if account.admin is not None:
             await session.execute(GRANT, {"user_id": user, "admin_role": account.admin.value})
         created += 1
@@ -318,6 +320,7 @@ async def create_demo_mentor(
             "z": mentor.timezone,
         },
     )
+    await give_slug(session, user)
     await session.execute(
         text(
             "INSERT INTO user_profiles (user_id, about_me, origin_country_id) "
@@ -555,15 +558,16 @@ async def _history(
     one mentee whenever there are sessions to have had.
     """
     mentee_count = max(len(mentor.ratings), 1 if mentor.completed_sessions else 0)
-    mentees = [
-        await _one(
+    mentees = []
+    for n in range(mentee_count):
+        mentee = await _one(
             session,
             "INSERT INTO users (email, first_name, primary_role, timezone) "
             "VALUES (:e, 'Demo', 'mentee', 'UTC') RETURNING id",
             {"e": _email(f"{mentor.key}-mentee-{n}")},
         )
-        for n in range(mentee_count)
-    ]
+        await give_slug(session, mentee)
+        mentees.append(mentee)
     for n in range(mentor.completed_sessions):
         await session.execute(
             text(

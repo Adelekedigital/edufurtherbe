@@ -41,6 +41,7 @@ from app.domain.provisioning import Candidate
 from app.infra.db.models.admin import AdminUser
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
+from app.infra.db.slugs import give_slug
 from app.infra.db.triggers import timestamps_from_source
 
 _IDENTITY = (User.id, User.email, User.auth_id)
@@ -184,7 +185,9 @@ class ProvisioningStore:
                     "new_auth_id": auth_id,
                 },
             )
-            return result.scalar_one()
+            user_id: UUID = result.scalar_one()
+            await give_slug(connection, user_id)
+            return user_id
 
     async def grant_admin(self, user_id: UUID, role: AdminRole) -> bool:
         """Grant a role. ``False`` when it was already held.

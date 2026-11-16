@@ -41,7 +41,7 @@ import logging
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import delete, not_, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -82,7 +82,8 @@ from app.infra.db.models.user import (
 )
 from app.infra.db.models.writing_assist import WritingAssistRequest
 from app.infra.db.outbox import forget_unsent_analytics
-from app.infra.db.predicates import LIVE
+from app.infra.db.predicates import LIVE, purge_passed, restorable
+from app.infra.db.slugs import give_slug
 
 logger = logging.getLogger(__name__)
 
@@ -142,24 +143,9 @@ def purge_counts(*, due: int = 0, purged: int = 0, failed: int = 0) -> dict[str,
     return {"due": due, "purged": purged, "failed": failed}
 
 
-def _purge_passed(now: dt.datetime) -> Any:
-    """**The one boundary** between restorable and purgeable: purge on or after
-    the date, restore strictly before it. Both read this, so no instant is both."""
-    return User.deletion_purge_at <= now
-
-
 def _due(now: dt.datetime) -> list[Any]:
     """A self-deleted account past its purge date."""
-    return [User.deleted_at.is_not(None), _purge_passed(now)]
-
-
-def _restorable(now: dt.datetime) -> list[Any]:
-    """A self-deleted account still inside its window."""
-    return [
-        User.deleted_at.is_not(None),
-        User.deletion_purge_at.is_not(None),
-        not_(_purge_passed(now)),
-    ]
+    return [User.deleted_at.is_not(None), purge_passed(now)]
 
 
 def _tombstone(user_id: UUID) -> str:
@@ -230,6 +216,7 @@ async def purge_account(
             first_name=None,
             last_name=None,
             slug=None,
+            slug_is_placeholder=False,
             auth_id=None,
             last_active_at=None,
             deletion_purge_at=None,
@@ -351,11 +338,15 @@ async def restore_account(session: AsyncSession, user_id: UUID, *, now: dt.datet
     try:
         restored = await session.execute(
             update(User)
-            .where(User.id == user_id, *_restorable(now))
+            .where(User.id == user_id, *restorable(now))
             .values(deleted_at=None, deletion_purge_at=None)
             .returning(User.id)
         )
+        if restored.first() is None:
+            return False
+        # Deleted before every account had a handle: it comes back with one.
+        await give_slug(session, user_id)
     except IntegrityError as exc:
         await session.rollback()
         raise ConflictError("this account's email or handle now belongs to a live account") from exc
-    return restored.first() is not None
+    return True

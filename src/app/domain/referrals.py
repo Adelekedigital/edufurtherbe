@@ -28,12 +28,11 @@ from __future__ import annotations
 
 import re
 import secrets
-import string
-import unicodedata
 from datetime import timedelta
 from typing import Literal
 
 from app.core.config import Settings
+from app.domain.handles import RESERVED_HANDLES, fold_to_handle, random_token
 
 __all__ = [
     "CODE_LENGTH",
@@ -131,51 +130,6 @@ HANDLE_MAX_LENGTH = 30
 #: the pattern each say one thing.
 _HANDLE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
-#: Words a handle may not be: the app's own routes and words, and the values a
-#: client bug renders as text. The link is ``/invite/{code}``, so a handle that
-#: reads as an official page or a broken one is refused.
-RESERVED_HANDLES = frozenset(
-    {
-        "about",
-        "account",
-        "admin",
-        "administrator",
-        "api",
-        "app",
-        "auth",
-        "contact",
-        "dashboard",
-        "edufurther",
-        "help",
-        "home",
-        "invite",
-        "invites",
-        "login",
-        "logout",
-        "me",
-        "mentor",
-        "mentors",
-        "nan",
-        "null",
-        "official",
-        "privacy",
-        "referral",
-        "referrals",
-        "root",
-        "security",
-        "settings",
-        "signin",
-        "signup",
-        "staff",
-        "support",
-        "system",
-        "team",
-        "terms",
-        "test",
-        "undefined",
-    }
-)
-
 #: How long a retired code stays out of everyone else's reach. Its owner may
 #: take it back at any time; after this, anyone may pick it.
 RETIRED_CODE_HOLD = timedelta(days=30)
@@ -227,21 +181,15 @@ DEFAULT_CODE_SUFFIXES = (DEFAULT_SUFFIX_LENGTH,) * 5 + (DEFAULT_SUFFIX_LENGTH + 
 #: absent, empty, or written in a script that does not fold to a-z.
 DEFAULT_NAME = "friend"
 
-_SUFFIX_ALPHABET = string.ascii_lowercase + string.digits
-_NOT_HANDLE = re.compile(r"[^a-z0-9]+")
-
 
 def _name_part(first_name: str | None, room: int) -> str:
     """``first_name`` folded into the handle alphabet, at most ``room`` long.
 
-    NFKD then dropping the combining marks takes `Zoë` to `zoe`; every other
-    run of characters outside a-z0-9 becomes one hyphen. Trimmed after the cut
-    too, so a cut landing on a hyphen cannot leave a double one before the
-    suffix.
+    The fold is `domain.handles.fold_to_handle`, shared with profile handles.
+    Trimmed after the cut too, so a cut landing on a hyphen cannot leave a
+    double one before the suffix.
     """
-    folded = unicodedata.normalize("NFKD", first_name or "")
-    ascii_only = folded.encode("ascii", "ignore").decode("ascii").lower()
-    name = _NOT_HANDLE.sub("-", ascii_only).strip("-")[:room].strip("-")
+    name = fold_to_handle(first_name or "")[:room].strip("-")
     return name or DEFAULT_NAME
 
 
@@ -253,5 +201,5 @@ def default_code(first_name: str | None, *, suffix_length: int = DEFAULT_SUFFIX_
     no hyphen. The suffix comes from ``secrets``; whether the result is free is
     the store's question, which retries with a fresh or longer suffix.
     """
-    suffix = "".join(secrets.choice(_SUFFIX_ALPHABET) for _ in range(suffix_length))
+    suffix = random_token(suffix_length)
     return f"{_name_part(first_name, HANDLE_MAX_LENGTH - 1 - suffix_length)}-{suffix}"

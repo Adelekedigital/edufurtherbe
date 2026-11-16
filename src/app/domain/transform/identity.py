@@ -15,7 +15,6 @@ decision.
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
@@ -26,6 +25,7 @@ from app.domain.availability import UnknownTimezoneError, normalise_timezone
 from app.domain.bubble import CREATED_AT, MODIFIED_AT, normalise_list, parse_timestamp
 from app.domain.emails import normalise_email
 from app.domain.enums import AdminRole, AuthProvider, PrimaryRole
+from app.domain.slugs import MAX_SLUG_LENGTH, strip_accents
 
 # Legacy `👥Role` values. Written out rather than derived by lowercasing,
 # because a transformation rule silently accepts whatever it is given: the day
@@ -52,7 +52,7 @@ def is_unchosen_role(value: object) -> bool:
 
 # `Slug` must satisfy the CHECK on `users`. Applied here so a bad value is
 # reported per record before the load starts, rather than aborting it midway.
-SLUG_PATTERN = re.compile(r"^[a-z0-9-]{1,60}$")
+SLUG_PATTERN = re.compile(rf"^[a-z0-9-]{{1,{MAX_SLUG_LENGTH}}}$")
 
 
 def fold_slug(value: str) -> str | None:
@@ -65,10 +65,8 @@ def fold_slug(value: str) -> str | None:
     ``SLUG_PATTERN`` (a space, a slash); a fold that lands on another user's
     slug is caught by ``transform_users``.
     """
-    decomposed = unicodedata.normalize("NFD", value)
-    if any(not ch.isascii() and not unicodedata.combining(ch) for ch in decomposed):
-        return None
-    return decomposed.encode("ascii", "ignore").decode("ascii").lower()
+    folded = strip_accents(value)
+    return folded.lower() if folded is not None else None
 
 
 DEFAULT_TIMEZONE = "UTC"
