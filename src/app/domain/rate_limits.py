@@ -32,3 +32,9 @@ class SlidingWindow:
         self._events.append(now)
         self.refusals = 0
         return True
+
+    def take(self, now: float) -> tuple[bool, bool]:
+        """`allow`, and whether a refusal is the first of its spell: the one
+        a caller logs, so a flood never becomes a log flood."""
+        allowed = self.allow(now)
+        return allowed, not allowed and self.refusals == 1

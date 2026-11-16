@@ -566,6 +566,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.free_busy_budget = SlidingWindow(
         resolved.free_busy_calls_per_minute, window_seconds=60.0
     )
+    # Profile link tracking (decision 347): its budget, and the visitor-key
+    # secret (`Settings.visitor_secret`).
+    application.state.link_events_budget = SlidingWindow(
+        resolved.link_events_per_minute, window_seconds=60.0
+    )
+    application.state.visitor_key_secret = resolved.visitor_secret()
     # PostHog's half of the error trial (decision 339); `None` while it is off.
     application.state.error_reporter = error_reporter_for(resolved)
 

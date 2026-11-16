@@ -28,7 +28,7 @@ from tests.integration.test_api_preview_sessions import (
     start,
 )
 
-from app.api.deps.core import PREVIEW_HEADER, get_current_user
+from app.api.deps.core import PREVIEW_HEADER, get_current_user, optional_viewer
 from app.core.config import Settings
 from app.main import create_app
 from conftest import PROBLEM_JSON, api_token, bearer, client_for
@@ -393,7 +393,9 @@ def _resolves_a_caller(route: APIRoute) -> bool:
     pending = list(route.dependant.dependencies)
     while pending:
         dependency = pending.pop()
-        if dependency.call is get_current_user:
+        # `optional_viewer` resolves a preview's caller the same way, so a
+        # public write refuses one too (decision 347's link events).
+        if dependency.call in (get_current_user, optional_viewer):
             return True
         pending.extend(dependency.dependencies)
     return False

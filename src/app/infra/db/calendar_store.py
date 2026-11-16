@@ -521,12 +521,13 @@ class MentorFreeBusy:
         # turns anonymous traffic into Google calls, so past the budget the call
         # is skipped and the read fails open, as it does in an outage: no
         # lockout, only availability that ignores Google for under a minute.
-        if self._budget is not None and not self._budget.allow(time.monotonic()):
-            # Once per spell, not per request: a flood must not become a log flood.
-            if self._budget.refusals == 1:
+        budget = self._budget
+        allowed, first_refusal = (True, False) if budget is None else budget.take(time.monotonic())
+        if not allowed:
+            if first_refusal and budget is not None:
                 logger.warning(
                     "free/busy budget spent; answering from declared hours",
-                    extra={"user_id": str(user_id), "limit": self._budget.limit},
+                    extra={"user_id": str(user_id), "limit": budget.limit},
                 )
             if not self._fail_open:
                 raise VenueUnavailableError("the free/busy budget is spent")
