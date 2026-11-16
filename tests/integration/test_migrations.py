@@ -224,6 +224,9 @@ EXPECTED_TABLES = [
     "analytics_consents",
     # The days each person used the platform (decision 342).
     "user_activity_days",
+    # A mentor profile link's visits and shares (decision 346).
+    "mentor_profile_visits",
+    "mentor_profile_shares",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**
