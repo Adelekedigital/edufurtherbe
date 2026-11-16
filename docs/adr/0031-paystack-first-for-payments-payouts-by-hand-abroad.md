@@ -215,6 +215,9 @@ price; ADPList's paid Advance sessions take a flat 10%.
      a mode switch rewrites nothing already earned.
    - **A minimum fee in naira** (a setting) stops a low price at a low tier from
      costing the platform money once the provider's fee and refunds are paid.
+     **Its value is open (owner, 2026-11-16):** there is no paid-session data
+     to set it from, so it is tentative and reviewed once payments run.
+     Options weighed: NGN 300, NGN 500, NGN 1,000.
    - Illustrative tiers, for the owner to set: `lifetime` 1-10 at 15%, 11-50 at
      12%, 51-200 at 9%, over 200 at 5%; `monthly` 1-4 at 15%, 5-9 at 12%, 10-19
      at 9%, 20 and up at 5%; `relationship` up to NGN 100,000 at 15%, to
@@ -228,8 +231,10 @@ price; ADPList's paid Advance sessions take a flat 10%.
    decline, an expiry, a mentor cancellation, or a mentee cancellation 12 hours
    or more ahead. **A mentee cancellation under 12 hours is split (owner asked
    for a fee or a split, 2026-11-13):** the mentor receives a configured share
-   of the price (default 50%) less the platform fee on that share, and the rest
-   is refunded to the mentee; no retry. The mentor lost a slot that is hard to
+   of the price (**default 30%, owner, 2026-11-16**) less the platform fee on
+   that share, and the rest (70%) is refunded to the mentee; no retry. The
+   share is a setting, and a 50% split and the `fee_only` mode (below) stay
+   open for review later. The mentor lost a slot that is hard to
    refill at short notice, but nothing was delivered, so neither side bears it
    all. After it, by who attended:
 
@@ -246,8 +251,9 @@ price; ADPList's paid Advance sessions take a flat 10%.
    | Retry not booked in the window | | | Mentor paid |
 
    - **One more try (owner):** one rebooking of the same paid session type with
-     the same mentor, at no charge, within a configured window (default 14
-     days, settable to 7) from the missed session. One try per payment. The
+     the same mentor, at no charge, within a configured window (**default 14
+     days, owner, 2026-11-16**; a setting, so 7 or another value needs no code)
+     from the missed session. One try per payment. The
      mentor's earning stays pending meanwhile and becomes payable at most once.
      A mentor who declines, cancels or lets the rebooking expire is treated as
      absent, and the mentee is refunded in full.
@@ -261,7 +267,8 @@ price; ADPList's paid Advance sessions take a flat 10%.
      absent means refund" true in every row.
    - **Both absent (owner's idea, adopted):** the platform keeps a
      **no-show fee** (a setting: a percentage of the price, never less than the
-     naira minimum fee) and refunds the rest; the mentor is unpaid. Neither side
+     naira minimum fee; **10% by default, owner, 2026-11-16**, with 5% and 15%
+     kept for the team to discuss) and refunds the rest; the mentor is unpaid. Neither side
      turned up, so neither is made whole, and the fee covers the provider's
      charge, which a refund does not return. Both were absent from 70 of the 370
      no-shows in the old data, so this case is common. **The fee must be shown
