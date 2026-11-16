@@ -558,6 +558,22 @@ StorableText = AfterValidator(storable)
 #: *written*; a read reports what is stored.
 StoredEmail = Annotated[str, Field(json_schema_extra={"format": "email"})]
 
+#: A live account's public handle, the one rule every read of it shares (rule 8).
+#: Every account has one (#684), so a missing or empty one fails validation
+#: loudly instead of becoming a `"None"` link.
+Handle = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description=(
+            "The public profile handle, for `/mentors/{handle}`. Every account has one "
+            "(#684): a `user-` placeholder until both names are saved, then one made "
+            "from them, final from then on; imported handles are kept. The id "
+            "addresses the same profile."
+        ),
+    ),
+]
+
 
 class Normalised(BaseModel):
     """Trims every string, and turns an emptied one into ``None``.

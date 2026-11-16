@@ -15,7 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.api.schemas.availability import AvailabilityRuleRead
-from app.api.schemas.common import LinkedInRead
+from app.api.schemas.common import Handle, LinkedInRead
 from app.api.schemas.profile import EducationRead, LookupRef
 from app.domain.admin_mentors import (
     AdminMentorTab,
@@ -76,12 +76,7 @@ class _AdminMentorBase(BaseModel):
     """What a row and the drawer both carry."""
 
     user_id: UUID
-    handle: str | None = Field(
-        description=(
-            "Their public handle, for `/mentors/{handle}`; null without a slug, "
-            "when `user_id` resolves the profile instead."
-        )
-    )
+    handle: Handle
     first_name: str | None
     last_name: str | None
     email: str

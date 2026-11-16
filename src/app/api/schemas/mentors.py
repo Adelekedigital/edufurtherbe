@@ -26,7 +26,7 @@ offer.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -35,6 +35,7 @@ from app.api.schemas.common import (
     COUNTED_MINUTES,
     AvatarFocusRead,
     CoverRead,
+    Handle,
     LinkedInRead,
     NextAvailableState,
     Page,
@@ -67,7 +68,7 @@ class MentorSummaryRead(CoverRead):
     """
 
     id: str
-    slug: str | None = None
+    slug: Handle
     first_name: str | None = None
     last_name: str | None = None
     headline: str | None = None
@@ -135,7 +136,7 @@ class MentorSummaryRead(CoverRead):
     def from_row(cls, row: dict[str, Any]) -> MentorSummaryRead:
         return cls(
             id=str(row["user_id"]),
-            slug=_text(row["slug"]),
+            slug=cast(str, row["slug"]),
             first_name=_text(row["first_name"]),
             last_name=_text(row["last_name"]),
             headline=_text(row["headline"]),
@@ -345,13 +346,7 @@ class MentorPublicRead(BaseModel):
     """Everything the public may read about one mentor."""
 
     id: str
-    slug: str | None = Field(
-        default=None,
-        description=(
-            "The legacy public profile handle. Nullable — 4 of 43 migrated users "
-            "have none — and either this or the id addresses this endpoint."
-        ),
-    )
+    slug: Handle
     first_name: str | None = None
     last_name: str | None = None
     timezone: str = Field(
@@ -558,7 +553,7 @@ class MentorPublicRead(BaseModel):
     ) -> MentorPublicRead:
         return cls(
             id=str(row["user_id"]),
-            slug=_text(row["slug"]),
+            slug=cast(str, row["slug"]),
             first_name=_text(row["first_name"]),
             last_name=_text(row["last_name"]),
             timezone=str(row["timezone"]),
