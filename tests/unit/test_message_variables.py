@@ -506,6 +506,14 @@ def test_a_decline_carries_its_note_and_reads_empty_without_one() -> None:
     assert build_variables(["declineReason"], context(extras={})) == {"declineReason": ""}
 
 
+def test_the_team_note_is_carried_and_empty_without_one() -> None:
+    """Decision 350: any admin decision's email may carry the team's note;
+    one with none, or an email that never has one, fills it empty."""
+    note = "Welcome!\nStart with your availability."
+    assert build_variables(["teamNote"], context(extras={"team_note": note})) == {"teamNote": note}
+    assert build_variables(["teamNote"], context(extras={})) == {"teamNote": ""}
+
+
 def test_a_reminder_carries_the_mentees_words_from_the_row() -> None:
     """Decision 294: what the mentee wrote is a fact about the reminder, carried
     on the outbox row, and a reminder with no message is not sent blank."""

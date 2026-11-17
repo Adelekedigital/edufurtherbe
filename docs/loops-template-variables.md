@@ -321,6 +321,13 @@ again from Loops at send time, so this column is a record, not a contract.
 | `message_unread_many` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the messages were sent to | as `message_unread_few` |
 | `message_in_session_window` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the message was sent to | as `message_unread_few` |
 
+**`teamNote` (decision 350)** is the team's optional note on an admin decision,
+plain text, empty when none was left. App: Mentor status may ask for it on all
+three of its emails: the approved and declined emails carry the admin's note
+(the decline's also stays in `declineReason`), and the admin's pause has none.
+Add it to the template only once the backend that fills it is deployed:
+before that, a template asking for `teamNote` refuses every send.
+
 **A member with no id in `EMAIL_TEMPLATES` fails at the drain** (`template_for()` raises). Every member has one on dev since 2026-11-09; a new member, or an environment missing one, behaves as follows:
 - **Re-checked at send time** (the members of `STILL_DUE` in `infra/db/outbox.py`): the row stays `pending` with **no attempt counted** until an id is mapped. It's dropped as `skipped` once it stops being true, so it never goes out late.
 - **Everything else:** each sweep counts an attempt, and after 5 (about five hours) the row stays `failed` with the error. Map the id before the feature that sends it goes live.
