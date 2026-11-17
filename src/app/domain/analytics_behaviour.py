@@ -6,7 +6,9 @@ catalogue verbatim. A ``by`` breakdown is a filter from a closed set, never a se
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import math
+import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
@@ -287,12 +289,72 @@ def breakdown_for(funnel: Funnel, by: str | None) -> str:
     return asked
 
 
+#: Fewer people than this made a transition: its median is not shown
+#: (decision 351), so one or two people never read as a typical time.
+MEDIAN_MIN_PEOPLE = 5
+
+
+@dataclass(frozen=True, slots=True)
+class FunnelCounts:
+    """What the vendor read for each tracked step: the people reaching it and
+    the median seconds from the step before, of those who did (``None`` on
+    the first step and where the vendor has none)."""
+
+    counts: list[int]
+    medians: list[float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class FunnelTimes:
+    """A funnel's median seconds before `MEDIAN_MIN_PEOPLE` is applied: per
+    step from the one before, and from the first step to `path_end`."""
+
+    from_previous: Sequence[float | None] = ()
+    to_complete: float | None = None
+
+
+def path_end(funnel: Funnel) -> int | None:
+    """The index of the funnel's last primary step, when it is counted and is
+    not the first: where its time to complete ends. Else ``None``."""
+    counted = len(funnel.steps) if funnel.in_database else len(funnel.tracked)
+    primary = [i for i, step in enumerate(funnel.steps) if step.layer is FunnelLayer.PRIMARY]
+    last = max(primary, default=0)
+    return last if 0 < last < counted else None
+
+
+def shown_median(seconds: float | None, people: int | None) -> int | None:
+    """The one rule for every funnel median: whole seconds, or ``None`` with no
+    time or fewer than `MEDIAN_MIN_PEOPLE` people."""
+    if seconds is None or people is None or people < MEDIAN_MIN_PEOPLE:
+        return None
+    return round(seconds)
+
+
+def median_times(funnel: Funnel, reached: Sequence[Mapping[str, dt.datetime]]) -> FunnelTimes:
+    """A database funnel's times from each person's own steps (step key to
+    when they reached it): per step, the median wait from the step before, of
+    those who reached both; and from the first step to `path_end`."""
+    keys = [step.key for step in funnel.steps]
+
+    def median(start: str, end: str) -> float | None:
+        waits = [(r[end] - r[start]).total_seconds() for r in reached if start in r and end in r]
+        return statistics.median(waits) if waits else None
+
+    end = path_end(funnel)
+    return FunnelTimes(
+        from_previous=(None, *(median(a, b) for a, b in itertools.pairwise(keys))),
+        to_complete=None if end is None else median(keys[0], keys[end]),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FunnelStep:
     key: str
     label: str
     count: Metric | None
     layer: FunnelLayer
+    #: Whole seconds from the step before, `shown_median`'s (decision 351).
+    median_seconds_from_previous: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +376,8 @@ class FunnelTab:
     window_days: int
     steps: list[FunnelStep]
     figures: list[FunnelFigure] = field(default_factory=list)
+    #: Whole seconds from the first step to `path_end`, `shown_median`'s.
+    median_seconds_to_complete: int | None = None
 
 
 def funnel_tab(
@@ -322,8 +386,16 @@ def funnel_tab(
     current: Sequence[int],
     previous: Sequence[int] | None,
     figures: Sequence[FunnelFigure] = (),
+    times: FunnelTimes | None = None,
 ) -> FunnelTab:
-    """The counted steps, then ``None`` for a step nothing tracks."""
+    """The counted steps, then ``None`` for a step nothing tracks. ``times``
+    are the current period's (decision 351): a median shows only on a counted
+    primary step after the first, through `shown_median`."""
+    times = times or FunnelTimes()
+
+    def people(i: int) -> int | None:
+        return current[i] if i < len(current) else None
+
     steps = []
     for i, step in enumerate(funnel.steps):
         if i < len(current):
@@ -331,7 +403,18 @@ def funnel_tab(
             count: Metric | None = compared(current[i], before, previous is not None)
         else:
             count = None
-        steps.append(FunnelStep(key=step.key, label=step.label, count=count, layer=step.layer))
+        timed = i > 0 and step.layer is FunnelLayer.PRIMARY and i < len(times.from_previous)
+        median = shown_median(times.from_previous[i], people(i)) if timed else None
+        steps.append(
+            FunnelStep(
+                key=step.key,
+                label=step.label,
+                count=count,
+                layer=step.layer,
+                median_seconds_from_previous=median,
+            )
+        )
+    end = path_end(funnel)
     return FunnelTab(
         name=funnel.name,
         by=by,
@@ -339,6 +422,9 @@ def funnel_tab(
         window_days=funnel.window_days,
         steps=steps,
         figures=list(figures),
+        median_seconds_to_complete=None
+        if end is None
+        else shown_median(times.to_complete, people(end)),
     )
 
 

@@ -151,9 +151,10 @@ ADDED = {
     ),
     # The zone the analytics window was read in (decision 335).
     "WindowRead": ("tz",),
-    # Layered funnels and the figures beside them (decision 338).
-    "FunnelStepRead": ("layer",),
-    "AnalyticsFunnelRead": ("figures",),
+    # Layered funnels and the figures beside them (decision 338), and the
+    # median time beside every funnel (decision 351).
+    "FunnelStepRead": ("layer", "median_seconds_from_previous"),
+    "AnalyticsFunnelRead": ("figures", "median_seconds_to_complete"),
     # Weekly and monthly active users from this database (decision 342).
     "SubTracksRead": ("weekly_active_users", "monthly_active_users", "stickiness"),
     # Active members by role and the weekly trend (decision 343).

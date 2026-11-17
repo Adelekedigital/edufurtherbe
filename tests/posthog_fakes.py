@@ -8,7 +8,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -34,10 +34,20 @@ def rows(columns: list[str], *values: list[Any]) -> httpx.Response:
     return httpx.Response(200, json={"columns": columns, "results": [list(v) for v in values]})
 
 
-def funnel_answer(*counts: int) -> httpx.Response:
-    """Steps out of order on purpose: `order` decides, not position."""
-    results = [{"order": i, "count": c} for i, c in enumerate(counts)]
+def funnel_answer(*counts: int, medians: Sequence[object] | None = None) -> httpx.Response:
+    """Steps out of order on purpose: `order` decides, not position. With
+    ``medians``, each step carries PostHog's ``median_conversion_time``."""
+    results: list[dict[str, Any]] = [{"order": i, "count": c} for i, c in enumerate(counts)]
+    for step, median in zip(results, medians or (), strict=False):
+        step["median_conversion_time"] = median
     return httpx.Response(200, json={"results": list(reversed(results))})
+
+
+def time_answer(median: float | None) -> httpx.Response:
+    """A `time_to_convert` funnel's answer: one object, not a list of steps."""
+    results = {"bins": [[0, 1]], "average_conversion_time": median}
+    results["median_conversion_time"] = median
+    return httpx.Response(200, json={"results": results})
 
 
 def recording_client(

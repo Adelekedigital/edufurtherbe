@@ -14,7 +14,13 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.core.reporting import ErrorContext
-from app.domain.analytics_behaviour import BehaviourFigures, ExploreFigures, Funnel, LoginCodes
+from app.domain.analytics_behaviour import (
+    BehaviourFigures,
+    ExploreFigures,
+    Funnel,
+    FunnelCounts,
+    LoginCodes,
+)
 from app.domain.mentor_stats import Window
 
 __all__ = ["AnalyticsReader", "AnalyticsSink", "ErrorReporter"]
@@ -54,9 +60,17 @@ class AnalyticsReader(Protocol):
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> list[int]:
+    ) -> FunnelCounts:
         """People reaching each of the funnel's tracked steps, in order, for
-        those entering it in ``window`` and narrowed by the ``by`` option."""
+        those entering it in ``window`` and narrowed by the ``by`` option, with
+        each step's median seconds from the one before."""
+        ...
+
+    def time_to_complete(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> float | None:
+        """The median seconds from the first step to `path_end`, of the same
+        people who reached it; ``None`` without a path end or a time."""
         ...
 
     def behaviour(self, window: Window, internal: Sequence[UUID]) -> BehaviourFigures:

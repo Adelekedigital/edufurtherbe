@@ -45,9 +45,11 @@ from app.domain.analytics_behaviour import (
     Counted,
     ExploreFigures,
     Funnel,
+    FunnelCounts,
     LoginCodes,
     Match,
     Searchers,
+    path_end,
 )
 from app.domain.mentor_stats import Window
 from app.domain.ports import AnalyticsReader
@@ -355,6 +357,17 @@ def funnel_query(
     }
 
 
+def time_to_complete_query(
+    funnel: Funnel, by: str, window: Window, internal: Sequence[UUID], end: int
+) -> dict[str, Any]:
+    """`funnel_query` seen as PostHog's ``time_to_convert``, from the first
+    step to ``end``: the same people and window, one median for the path
+    (decision 351; ``funnelFromStep``/``funnelToStep``, frontend/src/queries/schema.json)."""
+    query = funnel_query(funnel, by, window, internal)
+    steps = {"funnelVizType": "time_to_convert", "funnelFromStep": 0, "funnelToStep": end}
+    return {**query, "funnelsFilter": {**query["funnelsFilter"], **steps}}
+
+
 def hogql(name: str, query: str, values: dict[str, Any]) -> dict[str, Any]:
     """A `HogQLQuery`, each ``{placeholder}`` filled from ``values`` else `NAMES`;
     ``name`` labels it in PostHog's query log."""
@@ -389,6 +402,14 @@ def _number(value: object) -> float | None:
     if not math.isfinite(value):
         raise _MalformedError(f"not a number: {value!r}")
     return float(value)
+
+
+def _seconds(value: object) -> float | None:
+    """A conversion time: ``None``, or a number of seconds that is not negative."""
+    seconds = _number(value)
+    if seconds is not None and seconds < 0:
+        raise _MalformedError(f"not seconds: {value!r}")
+    return seconds
 
 
 def _rows(body: Any, columns: Sequence[str]) -> list[dict[str, Any]]:
@@ -464,7 +485,13 @@ class NullAnalyticsReader:
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> list[int]:
+    ) -> FunnelCounts:
+        del funnel, by, window, internal
+        raise self._refuse()
+
+    def time_to_complete(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> float | None:
         del funnel, by, window, internal
         raise self._refuse()
 
@@ -547,21 +574,44 @@ class PostHogReader:
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> list[int]:
+    ) -> FunnelCounts:
         steps = len(funnel.tracked)
 
-        def parse(body: Any) -> list[int]:
+        def parse(body: Any) -> FunnelCounts:
             results = body["results"]
             # PostHog answers an empty list, not a row of zeros, when no person
             # entered the funnel (or its breakdown): nobody reached any step.
             if results == []:
-                return [0] * steps
+                return FunnelCounts(counts=[0] * steps, medians=[None] * steps)
             if not isinstance(results, list) or len(results) != steps:
                 raise _MalformedError("not one result per step")
             ordered = sorted(results, key=lambda r: r.get("order", 0))
-            return [_int(r["count"]) for r in ordered]
+            # In seconds from the step before, null on the first
+            # (https://posthog.com/docs/api/queries, "Funnel response").
+            return FunnelCounts(
+                counts=[_int(r["count"]) for r in ordered],
+                medians=[_seconds(r.get("median_conversion_time")) for r in ordered],
+            )
 
         return self._read(funnel_query(funnel, by, window, internal), parse)
+
+    def time_to_complete(
+        self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
+    ) -> float | None:
+        end = path_end(funnel)
+        if end is None:
+            return None
+
+        def parse(body: Any) -> float | None:
+            results = body["results"]
+            # Nobody entered: nobody converted, so there is no time.
+            if results == []:
+                return None
+            if not isinstance(results, dict) or "median_conversion_time" not in results:
+                raise _MalformedError("not a time to convert")
+            return _seconds(results["median_conversion_time"])
+
+        return self._read(time_to_complete_query(funnel, by, window, internal, end), parse)
 
     def login_codes(self, window: Window, internal: Sequence[UUID]) -> LoginCodes:
         values = {**_since_until(window), "internal": _ids(internal)}
