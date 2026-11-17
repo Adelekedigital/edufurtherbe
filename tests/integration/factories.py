@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.domain.enums import ApplicationStage
 from app.infra.db.stages import write_session_type_stages
-from conftest import add_user, api_token
+from conftest import PLACEHOLDER, Placeholder, add_user, api_token
 
 LAGOS = "Africa/Lagos"
 
@@ -41,9 +41,9 @@ async def make_public_mentor(
     #: Whether the application was submitted: only then may an admin decide it.
     submitted: bool = False,
     timezone: str = LAGOS,
-    #: The legacy public profile handle. Nullable in the schema and on 4 of 43
-    #: migrated users, so a mentor without one must stay reachable by id.
-    slug: str | None = None,
+    #: The public profile handle. Every account has one (#684), so the default
+    #: is a placeholder, as a first sign-in gives; pass one to address by it.
+    slug: str | Placeholder | None = PLACEHOLDER,
     #: Defaults to one built from ``tag``; a demo-domain address makes an
     #: account the analytics leave out.
     email: str | None = None,

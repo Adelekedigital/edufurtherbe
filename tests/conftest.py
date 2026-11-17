@@ -14,9 +14,10 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum, auto
 from pathlib import Path
 from types import ModuleType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final, Literal
 
 import httpx
 import pytest
@@ -41,7 +42,9 @@ from app.api.limits import BodyLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.domain.availability import booking_window
 from app.domain.credits import CreditLadder, credit_ladder
+from app.domain.handles import random_token
 from app.domain.sessions import response_window
+from app.domain.slugs import placeholder_slug
 from app.domain.transform.identity import ROLE_FIELD
 from app.infra.auth.admin import SupabaseAdminClient
 from app.infra.auth.dev_tokens import mint_dev_token
@@ -590,11 +593,23 @@ async def add_qualified_invite(
     return referral
 
 
+class _Default(Enum):
+    PLACEHOLDER = auto()
+
+
+#: `add_user`'s default: a placeholder handle, as every account gets at first
+#: sign-in (#684). Pass ``slug=None`` for an account with none (a handle test).
+#: An enum member, so ``slug`` stays type-checked as ``str | None`` otherwise.
+PLACEHOLDER: Final = _Default.PLACEHOLDER
+#: The default's type, for helpers that pass ``slug`` through.
+Placeholder = Literal[_Default.PLACEHOLDER]
+
+
 async def add_user(
     conn: AsyncConnection,
     email: str,
     *,
-    slug: str | None = None,
+    slug: str | Placeholder | None = PLACEHOLDER,
     deleted_at: datetime | None = None,
     auth_id: uuid.UUID | None = None,
     first_name: str | None = None,
@@ -616,9 +631,11 @@ async def add_user(
     (`mentee`, `UTC`, `now()`, or null). ``auth_id`` left null is the state
     every migrated user starts in; `factories.token_for` gives them one.
     """
+    placeholder = slug is PLACEHOLDER
     columns = {
         "email": email,
-        "slug": slug,
+        "slug": placeholder_slug(random_token(8)) if placeholder else slug,
+        "slug_is_placeholder": True if placeholder else None,
         "deleted_at": deleted_at,
         "auth_id": auth_id,
         "first_name": first_name,

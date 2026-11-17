@@ -104,15 +104,16 @@ async def test_the_same_mentor_is_readable_by_slug(
     assert body["slug"] == "ada-by-slug"
 
 
-async def test_a_mentor_with_no_slug_is_still_reachable_by_id(
+async def test_a_mentor_is_reachable_by_id_and_always_has_a_slug(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """`users.slug` is nullable and null on 4 of 43 migrated users."""
+    """Every account has a handle (#684), a placeholder at least, so `slug`
+    is a required string; the id still addresses the profile."""
     mentor = await make_bookable_mentor(db_engine, "no-slug")
 
     body = (await api_client.get(url(mentor))).json()
 
-    assert body["slug"] is None
+    assert body["slug"].startswith("user-")  # the placeholder every account starts with
     assert body["id"] == str(mentor)
 
 
