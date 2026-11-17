@@ -227,6 +227,8 @@ EXPECTED_TABLES = [
     # A mentor profile link's visits and shares (decision 346).
     "mentor_profile_visits",
     "mentor_profile_shares",
+    # Each UTC day's random key for profile link visitors (decision 348).
+    "visitor_day_keys",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

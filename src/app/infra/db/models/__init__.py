@@ -63,6 +63,7 @@ from app.infra.db.models.platform import (
     NotificationChannelPreference,
     OutboxEvent,
     UserActivityDay,
+    VisitorDayKey,
 )
 from app.infra.db.models.preview import PreviewEvent, PreviewSession
 from app.infra.db.models.push import PushSubscription
@@ -174,5 +175,6 @@ __all__ = [
     "UserLink",
     "UserOnboarding",
     "UserProfile",
+    "VisitorDayKey",
     "WritingAssistRequest",
 ]
