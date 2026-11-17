@@ -12,10 +12,10 @@ here: `waiting_for`, the one recipient read, which drops closed accounts.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import bindparam, delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,40 @@ from app.infra.db.models.platform import FeatureInterest
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
 
-__all__ = ["own_interests", "register_interest", "waiting_for", "withdraw_interest"]
+__all__ = [
+    "USER_STATEMENTS",
+    "Waiting",
+    "own_interests",
+    "register_interest",
+    "waiting_for",
+    "withdraw_interest",
+]
+
+
+class Waiting(NamedTuple):
+    """One person still waiting: the row to stamp `notified_at` on, and who."""
+
+    interest_id: UUID
+    user_id: UUID
+
+
+#: Live accounts not yet told about one feature, oldest first (#374). Locks the
+#: rows it returns and skips rows another send holds, so two runs of one send
+#: cannot pick the same person.
+WAITING = (
+    select(FeatureInterest.id, FeatureInterest.user_id)
+    .join(User, User.id == FeatureInterest.user_id)
+    .where(
+        FeatureInterest.feature == bindparam("feature"),
+        FeatureInterest.notified_at.is_(None),
+        LIVE,
+    )
+    .order_by(FeatureInterest.created_at, FeatureInterest.id)
+    .with_for_update(of=FeatureInterest, skip_locked=True)
+)
+
+#: Statements reading an existing `users` row, for the `LIVE` parity test.
+USER_STATEMENTS = (WAITING,)
 
 
 class TooManyInterestsError(ConflictError):
@@ -140,7 +173,7 @@ async def withdraw_interest(session: AsyncSession, user_id: UUID, feature: str) 
     return gone is not None
 
 
-async def waiting_for(session: AsyncSession, feature: str, *, limit: int) -> list[UUID]:
+async def waiting_for(session: AsyncSession, feature: str, *, limit: int) -> list[Waiting]:
     """Who may be told `feature` has shipped: **the one recipient read** (#374).
 
     A row is not a claim its account can still be contacted. It was written
@@ -149,19 +182,13 @@ async def waiting_for(session: AsyncSession, feature: str, *, limit: int) -> lis
     filtering a fetched list. The rows themselves stay: purge removes them with
     the account, and a restored account keeps what it asked for.
 
-    Not yet told (`notified_at IS NULL`, the partial index's own predicate),
-    oldest first, at most `limit`: a send stamps `notified_at` on each batch in
-    the transaction that enqueues it, then asks again.
+    Not yet told, oldest first, at most `limit`. A send stamps `notified_at`
+    on the returned `interest_id`s (never by user and feature, which a
+    withdraw-and-register would move to a new row) in the same transaction that
+    enqueues the messages, commits, and asks again; the row lock makes a second
+    concurrent run skip this batch rather than send it twice.
     """
-    rows = await session.execute(
-        select(FeatureInterest.user_id)
-        .join(User, User.id == FeatureInterest.user_id)
-        .where(
-            FeatureInterest.feature == feature,
-            FeatureInterest.notified_at.is_(None),
-            LIVE,
-        )
-        .order_by(FeatureInterest.created_at, FeatureInterest.id)
-        .limit(limit)
-    )
-    return list(rows.scalars())
+    if limit < 1:
+        raise ValueError(f"limit must be at least 1, got {limit}")
+    rows = await session.execute(WAITING.limit(limit), {"feature": feature})
+    return [Waiting(interest_id=row.id, user_id=row.user_id) for row in rows]
