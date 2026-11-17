@@ -37,7 +37,12 @@ from app.domain.analytics import (
     SupplyTab,
     WeeklyActive,
 )
-from app.domain.analytics_behaviour import BehaviourTab, FunnelName, FunnelTab
+from app.domain.analytics_behaviour import (
+    MEDIAN_MIN_PEOPLE,
+    BehaviourTab,
+    FunnelName,
+    FunnelTab,
+)
 from app.domain.enums import (
     FunnelFigureUnit,
     FunnelLayer,
@@ -675,6 +680,13 @@ class AnalyticsSupplyRead(SectionRead):
 # --- Behaviour (PostHog) -----------------------------------------------------
 
 
+_MEDIAN_NULL = (
+    "This period's only, with no previous. Null when fewer than "
+    f"{MEDIAN_MIN_PEOPLE} people made it or nothing tracks the step. With `by`, "
+    "it is of the same people as the counts."
+)
+
+
 class FunnelStepRead(BaseModel):
     key: str
     label: str
@@ -686,6 +698,15 @@ class FunnelStepRead(BaseModel):
         description=(
             "The row it is drawn in: `primary`, the funnel's path, or `secondary`, "
             "its outcomes. A funnel with one row has every step `primary`."
+        ),
+    )
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    median_seconds_from_previous: int | None = Field(
+        default=None,
+        description=(
+            "The median whole seconds from the previous step to this one, of the "
+            "people who reached this one. Always null on the first step and on a "
+            "`secondary` step. " + _MEDIAN_NULL
         ),
     )
 
@@ -729,6 +750,15 @@ class AnalyticsFunnelRead(SectionRead):
             "`median_review_days` (the Supply tab's, for decisions made in the window)."
         ),
     )
+    # Always sent; the default only keeps it out of `required` for the frontend's CI.
+    median_seconds_to_complete: int | None = Field(
+        default=None,
+        description=(
+            "The median whole seconds from the first step to the last `primary` "
+            "step, of the people who reached that step. Null when the funnel has no "
+            "`primary` step after the first, or nothing tracks the last one yet. " + _MEDIAN_NULL
+        ),
+    )
 
     @classmethod
     def of(cls, period: Period, alerts: list[Alert], tab: FunnelTab) -> AnalyticsFunnelRead:
@@ -748,9 +778,11 @@ class AnalyticsFunnelRead(SectionRead):
                     previous=None
                     if step.count is None or step.count.previous is None
                     else int(step.count.previous),
+                    median_seconds_from_previous=step.median_seconds_from_previous,
                 )
                 for step in tab.steps
             ],
+            median_seconds_to_complete=tab.median_seconds_to_complete,
             figures=[
                 FunnelFigureRead(
                     key=f.key,

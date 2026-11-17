@@ -31,7 +31,7 @@ from app.api.schemas.admin_analytics import (
     AnalyticsSessionsRead,
     AnalyticsSupplyRead,
 )
-from app.domain.analytics_behaviour import FUNNELS
+from app.domain.analytics_behaviour import FUNNELS, MEDIAN_MIN_PEOPLE
 
 router = APIRouter(
     prefix="/api/v1/admin/analytics",
@@ -244,6 +244,11 @@ _POSTHOG_RESPONSES = _RESPONSES | {
         + "Each step's `layer` is the row it is drawn in: `primary`, the path, or "
         "`secondary`, the outcomes beside it. `figures` sit beside the funnel (see "
         "the schema), `[]` for a funnel with none.\n\n"
+        "Every funnel carries median times for this period (see the schema): each "
+        "step's `median_seconds_from_previous` and the funnel's "
+        "`median_seconds_to_complete`, to its last `primary` step; null under "
+        f"{MEDIAN_MIN_PEOPLE} people or on a step nothing tracks. PostHog's come from its own "
+        "conversion times; `mentor_activation`'s from each mentor's rows.\n\n"
         "**`mentor_activation` is read from this database**, not PostHog, and is "
         "never a `503`: mentors approved in the window, at their first approval in "
         "it; of them, those whose weekly hours stood at or after approval; of "

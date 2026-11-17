@@ -19,6 +19,7 @@ from tests.posthog_fakes import (
     funnel_answer,
     posthog_reader,
     rows,
+    time_answer,
 )
 
 from app.core.config import Settings
@@ -46,8 +47,13 @@ class PostHog:
         self.seen.append(query)
         if self.down:
             return httpx.Response(502, text="bad gateway")
+        if kind_of(query) == TIME_TO_CONVERT:
+            return time_answer(5400.4)
         if query["kind"] == "FunnelsQuery":
-            return funnel_answer(*(50 - 10 * i for i in range(len(query["series"]))))
+            steps = range(len(query["series"]))
+            # PostHog's step medians: none on the first, then 60.4 s per step.
+            times = [None, *(60.4 * i for i in steps[1:])]
+            return funnel_answer(*(50 - 10 * i for i in steps), medians=times)
         name = query["name"]
         if name == "admin_analytics_login_codes":
             return rows(["attempts", "failed", "failed_migrated"], list(self.login))
@@ -64,7 +70,17 @@ class PostHog:
         raise AssertionError(name)
 
     def asked(self, name: str) -> int:
-        return sum(1 for q in self.seen if q.get("name", q["kind"]) == name)
+        """Queries by name, else by kind: `FunnelsQuery` for a funnel's counts,
+        `TIME_TO_CONVERT` for its time to complete."""
+        return sum(1 for q in self.seen if q.get("name", kind_of(q)) == name)
+
+
+TIME_TO_CONVERT = "time_to_convert"
+
+
+def kind_of(query: dict[str, Any]) -> str:
+    view = query.get("funnelsFilter", {}).get("funnelVizType")
+    return TIME_TO_CONVERT if view == TIME_TO_CONVERT else str(query["kind"])
 
 
 def app_for(
@@ -127,13 +143,22 @@ async def test_a_funnel_returns_every_step_compared_and_refuses_what_it_has_not(
         "value": 50,
         "previous": 50,
         "layer": "primary",
+        "median_seconds_from_previous": None,
     }
     assert body["steps"][0] == first
     assert [s["value"] for s in body["steps"]] == [50, 40, 30]
+    # PostHog's medians, whole seconds (decision 351); the total its time to convert.
+    assert [s["median_seconds_from_previous"] for s in body["steps"]] == [None, 60, 121]
+    assert body["median_seconds_to_complete"] == 5400
     assert body["figures"] == []
     assert all(a["key"] != "login_code_failed" for a in body["alerts"])
-    # This period and the previous: two funnel reads.
+    # This period and the previous: two funnel reads; the time this period's only.
     assert posthog.asked("FunnelsQuery") == 2
+    assert posthog.asked(TIME_TO_CONVERT) == 1
+    (timed,) = (q for q in posthog.seen if kind_of(q) == TIME_TO_CONVERT)
+    now, _before = (q for q in posthog.seen if kind_of(q) == "FunnelsQuery")
+    assert timed["funnelsFilter"]["funnelToStep"] == 2
+    assert timed["dateRange"] == now["dateRange"]
     async with client_for(app_for(db_engine, api_storage, posthog)) as client:
         alone = await get(client, token, "/funnels/mentee_activation", compare="false")
         assert (await get(client, token, "/funnels/sign_up")).status_code == 404
@@ -145,7 +170,11 @@ async def test_a_funnel_returns_every_step_compared_and_refuses_what_it_has_not(
         ("first_session", 30, "secondary"),
     ]
     assert all(s["previous"] is None for s in steps)
+    # The outcome has no median; the total ends at the last path step.
+    assert [s["median_seconds_from_previous"] for s in steps] == [None, 60, None]
+    assert alone.json()["median_seconds_to_complete"] == 5400
     assert posthog.asked("FunnelsQuery") == 3  # once without compare; none refused
+    assert posthog.asked(TIME_TO_CONVERT) == 2
     assert refused.status_code == 422
     assert refused.json()["type"] == "/problems/analytics-window"
     assert refused.json()["errors"][0]["pointer"] == "/query/by"

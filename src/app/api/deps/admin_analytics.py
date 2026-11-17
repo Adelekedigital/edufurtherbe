@@ -44,13 +44,16 @@ from app.domain.analytics_activation import (
     ApprovedMentor,
     activation_figures,
     activation_steps,
+    path_reached,
 )
 from app.domain.analytics_behaviour import (
     FUNNEL_NAMES,
     BehaviourFigures,
     Funnel,
     FunnelFigure,
+    FunnelReading,
     FunnelTab,
+    FunnelTimes,
     LoginCodes,
     behaviour_tab,
     breakdown_for,
@@ -60,6 +63,7 @@ from app.domain.analytics_behaviour import (
     funnel_named,
     funnel_tab,
     login_alert,
+    median_times,
 )
 from app.domain.availability import local_date
 from app.domain.ports import AnalyticsReader
@@ -350,17 +354,20 @@ async def _posthog_funnel(
     funnel: Funnel,
     chosen: str,
 ) -> FunnelTab:
-    async def compute() -> tuple[list[int], list[int] | None]:
+    async def compute() -> tuple[FunnelReading, FunnelTimes, list[int] | None]:
         internal = await internal_ids(session)
-        current = await asyncio.to_thread(
-            reader.funnel, funnel, chosen, ask.period.window, internal
-        )
+        window = ask.period.window
+        current = await asyncio.to_thread(reader.funnel, funnel, chosen, window, internal)
+        # The times are the current period's only (decision 351).
+        done = await asyncio.to_thread(reader.time_to_complete, funnel, chosen, window, internal)
+        times = FunnelTimes(from_previous=current.medians, to_complete=done)
         if not ask.compare:
-            return current, None
+            return current, times, None
         before = ask.period.previous().window
-        return current, await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
+        prior = await asyncio.to_thread(reader.funnel, funnel, chosen, before, internal)
+        return current, times, prior.counts
 
-    current, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
+    read, times, previous = await _cached(request, f"funnel:{funnel.name}:{chosen}", ask, compute)
     figures: list[FunnelFigure] = []
     if funnel.name == "mentor_application":
 
@@ -372,7 +379,7 @@ async def _posthog_funnel(
 
         now, before = await _cached(request, "funnel:review_days", ask, review)
         figures.append(figure("median_review_days", now, before, ask.compare))
-    return funnel_tab(funnel, chosen, current, previous, figures)
+    return funnel_tab(funnel, chosen, read.counts, previous, figures, times)
 
 
 async def _activation(
@@ -419,6 +426,7 @@ async def _activation(
         steps[0],
         steps[1] if ask.compare else None,
         activation_figures(windows[0], previous),
+        median_times(funnel, [path_reached(m) for m in windows[0].mentors]),
     )
 
 
