@@ -1,12 +1,20 @@
-"""A mentor's own dashboard figures (`/me/mentor-stats`, decision 246) and
-their monthly chart (`/me/mentor-stats/monthly`, decision 247)."""
+"""A mentor's own dashboard figures (`/me/mentor-stats`, decision 246), their
+monthly chart (`/me/mentor-stats/monthly`, decision 247) and their profile
+link's visits and shares (`/me/mentor-stats/profile-link`, decision 353)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
 
-from app.api.deps import PRIVATE_NO_STORE, OwnMentorMonthlyStatsDep, OwnMentorStatsDep
+from app.api.deps import (
+    PRIVATE_NO_STORE,
+    OwnLinkStatsDep,
+    OwnMentorMonthlyStatsDep,
+    OwnMentorStatsDep,
+)
 from app.api.schemas.mentor_stats import (
+    MentorLinkStatsRead,
+    MentorLinkStatsWindowRead,
     MentorMonthlyStatsRead,
     MentorMonthRead,
     MentorStatsRead,
@@ -86,4 +94,38 @@ async def read_own_mentor_monthly_stats(
     response.headers["Cache-Control"] = PRIVATE_NO_STORE
     return MentorMonthlyStatsRead(
         months=stats["months"], series=[MentorMonthRead.of(row) for row in stats["series"]]
+    )
+
+
+@router.get(
+    "/profile-link",
+    response_model=MentorLinkStatsRead,
+    summary="Your profile link's visits and shares, by channel",
+    description=(
+        "How people reached your public profile and passed it on, for the "
+        "`window_days` UTC days ending with today (`current`, today included) "
+        "and the same number of days before it (`previous`); or, with `year`, "
+        "that UTC calendar year and the one before. The same window parameters "
+        "as `/me/mentor-stats`.\n\n"
+        "Visits and shares are recorded by UTC day, so a window is whole days: "
+        "`since` is its first, `until` the day after its last. A visitor counts "
+        "once a day, and is never matched across days, so `visits` is also the "
+        "sum of each day's unique visitors. `visits_by_via` splits it by the "
+        "channel the link came through, `top_referrers` names the sites "
+        "visitors came from, and `shares_by_method` splits `shares` by how the "
+        "link was shared. Shares you made yourself while signed in are left "
+        "out.\n\n"
+        "**Counts only**: nothing about any one visitor is ever returned. Only "
+        "ever your own profile. **If nobody has visited or shared it, or you "
+        "are not a mentor, you get zeros**, not an error. Never cached by "
+        "anyone but you."
+    ),
+    responses=RESPONSES,
+)
+async def read_own_link_stats(stats: OwnLinkStatsDep, response: Response) -> MentorLinkStatsRead:
+    response.headers["Cache-Control"] = PRIVATE_NO_STORE
+    return MentorLinkStatsRead(
+        window_days=stats["window_days"],
+        current=MentorLinkStatsWindowRead(**stats["current"]),
+        previous=MentorLinkStatsWindowRead(**stats["previous"]),
     )

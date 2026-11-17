@@ -1,4 +1,5 @@
-"""A mentor's own dashboard figures (decision 246).
+"""A mentor's own dashboard figures (decision 246), and their profile link's
+visits and shares (decision 353).
 
 **The window's bounds and blocks are required; every figure is optional.**
 `tests/unit/test_added_fields_stay_optional.py` exists for fields added to an
@@ -17,6 +18,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.api.schemas.common import COUNTED_MINUTES
+from app.domain.enums import LinkVia, ShareMethod
+from app.domain.link_tracking import TOP_REFERRERS
 from app.domain.mentor_stats import DEFAULT_MONTHS, DEFAULT_WINDOW_DAYS
 
 
@@ -206,4 +209,105 @@ class MentorMonthlyStatsRead(BaseModel):
             "One entry per month, oldest first, ending with this month; a month "
             "with nothing in it is zeros, never missing."
         )
+    )
+
+
+class LinkViaCountRead(BaseModel):
+    """Visits that arrived through one channel."""
+
+    key: LinkVia | None = Field(
+        description=(
+            "The `?via=` the link carried, as recorded by "
+            "`POST /mentors/{handle}/visits`: `copy`, `share` or `invite`. Null "
+            "for a visit whose link carried none of ours, such as a link typed, "
+            "edited or found by search."
+        )
+    )
+    count: int = Field(description="Visits, one per visitor per UTC day.")
+
+
+class ReferrerCountRead(BaseModel):
+    """Visits from one site."""
+
+    host: str = Field(description="The site's bare host name.", examples=["wa.me"])
+    count: int = Field(description="Visits from it, one per visitor per UTC day.")
+
+
+class ShareMethodCountRead(BaseModel):
+    """Shares one way."""
+
+    key: ShareMethod = Field(
+        description="`copy` (the link was copied) or `native` (the device's share sheet)."
+    )
+    count: int = Field(description="Shares, one per person per method per UTC day.")
+
+
+class MentorLinkStatsWindowRead(BaseModel):
+    """One window's profile link figures, by UTC day: a visit or share belongs
+    to the window its day is in. Counts only, never anything about a visitor."""
+
+    since: dt.date = Field(description="The window's first UTC day, **inclusive**.")
+    until: dt.date = Field(
+        description="The UTC day after its last, **exclusive**: the next window's `since`."
+    )
+    visits: int = Field(
+        default=0,
+        description=(
+            "Visits to your public profile: each visitor counts once a UTC day, so "
+            "this is also the sum of each day's unique visitors. Somebody who comes "
+            "back on another day counts again, because visitors are never matched "
+            "across days. Your own visits while signed in are never recorded, and "
+            "nothing was recorded before link tracking went live, so a window "
+            "before then reads zero."
+        ),
+    )
+    visits_by_via: list[LinkViaCountRead] = Field(
+        default_factory=list,
+        description=(
+            "`visits` by the channel the link came through: every channel, "
+            "`copy`, `share`, `invite`, then null, zeros included, in that order. "
+            "The counts add up to `visits`."
+        ),
+    )
+    top_referrers: list[ReferrerCountRead] = Field(
+        default_factory=list,
+        description=(
+            f"The sites visitors came from, at most {TOP_REFERRERS}, most visits "
+            "first and a tie by host name. A visit the browser named no site for "
+            "is in `visits` and in no host here, so these need not add up to it."
+        ),
+    )
+    shares: int = Field(
+        default=0,
+        description=(
+            "Times your profile link was shared: each person "
+            "counts once per method per UTC day. Shares you made yourself while "
+            "signed in are left out."
+        ),
+    )
+    shares_by_method: list[ShareMethodCountRead] = Field(
+        default_factory=list,
+        description=(
+            "`shares` by method: every method, `copy` then `native`, zeros "
+            "included. The counts add up to `shares`."
+        ),
+    )
+
+
+class MentorLinkStatsRead(BaseModel):
+    """Your profile link's figures over a window and the equal window before it,
+    both read in one statement."""
+
+    window_days: int = Field(
+        default=DEFAULT_WINDOW_DAYS,
+        description=(
+            "How many UTC days `current` holds: the `window_days` asked for, or "
+            "with `year` that year's 365 or 366."
+        ),
+    )
+    current: MentorLinkStatsWindowRead = Field(
+        description="The `window_days` days ending with today, today included; or the `year`."
+    )
+    previous: MentorLinkStatsWindowRead = Field(
+        description=("The equal window immediately before `current`; with `year`, the year before.")
     )

@@ -28,6 +28,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.link_tracking import day_span
 from app.domain.mentee_stats import dashboard_windows
 from app.domain.mentor_stats import (
     DEFAULT_MONTHS,
@@ -36,6 +37,7 @@ from app.domain.mentor_stats import (
     MAX_WINDOW_DAYS,
     MIN_MONTHS,
     MIN_WINDOW_DAYS,
+    Window,
     month_windows,
     trend_windows,
     year_windows,
@@ -46,6 +48,7 @@ from app.infra.db.featured_store import (
     current_featured,
 )
 from app.infra.db.guide_countries import guide_countries_of
+from app.infra.db.link_stats import link_stats
 from app.infra.db.mentee_dashboard import mentee_dashboard
 from app.infra.db.mentor_dashboard import mentor_monthly_stats, mentor_window_stats
 from app.infra.db.mentor_public_store import (
@@ -376,9 +379,7 @@ MentorSchoolsDep = Annotated[list[dict[str, Any]], Depends(schools_of_mentors)]
 # --------------------------------------------------------------------------
 
 
-async def own_mentor_stats(
-    user: CurrentUserDep,
-    session: SessionDep,
+async def mentor_stats_windows(
     window_days: Annotated[
         int | None,
         Query(
@@ -403,21 +404,31 @@ async def own_mentor_stats(
             ),
         ),
     ] = None,
+) -> tuple[Window, Window]:
+    """The current window and the one before it, from `window_days` or `year`:
+    the one window parameter of a mentor's own figures (decisions 246, 257,
+    353), so every endpoint that takes it reads it alike."""
+    now = dt.datetime.now(dt.UTC)
+    if year is None:
+        return trend_windows(now, window_days or DEFAULT_WINDOW_DAYS)
+    if window_days is not None:
+        raise ValidationError("give `year` or `window_days`, not both")
+    try:
+        return year_windows(now, year)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+
+
+MentorStatsWindowsDep = Annotated[tuple[Window, Window], Depends(mentor_stats_windows)]
+
+
+async def own_mentor_stats(
+    user: CurrentUserDep, session: SessionDep, windows: MentorStatsWindowsDep
 ) -> dict[str, Any]:
     """The caller's figures over two adjacent windows. Scoped to the caller in
     every statement; a non-mentor reads zeros and nulls, as `/me/session-types` answers
     one with an empty page. The streak (decision 250) is read in the same
     statement and is the same on both rows."""
-    now = dt.datetime.now(dt.UTC)
-    if year is None:
-        windows = trend_windows(now, window_days or DEFAULT_WINDOW_DAYS)
-    elif window_days is not None:
-        raise ValidationError("give `year` or `window_days`, not both")
-    else:
-        try:
-            windows = year_windows(now, year)
-        except ValueError as error:
-            raise ValidationError(str(error)) from error
     current, previous = await mentor_window_stats(session, user["id"], windows)
     return {
         "window_days": (windows[0].until - windows[0].since).days,
@@ -428,6 +439,24 @@ async def own_mentor_stats(
 
 
 OwnMentorStatsDep = Annotated[dict[str, Any], Depends(own_mentor_stats)]
+
+
+async def own_link_stats(
+    user: CurrentUserDep, session: SessionDep, windows: MentorStatsWindowsDep
+) -> dict[str, Any]:
+    """The caller's profile link figures over the same two windows (decision
+    353). Scoped to the caller in the statement; anyone whose profile nobody
+    has visited or shared, a mentee included, reads zeros."""
+    spans = [day_span(window) for window in windows]
+    current, previous = await link_stats(session, user["id"], spans)
+    return {
+        "window_days": (spans[0].until - spans[0].since).days,
+        "current": current,
+        "previous": previous,
+    }
+
+
+OwnLinkStatsDep = Annotated[dict[str, Any], Depends(own_link_stats)]
 
 
 async def met_mentors_page(
