@@ -6,7 +6,8 @@ this sits with the rest of `/me` for any account (#365). `user_id` is in the
 
 **No `notified_at` writer here.** The column exists so a future send cannot tell
 one person twice, and nothing sends yet — a setter with no caller is how a
-half-built mechanism gets mistaken for a working one.
+half-built mechanism gets mistaken for a working one. What a send reads is
+here: `waiting_for`, the one recipient read, which drops closed accounts.
 """
 
 from __future__ import annotations
@@ -21,8 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError
 from app.domain.interest import MAX_FEATURES_PER_ACCOUNT
 from app.infra.db.models.platform import FeatureInterest
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE
 
-__all__ = ["own_interests", "register_interest", "withdraw_interest"]
+__all__ = ["own_interests", "register_interest", "waiting_for", "withdraw_interest"]
 
 
 class TooManyInterestsError(ConflictError):
@@ -135,3 +138,30 @@ async def withdraw_interest(session: AsyncSession, user_id: UUID, feature: str) 
         )
     ).scalar_one_or_none()
     return gone is not None
+
+
+async def waiting_for(session: AsyncSession, feature: str, *, limit: int) -> list[UUID]:
+    """Who may be told `feature` has shipped: **the one recipient read** (#374).
+
+    A row is not a claim its account can still be contacted. It was written
+    while the account was live, and a soft delete leaves it in place, so this
+    joins `users` and composes `LIVE` in the same statement rather than
+    filtering a fetched list. The rows themselves stay: purge removes them with
+    the account, and a restored account keeps what it asked for.
+
+    Not yet told (`notified_at IS NULL`, the partial index's own predicate),
+    oldest first, at most `limit`: a send stamps `notified_at` on each batch in
+    the transaction that enqueues it, then asks again.
+    """
+    rows = await session.execute(
+        select(FeatureInterest.user_id)
+        .join(User, User.id == FeatureInterest.user_id)
+        .where(
+            FeatureInterest.feature == feature,
+            FeatureInterest.notified_at.is_(None),
+            LIVE,
+        )
+        .order_by(FeatureInterest.created_at, FeatureInterest.id)
+        .limit(limit)
+    )
+    return list(rows.scalars())
