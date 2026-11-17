@@ -12,6 +12,7 @@ from app.domain.app_reset import (
     Survey,
     Target,
     confirms,
+    cutoff_problem,
     deletion_order,
     refusals,
     report,
@@ -117,3 +118,55 @@ def test_the_report_lists_both_sides_with_counts() -> None:
     assert "institutions (user-created rows)" in text
     assert text.splitlines()[-1].split() == ["total", "6"]
     assert "CLEAR (deleted):" in report(clean(), applied=True)
+
+
+def test_a_supabase_host_whose_ref_cannot_be_read_confirms_nothing() -> None:
+    target = Target(host="pooler.supabase.com", database="postgres", user="etl.someone")
+    assert target.project_ref is None
+    assert not confirms(target, "postgres")
+    assert not confirms(
+        Target(host="db.short.supabase.co", database="postgres", user=None), "postgres"
+    )
+
+
+def test_a_lookalike_host_is_not_supabase() -> None:
+    target = Target(host="notsupabase.com", database="app", user="app")
+    assert not target.on_supabase
+    assert confirms(target, "app")
+
+
+@pytest.mark.parametrize(
+    ("cutoff", "expected"),
+    [
+        (DEFAULT_REAL_DATA_FROM, None),
+        (DEFAULT_REAL_DATA_FROM - dt.timedelta(days=3), None),
+        (DEFAULT_REAL_DATA_FROM + dt.timedelta(seconds=1), "may not be later"),
+        (dt.datetime(2099, 1, 1, tzinfo=dt.UTC), "may not be later"),
+        (dt.datetime(2026, 11, 18), "needs a zone"),
+    ],
+)
+def test_the_cutoff_may_only_move_earlier(cutoff: dt.datetime, expected: str | None) -> None:
+    problem = cutoff_problem(cutoff)
+    if expected is None:
+        assert problem is None
+    else:
+        assert problem is not None
+        assert expected in problem
+
+
+def test_files_with_nowhere_to_remove_them_from_refuse() -> None:
+    assert refusals(clean(stored_files=3, storage_ready=True)) == ()
+    assert refusals(clean(stored_files=0, storage_ready=False)) == ()
+    [reason] = refusals(clean(stored_files=3, storage_ready=False))
+    assert "3 private file(s)" in reason
+
+
+def test_the_report_warns_about_admin_configuration_and_untimed_tables() -> None:
+    text = report(
+        clean(clear={"admin_users": 2, "email_line_overrides": 4}, untimed=("j",), stored_files=1),
+        applied=False,
+    )
+    assert "2 admin grant(s), 4 reworded email line(s)" in text
+    assert "not checked by time (no created_at): j" in text
+    assert "1 private file(s) are removed from storage too" in text
+    assert "admin configuration" not in report(clean(), applied=False)

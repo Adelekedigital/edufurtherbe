@@ -18,7 +18,8 @@ that it cannot recreate, and stop):
   The default is the start of the final load window, so the real load itself
   (its credit lots and ledger rows are stamped at load time) and every app
   write after it refuse. Before it, a rehearsal can be cleared as often as
-  needed. A later value is the operator's explicit statement and is printed.
+  needed. ``--real-data-from`` may only move it **earlier**: a later cutoff
+  would switch the check off, so moving the window is a reviewed code change.
 
 Counts and table names only: never a person, an address or the DSN.
 """
@@ -32,7 +33,7 @@ from dataclasses import dataclass, field
 from graphlib import CycleError, TopologicalSorter
 
 #: The start of the final load window (Thu 19 Nov 2026, UTC): a row created at
-#: or after it is real data, unless the operator names a later instant.
+#: or after it is real data. The flag may name an earlier instant, never a later.
 DEFAULT_REAL_DATA_FROM = dt.datetime(2026, 11, 19, tzinfo=dt.UTC)
 
 #: A Supabase project ref: what the direct host (``db.<ref>.supabase.co``) and
@@ -40,6 +41,8 @@ DEFAULT_REAL_DATA_FROM = dt.datetime(2026, 11, 19, tzinfo=dt.UTC)
 _REF = r"[a-z0-9]{20}"
 _DIRECT_HOST = re.compile(rf"^db\.({_REF})\.supabase\.co$")
 _POOLER_USER = re.compile(rf"^postgres\.({_REF})$")
+#: Hosts that are Supabase's, where the database is always called ``postgres``.
+_SUPABASE_HOST = re.compile(r"(^|\.)supabase\.(co|com)$")
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,10 @@ class Target:
                 return found.group(1)
         return None
 
+    @property
+    def on_supabase(self) -> bool:
+        return bool(self.host and _SUPABASE_HOST.search(self.host))
+
     def describe(self) -> str:
         ref = self.project_ref or "-"
         return f"host={self.host or '-'} database={self.database or '-'} project={ref}"
@@ -67,10 +74,25 @@ def confirms(target: Target, given: str) -> bool:
     """Whether ``--confirm-database`` names this target.
 
     A Supabase database is always called ``postgres``, so on Supabase only the
-    project ref identifies it; elsewhere the database name does.
+    project ref identifies it, and a Supabase DSN whose ref cannot be read
+    confirms nothing; elsewhere the database name does.
     """
-    expected = target.project_ref or target.database
+    supabase = target.on_supabase or target.project_ref is not None
+    expected = target.project_ref if supabase else target.database
     return bool(expected) and given.strip() == expected
+
+
+def cutoff_problem(real_data_from: dt.datetime) -> str | None:
+    """Why a ``--real-data-from`` is refused, or ``None``.
+
+    Naive is ambiguous, and later than the default would let rows the real load
+    or real people wrote pass as rehearsal.
+    """
+    if real_data_from.tzinfo is None:
+        return "--real-data-from needs a zone"
+    if real_data_from > DEFAULT_REAL_DATA_FROM:
+        return f"--real-data-from may not be later than {DEFAULT_REAL_DATA_FROM.isoformat()}"
+    return None
 
 
 def deletion_order(tables: Iterable[str], references: Iterable[tuple[str, str]]) -> tuple[str, ...]:
@@ -124,6 +146,12 @@ class Survey:
     blocked: Mapping[str, int] = field(default_factory=dict)
     #: Set when the cleared tables reference each other in a cycle.
     cycle: str | None = None
+    #: Private files (intake, message) whose rows are cleared.
+    stored_files: int = 0
+    #: Whether those files' objects can be removed from storage.
+    storage_ready: bool = True
+    #: Cleared activity tables with no ``created_at``, so not checked by time.
+    untimed: tuple[str, ...] = ()
 
 
 def refusals(survey: Survey) -> tuple[str, ...]:
@@ -153,6 +181,11 @@ def refusals(survey: Survey) -> tuple[str, ...]:
     )
     if survey.cycle:
         found.append(f"the cleared tables reference each other in a cycle: {survey.cycle}")
+    if survey.stored_files and not survey.storage_ready:
+        found.append(
+            f"{survey.stored_files} private file(s) would be left in storage with nothing "
+            "pointing at them: configure the intake bucket (SUPABASE_INTAKE_BUCKET)"
+        )
     return tuple(found)
 
 
@@ -169,6 +202,18 @@ def report(survey: Survey, *, applied: bool) -> str:
     )
     total = sum(survey.clear.values()) + sum(survey.user_created.values())
     lines.append(f"  {'total':<42} {total:>8}")
+    if survey.stored_files:
+        lines.append(f"\n{survey.stored_files} private file(s) are removed from storage too")
+    admins = survey.clear.get("admin_users", 0)
+    wording = survey.clear.get("email_line_overrides", 0)
+    if admins or wording:
+        lines.append(
+            f"\nadmin configuration is cleared: {admins} admin grant(s), {wording} reworded "
+            "email line(s). Grants come back with the legacy load or provision_auth.py "
+            "--grant-admin; reworded lines must be entered again"
+        )
+    if survey.untimed:
+        lines.append("\nnot checked by time (no created_at): " + ", ".join(survey.untimed))
     if survey.internal_accounts:
         lines.append(
             f"\n{survey.internal_accounts} internal account(s) (admin or demo) signed up "
@@ -183,6 +228,7 @@ __all__ = [
     "Survey",
     "Target",
     "confirms",
+    "cutoff_problem",
     "deletion_order",
     "refusals",
     "report",

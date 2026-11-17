@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from tests.integration.factories import add_session, make_bookable_mentor, make_institution
 
-from app.domain.app_reset import Target
+from app.domain.app_reset import DEFAULT_REAL_DATA_FROM, Target
 from app.domain.enums import LinkVia, ShareMethod
 from app.domain.provisioning import Action, Candidate, plan_for
 from app.infra.db.calendar_store import NullFreeBusy
@@ -26,7 +27,7 @@ from app.infra.db.link_tracking import record_share, record_visit
 from app.infra.db.next_available_store import refresh_next_available
 from app.infra.db.provisioning_store import ProvisioningStore
 from app.infra.etl import reset as reset_module
-from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED
+from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, EXIT_UNRESOLVED
 from app.infra.etl.reset import (
     CATALOGUE,
     CLEAR,
@@ -36,6 +37,7 @@ from app.infra.etl.reset import (
     reset,
     run,
 )
+from app.infra.storage.supabase import StorageError
 from conftest import PLATFORM_WINDOW, add_user
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio, pytest.mark.isolated_db]
@@ -137,7 +139,24 @@ _ACTIVITY = (
     "INSERT INTO notification_channel_preferences (user_id, notification_type) "
     "VALUES (:mentee, 'unread_messages')",
     "INSERT INTO user_links (user_id, platform, url) VALUES (:mentee, 'x', 'https://x.com/ada')",
+    "INSERT INTO intake_files (uploader_id, session_id, storage_key, filename, size_bytes, "
+    "content_type) VALUES (:mentee, :session, CAST(:mentee AS uuid)::text || '/cv', "
+    "'cv.pdf', 10, 'application/pdf')",
+    "INSERT INTO intake_files (uploader_id, storage_key, filename, size_bytes, content_type, "
+    "deleted_at, purged_at) VALUES (:mentee, CAST(:mentee AS uuid)::text || '/gone', "
+    "'old.pdf', 10, 'application/pdf', now(), now())",
+    "INSERT INTO message_attachments (uploaded_by, storage_key, file_name, mime_type, "
+    "size_bytes) VALUES (:mentee, 'messages/' || CAST(:mentee AS uuid)::text || '/draft', 'd.pdf', "
+    "'application/pdf', 10)",
 )
+
+#: The objects the seed's rows name (the purged one's object is already gone).
+SEEDED_FILES = 2
+
+
+def _gone(_key: str) -> bool:
+    """A bucket where every removal succeeds."""
+    return True
 
 
 async def _app_activity(
@@ -223,7 +242,7 @@ async def test_apply_clears_every_cleared_table_and_keeps_every_kept_row(
     assert sum(1 for n in before.values() if n) >= 30
     assert all(before[t] for t in LINK_TABLES)
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert outcome.applied
     assert outcome.refused == ()
@@ -241,7 +260,7 @@ async def test_the_link_tracking_tables_are_emptied(db_engine: AsyncEngine) -> N
     await seed_rehearsal(db_engine)
     assert all((await _counts(db_engine, set(LINK_TABLES))).values())
 
-    await reset(db_engine, real_data_from=LATER, apply=True)
+    await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert await _counts(db_engine, set(LINK_TABLES)) == dict.fromkeys(sorted(LINK_TABLES), 0)
 
@@ -252,7 +271,7 @@ async def test_a_dry_run_writes_nothing(db_engine: AsyncEngine) -> None:
     before = await _counts(db_engine, tables)
     kept = await _checksums(db_engine)
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=False)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=False, remove_file=_gone)
 
     assert not outcome.applied
     assert outcome.refused == ()
@@ -263,10 +282,10 @@ async def test_a_dry_run_writes_nothing(db_engine: AsyncEngine) -> None:
 
 async def test_running_it_twice_is_safe(db_engine: AsyncEngine) -> None:
     await seed_rehearsal(db_engine)
-    await reset(db_engine, real_data_from=LATER, apply=True)
+    await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
     kept = await _checksums(db_engine)
 
-    again = await reset(db_engine, real_data_from=LATER, apply=True)
+    again = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert again.applied
     assert set(again.survey.clear.values()) == {0}
@@ -279,7 +298,7 @@ async def test_a_reloaded_account_relinks_to_its_existing_sign_in(db_engine: Asy
     async with db_engine.begin() as conn:
         await add_user(conn, "ada@example.test", auth_id=sign_in, legacy_bubble_id="b1")
     await _migrated(db_engine)
-    await reset(db_engine, real_data_from=LATER, apply=True)
+    await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
     async with db_engine.begin() as conn:
         reloaded = await add_user(conn, "ada@example.test", legacy_bubble_id="b1")
 
@@ -297,7 +316,7 @@ async def test_a_sign_up_on_the_new_app_refuses_and_deletes_nothing(db_engine: A
         await add_user(conn, f"new-{uuid4()}@example.test")
     before = await _counts(db_engine, set(CLEAR))
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert not outcome.applied
     assert outcome.survey.new_accounts == 1
@@ -313,7 +332,7 @@ async def test_our_own_new_accounts_are_not_real_users(db_engine: AsyncEngine) -
             {"u": admin},
         )
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert outcome.applied
     assert (outcome.survey.new_accounts, outcome.survey.internal_accounts) == (0, 1)
@@ -325,7 +344,7 @@ async def test_activity_after_the_cutoff_refuses_and_names_the_tables(
     await seed_rehearsal(db_engine)
     before = await _counts(db_engine, set(CLEAR))
 
-    outcome = await reset(db_engine, real_data_from=EARLIER, apply=True)
+    outcome = await reset(db_engine, real_data_from=EARLIER, apply=True, remove_file=_gone)
 
     assert not outcome.applied
     assert outcome.survey.recent["sessions"] > 0
@@ -342,7 +361,7 @@ async def test_a_job_writing_after_the_cutoff_is_not_activity(db_engine: AsyncEn
             {"d": NOW.date(), "k": os.urandom(32)},
         )
 
-    outcome = await reset(db_engine, real_data_from=EARLIER, apply=True)
+    outcome = await reset(db_engine, real_data_from=EARLIER, apply=True, remove_file=_gone)
 
     assert outcome.applied
 
@@ -351,7 +370,7 @@ async def test_a_table_nobody_classified_refuses(db_engine: AsyncEngine) -> None
     async with db_engine.begin() as conn:
         await conn.execute(text("CREATE TABLE stray (id int)"))
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert not outcome.applied
     assert outcome.survey.unknown_tables == ("stray",)
@@ -369,7 +388,7 @@ async def test_a_kept_row_pointing_at_a_cleared_user_refuses(db_engine: AsyncEng
         )
     await _migrated(db_engine)
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert not outcome.applied
     assert outcome.survey.blocked["scholarship_programs.approved_by"] == 1
@@ -386,7 +405,7 @@ async def test_a_kept_row_merged_into_a_typed_school_refuses(db_engine: AsyncEng
             )
         )
 
-    outcome = await reset(db_engine, real_data_from=LATER, apply=True)
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
 
     assert not outcome.applied
     assert {k: n for k, n in outcome.survey.blocked.items() if n} == {
@@ -400,10 +419,15 @@ async def test_the_database_must_be_named(db_engine: AsyncEngine) -> None:
     name = db_engine.url.database
     assert name
 
-    assert await run(dsn, confirm="someone-else", apply=True, real_data_from=LATER) == EXIT_REFUSED
+    assert (
+        await run(dsn, confirm="someone-else", apply=True, real_data_from=LATER, remove_file=_gone)
+        == EXIT_REFUSED
+    )
     assert (await _counts(db_engine, {"users"}))["users"] > 0
 
-    assert await run(dsn, confirm=name, apply=True, real_data_from=LATER) == EXIT_OK
+    assert (
+        await run(dsn, confirm=name, apply=True, real_data_from=LATER, remove_file=_gone) == EXIT_OK
+    )
     assert (await _counts(db_engine, {"users"}))["users"] == 0
 
 
@@ -411,7 +435,13 @@ async def test_a_naive_cutoff_is_refused(db_engine: AsyncEngine) -> None:
     dsn = db_engine.url.render_as_string(hide_password=False)
     naive = LATER.replace(tzinfo=None)
     assert (
-        await run(dsn, confirm=str(db_engine.url.database), apply=False, real_data_from=naive)
+        await run(
+            dsn,
+            confirm=str(db_engine.url.database),
+            apply=False,
+            real_data_from=naive,
+            remove_file=_gone,
+        )
         == EXIT_REFUSED
     )
 
@@ -439,7 +469,7 @@ async def test_a_kept_table_that_changed_rolls_everything_back(
     monkeypatch.setattr(reset_module, "fingerprints", drifting)
 
     with pytest.raises(ResetVerificationError, match="kept table changed"):
-        await reset(db_engine, real_data_from=LATER, apply=True)
+        await reset(db_engine, real_data_from=LATER, apply=True, remove_file=_gone)
     assert await _counts(db_engine, set(CLEAR)) == before
 
 
@@ -457,5 +487,120 @@ async def test_a_server_on_another_database_refuses(
         await add_user(conn, f"kept-{uuid4()}@example.test")
     await _migrated(db_engine)
 
-    assert await run(dsn, confirm="elsewhere", apply=True, real_data_from=LATER) == EXIT_REFUSED
+    assert (
+        await run(dsn, confirm="elsewhere", apply=True, real_data_from=LATER, remove_file=_gone)
+        == EXIT_REFUSED
+    )
     assert (await _counts(db_engine, {"users"}))["users"] == 1
+
+
+async def test_private_files_are_removed_after_the_rows(db_engine: AsyncEngine) -> None:
+    await seed_rehearsal(db_engine)
+    removed: list[str] = []
+
+    def bucket(key: str) -> bool:
+        removed.append(key)
+        return True
+
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=bucket)
+
+    assert outcome.survey.stored_files == SEEDED_FILES
+    assert len(removed) == SEEDED_FILES
+    assert any(key.startswith("messages/") for key in removed)
+    assert not any(key.endswith("/gone") for key in removed)
+    assert outcome.files_left == ()
+
+
+async def test_a_file_storage_refused_is_listed_and_the_reset_stands(
+    db_engine: AsyncEngine,
+) -> None:
+    await seed_rehearsal(db_engine)
+
+    def failing(key: str) -> bool:
+        raise StorageError(f"delete of {key} failed with 503")
+
+    dsn = db_engine.url.render_as_string(hide_password=False)
+    code = await run(
+        dsn,
+        confirm=str(db_engine.url.database),
+        apply=True,
+        real_data_from=LATER,
+        remove_file=failing,
+    )
+
+    assert code == EXIT_UNRESOLVED
+    assert (await _counts(db_engine, {"users"}))["users"] == 0
+
+
+async def test_files_with_no_bucket_to_remove_them_from_refuse(db_engine: AsyncEngine) -> None:
+    await seed_rehearsal(db_engine)
+    before = await _counts(db_engine, set(CLEAR))
+
+    outcome = await reset(db_engine, real_data_from=LATER, apply=True, remove_file=None)
+
+    assert not outcome.applied
+    assert any("private file(s)" in reason for reason in outcome.refused)
+    assert await _counts(db_engine, set(CLEAR)) == before
+
+
+async def test_a_later_cutoff_than_the_default_is_refused(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as conn:
+        await add_user(conn, f"kept-{uuid4()}@example.test")
+    await _migrated(db_engine)
+    dsn = db_engine.url.render_as_string(hide_password=False)
+    later = DEFAULT_REAL_DATA_FROM + dt.timedelta(seconds=1)
+
+    code = await run(dsn, confirm=str(db_engine.url.database), apply=True, real_data_from=later)
+
+    assert code == EXIT_REFUSED
+    assert (await _counts(db_engine, {"users"}))["users"] == 1
+
+
+async def test_a_lock_it_cannot_take_refuses_and_writes_nothing(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with db_engine.begin() as conn:
+        await add_user(conn, f"kept-{uuid4()}@example.test")
+    await _migrated(db_engine)
+    monkeypatch.setattr(reset_module, "LOCK_TIMEOUT", "200ms")
+    dsn = db_engine.url.render_as_string(hide_password=False)
+
+    async with db_engine.connect() as holder, holder.begin():
+        await holder.execute(text("LOCK TABLE users IN ROW EXCLUSIVE MODE"))
+        code = await run(dsn, confirm=str(db_engine.url.database), apply=True, real_data_from=LATER)
+
+    assert code == EXIT_REFUSED
+    assert (await _counts(db_engine, {"users"}))["users"] == 1
+
+
+async def test_a_cleared_table_with_no_creation_time_is_reported_not_fatal(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with db_engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE untimed_join (id int)"))
+    monkeypatch.setattr(reset_module, "CLEAR", CLEAR | {"untimed_join"})
+
+    outcome = await reset(db_engine, real_data_from=EARLIER, apply=False, remove_file=_gone)
+
+    assert outcome.refused == ()
+    assert outcome.survey.untimed == ("untimed_join",)
+
+
+@pytest.mark.parametrize(("apply", "read_only"), [(False, "on"), (True, "off")])
+async def test_the_survey_reads_one_snapshot(
+    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch, apply: bool, read_only: str
+) -> None:
+    """REPEATABLE READ, so the counts in one report cannot contradict each other."""
+    seen: dict[str, str] = {}
+    real_survey = reset_module.survey
+
+    async def spy(conn: AsyncConnection, **kwargs: Any) -> Any:
+        for setting in ("transaction_isolation", "transaction_read_only"):
+            seen[setting] = (await conn.execute(text(f"SHOW {setting}"))).scalar_one()
+        return await real_survey(conn, **kwargs)
+
+    monkeypatch.setattr(reset_module, "survey", spy)
+
+    await reset(db_engine, real_data_from=LATER, apply=apply, remove_file=_gone)
+
+    assert seen == {"transaction_isolation": "repeatable read", "transaction_read_only": read_only}

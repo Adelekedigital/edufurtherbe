@@ -30,19 +30,31 @@ locks, then ordered ``DELETE``s run, children first. Not ``TRUNCATE``: it
 refuses a table a kept table references (institutions and scholarship
 programmes reference ``users``), and ``CASCADE`` would empty those catalogues.
 Before committing, every cleared table must be empty and every kept table must
-hash exactly as before; otherwise the transaction rolls back. A dry run is a
-``READ ONLY`` transaction, so it cannot write.
+hash exactly as before; otherwise the transaction rolls back. Both runs are
+``REPEATABLE READ``, so the report is one snapshot; a dry run is ``READ ONLY``,
+so it cannot write. A database error (a lock or statement timeout) rolls back
+and refuses.
+
+PRIVATE FILES
+=============
+Intake and message uploads live in the private intake bucket, keyed by ids
+only (decisions 208, 302). Their rows are cleared, so their objects are removed
+after the commit, as the account purge does; a failure leaves the object and
+is listed by key. With files to remove and no bucket configured, it refuses:
+personal documents nothing points at would never be found again.
 """
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.domain.app_reset import (
@@ -50,12 +62,14 @@ from app.domain.app_reset import (
     Survey,
     Target,
     confirms,
+    cutoff_problem,
     deletion_order,
     refusals,
     report,
 )
 from app.domain.enums import SignupSource
-from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED
+from app.infra.etl.cli import EXIT_OK, EXIT_REFUSED, EXIT_UNRESOLVED
+from app.infra.storage.supabase import StorageError
 
 #: Kept whole: reference and seeded data, and the migration chain's state.
 KEEP: frozenset[str] = frozenset(
@@ -193,6 +207,20 @@ _KEYS = text(
     """
 )
 
+#: Tables carrying ``created_at``, which the time check reads.
+_TIMED = text(
+    "SELECT c.relname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE n.nspname = 'public' AND a.attname = 'created_at' AND NOT a.attisdropped"
+)
+
+#: Private objects the cleared rows point at: intake files not yet purged, and
+#: message files (a sent or unsent row always has its object, decision 302).
+_STORED_FILES = text(
+    "SELECT storage_key FROM intake_files WHERE purged_at IS NULL "
+    "UNION ALL SELECT storage_key FROM message_attachments"
+)
+
 #: Accounts that signed up on the new app: real ones, then our own (decision 329).
 _NEW_ACCOUNTS = text(
     "SELECT count(*) FILTER (WHERE NOT is_internal), count(*) FILTER (WHERE is_internal) "
@@ -220,6 +248,12 @@ class Outcome:
     survey: Survey
     refused: tuple[str, ...]
     applied: bool
+    #: Storage keys (ids only) whose objects could not be removed after commit.
+    files_left: tuple[str, ...] = ()
+
+
+#: Removes one private object; ``False`` when it was already gone.
+RemoveFile = Callable[[str], bool]
 
 
 def target_of(dsn: str) -> Target:
@@ -267,11 +301,22 @@ async def _keys(conn: AsyncConnection) -> list[Key]:
     return [Key(r[0], r[1], str(r[2]), r[3], tuple(r[4])) for r in rows]
 
 
+async def _present(conn: AsyncConnection) -> set[str]:
+    return {row[0] for row in (await conn.execute(_TABLES)).all()}
+
+
 async def survey(
-    conn: AsyncConnection, *, real_data_from: dt.datetime
-) -> tuple[Survey, tuple[str, ...]]:
-    """Read every fact the guard and the report need; returns the deletion order too."""
-    present = {row[0] for row in (await conn.execute(_TABLES)).all()}
+    conn: AsyncConnection,
+    *,
+    present: set[str],
+    real_data_from: dt.datetime,
+    storage_ready: bool,
+) -> tuple[Survey, tuple[str, ...], tuple[str, ...]]:
+    """Read every fact the guard and the report need.
+
+    Returns the survey, the deletion order and the storage keys of the private
+    files whose rows are cleared.
+    """
     clear = sorted(CLEAR & present)
     catalogue = sorted(set(CATALOGUE) & present)
     keep = sorted(KEEP & present)
@@ -318,22 +363,28 @@ async def survey(
             **{f"blocked:{label}": query for label, query in pointers.items()},
         },
     )
+    timed = {row[0] for row in (await conn.execute(_TIMED)).all()}
+    activity = [t for t in clear if t not in NOT_ACTIVITY]
     recent = await _scalars(
         conn,
         {
             **{
                 t: f"SELECT count(*) FROM {_q(t)} WHERE created_at >= :since"  # noqa: S608  # nosec B608
-                for t in clear
-                if t not in NOT_ACTIVITY
+                for t in activity
+                if t in timed
             },
             **{
                 f"{t} (user-created)": f"SELECT count(*) FROM {_q(t)} "  # noqa: S608  # nosec B608
                 f"WHERE {_cleared_rows(t)} AND created_at >= :since"
                 for t in catalogue
+                if t in timed
             },
         },
         since=real_data_from,
     )
+    files: tuple[str, ...] = ()
+    if {"intake_files", "message_attachments"} <= present:
+        files = tuple(row[0] for row in (await conn.execute(_STORED_FILES)).all())
     new_accounts = internal_accounts = 0
     if "users" in present:
         row = (await conn.execute(_NEW_ACCOUNTS, {"migrated": SignupSource.MIGRATED.value})).one()
@@ -361,8 +412,11 @@ async def survey(
         unsafe_keys=tuple(sorted(unsafe)),
         blocked=pick("blocked:"),
         cycle=cycle,
+        stored_files=len(files),
+        storage_ready=storage_ready,
+        untimed=tuple(t for t in activity if t not in timed),
     )
-    return found, order
+    return found, order, files
 
 
 async def fingerprints(conn: AsyncConnection, tables: Iterable[str]) -> dict[str, tuple[int, str]]:
@@ -381,18 +435,36 @@ async def fingerprints(conn: AsyncConnection, tables: Iterable[str]) -> dict[str
     return result
 
 
-async def reset(engine: AsyncEngine, *, real_data_from: dt.datetime, apply: bool) -> Outcome:
-    """Survey, and with ``apply`` delete, in one transaction. Commits only a clean reset."""
+async def reset(
+    engine: AsyncEngine,
+    *,
+    real_data_from: dt.datetime,
+    apply: bool,
+    remove_file: RemoveFile | None = None,
+) -> Outcome:
+    """Survey, and with ``apply`` delete, in one transaction. Commits only a clean reset.
+
+    ``REPEATABLE READ``, so every count in the report is one snapshot (taken
+    after the locks on an apply). The private objects the cleared rows named
+    are removed after the commit, as the account purge does (decision 277):
+    a failed removal is reported by key and never undoes the reset.
+    """
     async with engine.connect() as conn:
         transaction = await conn.begin()
         try:
-            if not apply:
-                await conn.execute(text("SET TRANSACTION READ ONLY"))
+            mode = "READ WRITE" if apply else "READ ONLY"
+            await conn.execute(text(f"SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, {mode}"))
             await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
             await conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'"))
+            present = await _present(conn)
             if apply:
-                await _lock(conn)
-            found, order = await survey(conn, real_data_from=real_data_from)
+                await _lock(conn, present)
+            found, order, files = await survey(
+                conn,
+                present=present,
+                real_data_from=real_data_from,
+                storage_ready=remove_file is not None,
+            )
             refused = refusals(found)
             if refused or not apply:
                 await transaction.rollback()
@@ -403,7 +475,19 @@ async def reset(engine: AsyncEngine, *, real_data_from: dt.datetime, apply: bool
             if transaction.is_active:
                 await transaction.rollback()
             raise
-    return Outcome(found, (), applied=True)
+    left = tuple([key for key in files if not await _removed(remove_file, key)])
+    return Outcome(found, (), applied=True, files_left=left)
+
+
+async def _removed(remove_file: RemoveFile | None, key: str) -> bool:
+    """Whether an object is gone now (removed, or already absent)."""
+    if remove_file is None:
+        return False
+    try:
+        await asyncio.to_thread(remove_file, key)
+    except StorageError:
+        return False
+    return True
 
 
 async def _delete(conn: AsyncConnection, order: tuple[str, ...], *, kept: list[str]) -> None:
@@ -424,9 +508,8 @@ async def _delete(conn: AsyncConnection, order: tuple[str, ...], *, kept: list[s
         raise ResetVerificationError("a kept table changed during the reset")
 
 
-async def _lock(conn: AsyncConnection) -> None:
+async def _lock(conn: AsyncConnection, present: set[str]) -> None:
     """Hold off writers: to cleared tables (EXCLUSIVE) and kept ones (SHARE)."""
-    present = {row[0] for row in (await conn.execute(_TABLES)).all()}
     writes = sorted((CLEAR | set(CATALOGUE)) & present)
     kept = sorted(KEEP & present)
     if writes:
@@ -435,12 +518,19 @@ async def _lock(conn: AsyncConnection) -> None:
         await conn.execute(text(f"LOCK TABLE {', '.join(map(_q, kept))} IN SHARE MODE"))
 
 
-async def run(dsn: str, *, confirm: str, apply: bool, real_data_from: dt.datetime) -> int:
+async def run(
+    dsn: str,
+    *,
+    confirm: str,
+    apply: bool,
+    real_data_from: dt.datetime,
+    remove_file: RemoveFile | None = None,
+) -> int:
     """The whole command: check the target, survey, maybe delete, report. An exit code."""
     target = target_of(dsn)
     print(f"target: {target.describe()}")
-    if real_data_from.tzinfo is None:
-        print("refused: --real-data-from needs a zone; nothing written", file=sys.stderr)
+    if problem := cutoff_problem(real_data_from):
+        print(f"refused: {problem}; nothing written", file=sys.stderr)
         return EXIT_REFUSED
     if not confirms(target, confirm):
         print(
@@ -460,9 +550,18 @@ async def run(dsn: str, *, confirm: str, apply: bool, real_data_from: dt.datetim
             )
             return EXIT_REFUSED
         try:
-            outcome = await reset(engine, real_data_from=real_data_from, apply=apply)
+            outcome = await reset(
+                engine, real_data_from=real_data_from, apply=apply, remove_file=remove_file
+            )
         except ResetVerificationError as error:
             print(f"refused: {error}; rolled back, nothing written", file=sys.stderr)
+            return EXIT_REFUSED
+        except DBAPIError as error:
+            # A lock or statement timeout, or the server going away: the class
+            # names which, and the message (which can quote SQL) is not printed.
+            name = type(error.orig).__name__
+            message = f"refused: database error ({name}); rolled back, nothing written"
+            print(message, file=sys.stderr)
             return EXIT_REFUSED
     finally:
         await engine.dispose()
@@ -474,5 +573,12 @@ async def run(dsn: str, *, confirm: str, apply: bool, real_data_from: dt.datetim
         for reason in outcome.refused:
             print(f"  - {reason}", file=sys.stderr)
         return EXIT_REFUSED
+    if outcome.files_left:
+        # Keys are ids only (decision 208), so naming them names nobody.
+        print(f"\n{len(outcome.files_left)} private file(s) left in storage:", file=sys.stderr)
+        for key in outcome.files_left:
+            print(f"  {key}", file=sys.stderr)
+        print("\napplied: rehearsal data cleared; remove those objects by hand")
+        return EXIT_UNRESOLVED
     print("\napplied: rehearsal data cleared" if outcome.applied else "\ndry run: nothing written")
     return EXIT_OK

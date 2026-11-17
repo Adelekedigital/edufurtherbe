@@ -114,18 +114,21 @@ Railway token (`project-conventions`, Railway access):
    scripts/reset_app_data.py --confirm-database <project ref>`. It prints the
    target, every kept table and every table it would clear, with row counts.
 2. Read it. Exit 1 means it refused and says why (a sign-up on the new app,
-   or activity at or after `--real-data-from`, default 2026-11-19 00:00 UTC);
-   nothing was written. Nothing overrides a real sign-up.
+   or activity at or after 2026-11-19 00:00 UTC; `--real-data-from` may only
+   move that earlier); nothing was written. Nothing overrides either check.
 3. Apply: the same command with `--apply`. One transaction; it commits only
-   if every cleared table is empty and every kept table hashes as before.
+   if every cleared table is empty and every kept table hashes as before. Then
+   it removes the dress run's private files (intake and message uploads) from
+   the intake bucket; exit 2 lists any it could not remove, by key.
 4. Run the loaders in the cutover page's order, then `provision_auth.py`: each
    reloaded account relinks to its existing Supabase sign-in by address.
 
 Kept: Alembic's version, countries, languages, degree levels, service
 offerings, legal documents, and the institution and scholarship catalogues
 (their user-typed rows are cleared). Supabase sign-ins and stored images are
-never touched. Files uploaded to the private intake bucket during the dress run
-are left as unreferenced objects.
+never touched. Admin grants and admins' reworded email lines are cleared with
+their accounts: grants return with the legacy load or `provision_auth.py
+--grant-admin`, and reworded lines are entered again.
 
 ## 5. Enable the schedules
 
