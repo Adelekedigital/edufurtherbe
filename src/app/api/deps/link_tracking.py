@@ -1,4 +1,4 @@
-"""Recording a mentor profile link's visits and shares (decisions 346, 347).
+"""Recording a mentor profile link's visits and shares (decisions 346-348).
 
 Public writes: anyone may send one, a bearer token only says who is looking.
 Each answers `204` whether or not anything was stored, so the response says
@@ -30,6 +30,7 @@ from app.domain.link_tracking import (
 from app.domain.rate_limits import SlidingWindow
 from app.infra.db.link_tracking import record_share, record_visit
 from app.infra.db.mentor_public_store import get_public_mentor_id
+from app.infra.db.visitor_day_keys import day_key
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,11 @@ async def link_target(
     Resolved exactly as `GET /mentors/{handle}` resolves it
     (`get_public_mentor_id`), so the same handles `404`. Only a live mentor is
     counted: a profile only its owner or an admin may see answers `204` and
-    records nothing, as it would be `200` to them on the read.
+    records nothing, as it would be `200` to them on the read; so does a
+    request whose UTC day another process has already ended (`day_key`).
+
+    The day's key is read from the database on every event and never kept in
+    the process past the request (decision 348).
     """
     mentor = await get_public_mentor_id(session, handle)
     if mentor is None:
@@ -86,8 +91,10 @@ async def link_target(
     else:
         agent = request.headers.get("user-agent", "")[:MAX_USER_AGENT]
         identity = guest_identity(client_address(request), agent)
-    secret: bytes = request.app.state.visitor_key_secret
-    return LinkTarget(mentor, viewer, day, visitor_key(secret, day, mentor, identity))
+    key = await day_key(session, day)
+    if key is None:
+        return None
+    return LinkTarget(mentor, viewer, day, visitor_key(key, mentor, identity))
 
 
 LinkTargetDep = Annotated[LinkTarget | None, Depends(link_target)]
