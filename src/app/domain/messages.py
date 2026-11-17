@@ -55,7 +55,7 @@ from app.domain.email_values import (
 )
 from app.domain.enums import EmailLine, SessionReasonCode
 from app.domain.message_emails import FEW_MAX, SENDER_ROWS
-from app.domain.notifications import Notification
+from app.domain.notifications import TEAM_NOTE, Notification
 from app.domain.sessions import request_deadline
 
 __all__ = [
@@ -394,6 +394,9 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "adminMentorsUrl": lambda c: _app_link(c, ADMIN_MENTORS_PATH, "adminMentorsUrl"),
     # A decline's note, which is optional: empty when the reviewer left none.
     "declineReason": lambda c: c.extras.get("reason", ""),
+    # An admin decision's note to the person it is about (decision 350): plain
+    # text, empty on any email that has none.
+    "teamNote": lambda c: c.extras.get(TEAM_NOTE, ""),
     # The return reminder is one template for a dated pause and an undated one,
     # so the side that does not apply is deliberately empty, not refused.
     "returnOn": lambda c: (

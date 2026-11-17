@@ -383,6 +383,46 @@ async def test_the_drawer_says_why_a_mentor_is_paused_or_declined(
     assert no["paused"] is None
 
 
+async def test_the_drawer_shows_each_standing_decision_and_its_note(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """Decision 350: `approved` and `declined` are one shape, `{at, by,
+    message}`, read from the decision's own event; `declined.reason` stays as
+    the old name of `message`. Only the decision that stands is shown."""
+    token = await admin_token(db_engine)
+    admin = await make_user(db_engine, uuid4(), "decider@example.test", role="super_admin")
+    yes = await make_public_mentor(db_engine, "note-yes", approved=False, listed=False)
+    await status_event(db_engine, yes, "declined", by=admin, reason="Not yet", days_ago=3)
+    await status_event(db_engine, yes, "approved", by=admin, reason="Welcome!", days_ago=1)
+    await status_event(db_engine, yes, "listed", by=admin, days_ago=1)
+    no = await make_public_mentor(db_engine, "note-no", approved=False, listed=False)
+    await status_event(db_engine, no, "declined", by=admin, reason="Add a photo")
+    migrated = await approved(db_engine, "note-migrated")
+    held = await approved(db_engine, "note-held")
+    await status_event(db_engine, held, "unlisted", by=admin, reason="Complaints")
+
+    got = {
+        mentor: (await api_client.get(f"{ADMIN}/mentors/{mentor}", headers=bearer(token))).json()
+        for mentor in (yes, no, migrated, held)
+    }
+
+    # A paused mentor is still approved.
+    assert got[held]["status"] == "paused"
+    assert got[held]["approved"] == {"at": got[held]["approved_at"], "by": None, "message": None}
+
+    assert got[yes]["declined"] is None
+    assert got[yes]["approved"]["message"] == "Welcome!"
+    assert got[yes]["approved"]["by"] == str(admin)
+    assert got[yes]["approved"]["at"] == got[yes]["approved_at"]
+    assert set(got[yes]["approved"]) == {"at", "by", "message"}
+    assert got[no]["approved"] is None
+    assert got[no]["declined"]["message"] == "Add a photo"
+    assert got[no]["declined"]["reason"] == "Add a photo"
+    assert got[no]["declined"]["by"] == str(admin)
+    assert got[migrated]["approved"]["by"] is None
+    assert got[migrated]["approved"]["message"] is None
+
+
 @pytest.mark.parametrize("who", ["draft", "not-a-mentor", "nobody"])
 async def test_the_drawer_is_404_outside_every_tab(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, who: str

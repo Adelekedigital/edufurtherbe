@@ -296,27 +296,29 @@ async def test_an_approved_mentor_is_told(
 async def test_a_declined_mentor_is_told_why(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """The reason the admin gave, carried to the person it is about."""
+    """The reason the admin gave, carried to the person it is about: as
+    `reason`, which the live template reads, and as the team's note
+    (decision 350). `reason` is the old name of `message`."""
     auth_id, target = await an_admin_and_an_applicant(db_engine, "declined")
+    said = "not enough detail on your background"
 
     await api_client.post(
         f"{ADMIN}/mentors/{target}/decision?approve=false",
-        json={"reason": "not enough detail on your background"},
+        json={"reason": said},
         headers=bearer(api_token(auth_id)),
     )
 
     assert await queued_for(db_engine, target) == [
-        ("mentor_declined", {"reason": "not enough detail on your background"})
+        ("mentor_declined", {"reason": said, "team_note": said})
     ]
 
 
 async def test_an_approval_carries_no_reason(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """**A decline reason must not ride an approval.** The status event already
-    withholds it for the same reason: there is no such thing as a reason for
-    being approved, and somebody else's words in that message would be worse
-    than none."""
+    """**A decline reason must not ride an approval.** `reason` was a decline's
+    field, so an old client's leftover decline text is ignored on an approval,
+    as before; the approval's own note is `message` (decision 350)."""
     auth_id, target = await an_admin_and_an_applicant(db_engine, "no-reason")
 
     await api_client.post(

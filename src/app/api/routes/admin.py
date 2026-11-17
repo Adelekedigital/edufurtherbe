@@ -62,7 +62,7 @@ from app.api.schemas.admin import (
     StatusEventRead,
 )
 from app.api.schemas.admin_credits import AdminCreditGrantRead, AdminGrantHistoryRead
-from app.api.schemas.common import Page
+from app.api.schemas.common import TEAM_NOTE_MAX_LENGTH, Page
 from app.api.schemas.review_reports import ModeratedReportRead, ModeratedReviewRead
 from app.api.schemas.sessions import AdminMissedReasonRead
 from app.core.errors import NotFoundError
@@ -172,11 +172,19 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
     description=(
         "**Approval and listing move together.** Approving sets both, so the "
         "mentor is live in search immediately; declining unlists them and "
-        "records `never_approved` as the reason. Splitting the two would allow a "
-        "mentor who is approved and invisible, with nothing to say which was "
-        "meant.\n\n"
-        "A reason is optional on decline — better to give one, but requiring it "
-        "turns a clear-cut decision into a form to argue with.\n\n"
+        "records `never_approved` as the unlisting's reason. Splitting the two "
+        "would allow a mentor who is approved and invisible, with nothing to say "
+        "which was meant.\n\n"
+        "**An optional `message`, the team's note to the mentor, on either "
+        "decision** (decision 350): plain text, trimmed, blank is `null`, 1 to "
+        f"{TEAM_NOTE_MAX_LENGTH} characters. It is kept as the approval or decline "
+        "event's `reason` in the mentor's history, and sent in the approved or "
+        "declined email when that email goes: only when the decision changes "
+        "the approval, so a repeated decision records its note without emailing "
+        "it. Better to give one on a decline, but requiring it turns a "
+        "clear-cut decision into a form to argue with. `reason` is its "
+        "deprecated old name: read on a decline only, and ignored on an "
+        "approval as before.\n\n"
         "**Only a submitted application is decided.** An undecided profile the "
         "mentor has not submitted answers `409` "
         "`/problems/mentor-application-not-submitted`, for approve and decline "
@@ -192,6 +200,14 @@ async def mentor_queue(rows: PendingMentorsDep) -> Page[PendingMentorRead]:
             "description": (
                 "`/problems/mentor-application-not-submitted`: the mentor has an "
                 "undecided profile but never submitted the application."
+            )
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": (
+                f"At `/message`: a `message` over {TEAM_NOTE_MAX_LENGTH} characters, "
+                "or `message` and `reason` both sent with different text (on an "
+                "approval too). At `/reason`, as before: a `reason` over "
+                f"{TEAM_NOTE_MAX_LENGTH}. Nothing is decided."
             )
         },
     },
@@ -255,6 +271,10 @@ async def set_mentor_listing(changed: ListedMentorDep) -> MentorListingChangedRe
         "safe: an approved mentor is no longer in review, so nobody is approved "
         "or emailed twice. Answers `200` whatever the split. Approval only: an "
         "unknown field is a `422`.\n\n"
+        "An optional `message` is the team's note, the same for each mentor "
+        "approved now, with the single decision's rules (decision 350); one over "
+        f"{TEAM_NOTE_MAX_LENGTH} characters is a `422` at `/message` and approves "
+        "nobody.\n\n"
         "Mentor-approval admins and super admins."
     ),
     responses=ADMIN_RESPONSES,

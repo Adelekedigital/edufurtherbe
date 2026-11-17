@@ -1,4 +1,4 @@
-"""A dashboard window's bounds are never null (decisions 246, 249).
+"""A dashboard window's bounds are never null (decisions 246, 249, 353).
 
 Every figure is optional (`test_added_fields_stay_optional`); the bounds are not,
 because a window without them cannot be placed and no default instant is true.
@@ -12,12 +12,18 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.schemas.mentee_stats import MenteeStatsRead, MenteeStatsWindowRead
-from app.api.schemas.mentor_stats import MentorStatsRead, MentorStatsWindowRead
+from app.api.schemas.mentor_stats import (
+    MentorLinkStatsRead,
+    MentorLinkStatsWindowRead,
+    MentorStatsRead,
+    MentorStatsWindowRead,
+)
 
 #: Each dashboard, with its window model.
 DASHBOARDS = [
     (MentorStatsRead, MentorStatsWindowRead),
     (MenteeStatsRead, MenteeStatsWindowRead),
+    (MentorLinkStatsRead, MentorLinkStatsWindowRead),
 ]
 
 

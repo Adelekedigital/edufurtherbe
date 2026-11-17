@@ -11,9 +11,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationInfo, field_validator
 
-from app.api.schemas.common import Normalised
+from app.api.schemas.common import Normalised, TeamNote
 from app.domain.admin_notes import NOTE_BODY_MAX_LENGTH
 from app.domain.enums import CoverColor, FeaturedSource
 from app.domain.session_type_limit import SESSION_TYPE_LIMIT_CEILING
@@ -62,16 +62,42 @@ class MergeRequest(Normalised):
     winning_id: UUID
 
 
-class DeclineRequest(Normalised):
-    """Why an application was declined.
+class MentorDecisionWrite(BaseModel):
+    """The team's optional note on an approval or a decline (decision 350).
 
-    **Optional.** A reason is better for the applicant and for whoever reads the
-    record later, but requiring one turns a clear-cut decline into a form to
+    **Optional.** A note is better for the applicant and for whoever reads the
+    record later, but requiring one turns a clear-cut decision into a form to
     fight with, and an admin typing "no" to satisfy a validator has told nobody
-    anything.
+    anything. Unknown fields are ignored, as they always were here.
     """
 
-    reason: str | None = Field(default=None, max_length=1000)
+    #: Declared before `message`, whose check reads it.
+    reason: TeamNote = Field(
+        default=None,
+        description=(
+            "**Deprecated**: the old name of `message`, kept for older clients. Read "
+            "on a decline only, as before; ignored on an approval. Sent beside "
+            "`message`, it must say the same."
+        ),
+        json_schema_extra={"deprecated": True},
+    )
+    message: TeamNote = Field(default=None, validate_default=True)
+
+    @field_validator("message")
+    @classmethod
+    def _one_note(cls, value: str | None, info: ValidationInfo) -> str | None:
+        reason = info.data.get("reason")
+        if value is not None and reason is not None and value != reason:
+            message = "`message` and `reason` disagree: send `message` alone"
+            raise ValueError(message)
+        return value
+
+    def note(self, *, approve: bool) -> str | None:
+        """The note this decision carries: `message`, else on a decline the
+        old `reason`. A leftover decline reason never rides an approval."""
+        if self.message is not None or approve:
+            return self.message
+        return self.reason
 
 
 class ListingRequest(Normalised):
@@ -88,7 +114,14 @@ class StatusEventRead(BaseModel):
 
     id: UUID
     status_type: str
-    reason: str | None = None
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "On `approved` and `declined`, the note the deciding admin left the "
+            "mentor, or null (decision 350). On `unlisted`, why: `never_approved`, "
+            "`mentor_paused`, or an admin's words for other admins."
+        ),
+    )
     created_at: datetime
     #: Null for rows the backfill wrote, where nobody made the decision.
     created_by: UUID | None = None
@@ -233,6 +266,8 @@ class BulkDecisionWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_ids: list[UUID] = Field(min_length=1, max_length=MAX_BULK_DECISIONS)
+    #: The same note for each mentor approved (decision 350).
+    message: TeamNote = None
 
 
 class BulkDecisionRead(BaseModel):

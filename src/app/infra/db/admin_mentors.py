@@ -41,6 +41,7 @@ from app.infra.db.predicates import (
     application_declined,
     application_in_review,
     live,
+    mentor_approved,
     mentor_listed,
     mentor_paused,
     person_like,
@@ -273,6 +274,23 @@ async def _recent_bookings(session: AsyncSession, mentor: UUID) -> list[dict[str
     return [dict(row) for row in (await session.execute(statement)).mappings()]
 
 
+def _decision_columns() -> list[Any]:
+    """The drawer's standing decisions beyond what a tab row shows (decision
+    350): who decided, the approval's note, and whether the mentor is approved.
+    The same `latest_decision` read as the row's dates and decline note; the
+    drawer alone reads them, so the tab lists do not pay for them."""
+    return [
+        mentor_approved().label("is_approved"),
+        latest_decision(MentorStatusEvent.created_by, MentorStatusType.APPROVED).label(
+            "approved_by"
+        ),
+        latest_decision(MentorStatusEvent.reason, MentorStatusType.APPROVED).label("approval_note"),
+        latest_decision(MentorStatusEvent.created_by, MentorStatusType.DECLINED).label(
+            "declined_by"
+        ),
+    ]
+
+
 async def mentor_detail(
     session: AsyncSession, mentor: UUID, *, now: dt.datetime
 ) -> dict[str, Any] | None:
@@ -284,9 +302,9 @@ async def mentor_detail(
     row = (
         (
             await session.execute(
-                _row_statement(now).where(
-                    MentorProfile.user_id == mentor, _tab_column().is_not(None)
-                )
+                _row_statement(now)
+                .add_columns(*_decision_columns())
+                .where(MentorProfile.user_id == mentor, _tab_column().is_not(None))
             )
         )
         .mappings()
