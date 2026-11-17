@@ -1081,3 +1081,21 @@ class EntryPoint(StrEnum):
     HOME = "home"
     ONBOARDING_GUEST = "onboarding_guest"
     REBOOK_AFTER_REVIEW = "rebook_after_review"
+
+
+class LinkVia(StrEnum):
+    """Which of our own surfaces a visitor's profile link came from: the
+    ``?via=`` the front end appends to a link it copies or shares (decision
+    346). Anything else a link carries is not ours to record."""
+
+    COPY = "copy"
+    SHARE = "share"
+    INVITE = "invite"
+
+
+class ShareMethod(StrEnum):
+    """How a profile link was shared (decision 346): copied to the clipboard,
+    or through the device's own share sheet."""
+
+    COPY = "copy"
+    NATIVE = "native"

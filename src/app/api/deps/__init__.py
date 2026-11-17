@@ -84,6 +84,7 @@ from app.api.deps.interest import (
     WithdrawnInterestDep,
 )
 from app.api.deps.jobs import DailyPresenceDep, ReminderCallbackDep, RuntimeJobDep
+from app.api.deps.link_tracking import ShareRecordedDep, VisitRecordedDep
 from app.api.deps.matches import MentorMatchesDep
 from app.api.deps.mentors import (
     FeaturedMentorDep,
@@ -364,6 +365,7 @@ __all__ = [
     "SessionTypesDep",
     "SessionsPageDep",
     "SettingsDep",
+    "ShareRecordedDep",
     "SimilarMentorsDep",
     "SlotsDep",
     "StartedPreviewDep",
@@ -385,6 +387,7 @@ __all__ = [
     "UploadedMessageFileDep",
     "UpsertedGoalDep",
     "UpsertedProfileDep",
+    "VisitRecordedDep",
     "WithdrawnInterestDep",
     "WithdrawnSessionDep",
     "WrittenReviewDep",

@@ -46,6 +46,7 @@ from app.domain.emails import normalise_email
 from app.domain.enums import AuthMethod
 from app.infra.db.models.user import User
 from app.infra.db.predicates import LIVE
+from app.infra.db.slugs import give_placeholder
 
 __all__ = ["provision_first_sign_in", "record_auth_method"]
 
@@ -87,6 +88,8 @@ async def provision_first_sign_in(
     )
     user_id = created.scalar_one_or_none()
     if user_id is not None:
+        # No name yet: a placeholder handle, replaced once when one is saved.
+        await give_placeholder(session, user_id)
         await session.commit()
         # The id, never the address: an email in a log line is PII in a place
         # nobody governs.

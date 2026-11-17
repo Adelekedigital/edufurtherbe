@@ -31,16 +31,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import asdict
 
-from sqlalchemy import text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.enums import SignupSource
 from app.domain.transform import UserRow
+from app.infra.db.models.user import User
+from app.infra.db.predicates import LIVE, restorable
+from app.infra.db.slugs import OPEN_HANDLE_SQL, give_missing_slugs
 from app.infra.db.triggers import timestamps_from_source
 
 __all__ = ["UPSERT_USER", "UserLoader", "timestamps_from_source"]
 
-UPSERT_USER = """
+UPSERT_USER = f"""
 INSERT INTO users (
     legacy_bubble_id, email, primary_role, timezone,
     created_at, updated_at, email_verified_at,
@@ -59,10 +62,14 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     email_verified_at = EXCLUDED.email_verified_at,
     first_name        = EXCLUDED.first_name,
     last_name         = EXCLUDED.last_name,
-    slug              = EXCLUDED.slug,
+    -- A final handle is published in links: an import never moves it.
+    slug              = CASE WHEN {OPEN_HANDLE_SQL}
+                             THEN COALESCE(EXCLUDED.slug, users.slug)
+                             ELSE users.slug END,
+    slug_is_placeholder = (EXCLUDED.slug IS NULL AND users.slug_is_placeholder),
     last_active_at    = EXCLUDED.last_active_at,
     signup_source     = EXCLUDED.signup_source
-"""
+"""  # noqa: S608  # nosec B608 - only the module constant OPEN_HANDLE_SQL; values are bound
 
 
 class UserLoader:
@@ -70,6 +77,23 @@ class UserLoader:
 
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
+        #: Bubble ids whose legacy slug another account already held, so they
+        #: were given their own handle instead; the script names them.
+        self.slugs_held_elsewhere: list[str] = []
+
+    async def _held_elsewhere(self, rows: Sequence[UserRow]) -> dict[str, str | None]:
+        """Each batch slug another account holds: a live one, or a self-deleted
+        one that may still restore (every other handle writer skips those too).
+        Maps slug to its holder's Bubble id, ``None`` for an app account."""
+        slugs = [row.slug for row in rows if row.slug]
+        if not slugs:
+            return {}
+        held = await self._connection.execute(
+            select(User.slug, User.legacy_bubble_id).where(
+                User.slug.in_(slugs), or_(LIVE, and_(*restorable(func.now())))
+            )
+        )
+        return {slug: holder for slug, holder in held.all() if slug is not None}
 
     async def load(self, rows: Sequence[UserRow]) -> int:
         """Upsert every row and return how many were written.
@@ -81,9 +105,15 @@ class UserLoader:
         if not rows:
             return 0
 
+        held = await self._held_elsewhere(rows)
         async with timestamps_from_source(self._connection, "users"):
             for row in rows:
                 parameters = asdict(row)
+                if row.slug in held and held[row.slug] != row.legacy_bubble_id:
+                    # Taking it would abort the load on the unique index, or
+                    # block a restore; `give_missing_slugs` below gives one.
+                    parameters["slug"] = None
+                    self.slugs_held_elsewhere.append(row.legacy_bubble_id)
                 # The enum member is a StrEnum, so it is already its own wire
                 # value; passing the member itself would send the *name* on some
                 # drivers — the exact defect the deleted `pg_enum` helper
@@ -93,5 +123,8 @@ class UserLoader:
                 # Every account this loads came from the old platform.
                 parameters["signup_source"] = SignupSource.MIGRATED.value
                 await self._connection.execute(text(UPSERT_USER), parameters)
+            # Every account has a handle (owner, 2026-11-14): a legacy row
+            # with no slug gets one now, not at a later backfill run.
+            await give_missing_slugs(self._connection, legacy_only=True)
 
         return len(rows)

@@ -117,6 +117,11 @@ class User(TimestampMixin, Base):
     # without breaking every URL that used it. Carried anyway, deliberately —
     # the alternative is discarding live profile links.
     slug: Mapped[str | None] = mapped_column(Text)
+    #: The handle is a `user-…` placeholder from first sign-in, replaced once
+    #: by one made from the name (`domain.slugs`); false means final.
+    slug_is_placeholder: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     # UX hint. NEVER an authorization check — see PrimaryRole.
     primary_role: Mapped[PrimaryRole] = mapped_column(
@@ -179,6 +184,13 @@ class User(TimestampMixin, Base):
             "slug",
             unique=True,
             postgresql_where=text("deleted_at IS NULL AND slug IS NOT NULL"),
+        ),
+        # Handles a self-deleted account may still restore: a new handle skips
+        # them (`infra.db.slugs`), and this keeps that check off a full scan.
+        Index(
+            "ix_users_slug_deleted",
+            "slug",
+            postgresql_where=text("deleted_at IS NOT NULL AND slug IS NOT NULL"),
         ),
         # No DESC. A single-column btree is scanned in either direction, so
         # `ORDER BY last_active_at DESC` uses this index exactly as well as a

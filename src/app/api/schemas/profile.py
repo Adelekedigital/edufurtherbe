@@ -739,8 +739,9 @@ class UserProfileWrite(Normalised):
     #: **`str`, not `str | None`**, so a name can be changed and never cleared:
     #: an explicit `null` — or a blank, which `Normalised` turns into one — is a
     #: `422`, the rule `timezone` follows. Omitted leaves it alone. On `users`,
-    #: written in the same transaction; the slug is never derived from it, so a
-    #: rename keeps every shared profile link (#213).
+    #: written in the same transaction. The first time both names are saved
+    #: they replace a placeholder handle, once; after that a rename never moves
+    #: the handle, so every shared profile link keeps working (#213, #684).
     #:
     #: The `None` default is never validated or written — the writer takes
     #: `exclude_unset` — and it is what lets the spec say "a string, optional"

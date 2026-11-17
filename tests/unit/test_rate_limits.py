@@ -44,3 +44,14 @@ def test_refusals_count_the_current_spell_so_it_is_reported_once() -> None:
     assert (first, window.refusals) == (1, 2)
     window.allow(now=61.0)
     assert window.refusals == 0
+
+
+def test_take_names_only_the_first_refusal_of_a_spell() -> None:
+    """The one a caller logs (decisions 242, 347): never one line per request."""
+    window = SlidingWindow(limit=1, window_seconds=60)
+
+    assert window.take(now=0.0) == (True, False)
+    assert window.take(now=1.0) == (False, True)
+    assert window.take(now=2.0) == (False, False)
+    assert window.take(now=61.0) == (True, False)
+    assert window.take(now=62.0) == (False, True)

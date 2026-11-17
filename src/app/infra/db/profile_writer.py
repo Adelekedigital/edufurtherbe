@@ -58,6 +58,7 @@ from app.infra.db.models.reference import Country
 from app.infra.db.models.scholarships import UserAward
 from app.infra.db.models.user import User, UserLanguage, UserProfile
 from app.infra.db.offerings import live_offering_ids
+from app.infra.db.slugs import NAME_AND_HANDLE, settle_name_slug
 
 GOAL_COLUMNS = (
     "degree_goal_id",
@@ -478,7 +479,15 @@ async def upsert_profile(session: AsyncSession, user_id: UUID, payload: dict[str
     # scoped to the owner's id, in this same transaction (booking request item 7).
     user_values = {key: value for key, value in payload.items() if key in USER_COLUMNS}
     if user_values:
-        await session.execute(update(User).where(User.id == user_id).values(**user_values))
+        written = await session.execute(
+            update(User).where(User.id == user_id).values(**user_values).returning(*NAME_AND_HANDLE)
+        )
+        known = written.one_or_none()
+        if known is not None and user_values.keys() & {"first_name", "last_name"}:
+            # A missing or placeholder handle becomes the names', once (owner,
+            # 2026-11-14); a final one is untouched. The write's RETURNING is
+            # what settling needs, so it reads nothing more.
+            await settle_name_slug(session, user_id, known)
     values = {key: value for key, value in payload.items() if key in PROFILE_COLUMNS}
     existing = await session.execute(
         select(UserProfile.user_id).where(UserProfile.user_id == user_id)

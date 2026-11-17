@@ -1,0 +1,76 @@
+"""The handle alphabet, shared by invite codes and profile handles (rule 8).
+
+One fold from a name to ``[a-z0-9-]``, one random alphabet, and one list of
+route words neither may be: a second copy of any of these drifts (it had
+already: the two folds disagreed on ``Søren``, the two lists on ``login``).
+"""
+
+from __future__ import annotations
+
+import re
+import secrets
+import string
+import unicodedata
+from typing import Literal
+
+#: Lowercase letters and digits: the random part of a default invite code and
+#: of a placeholder profile handle.
+HANDLE_ALPHABET = string.ascii_lowercase + string.digits
+
+_NOT_HANDLE = re.compile(r"[^a-z0-9]+")
+
+#: Route and platform words no handle may be on its own: an invite code or a
+#: profile handle that read as one of these would pass for an official page.
+#: The profile list the frontend asked for (14 Nov) is part of it.
+RESERVED_HANDLES = frozenset(
+    {
+        "about", "account", "admin", "administrator", "api", "app", "auth",
+        "contact", "dashboard", "edit", "edufurther", "explore", "help", "home",
+        "invite", "invites", "login", "logout", "me", "mentees", "mentor",
+        "mentors", "nan", "new", "null", "official", "privacy", "referral",
+        "referrals", "root", "security", "settings", "signin", "signup", "staff",
+        "support", "system", "team", "terms", "test", "undefined",
+    }
+)  # fmt: skip
+
+
+def strip_marks(text: str, *, form: Literal["NFKD", "NFD"] = "NFKD") -> str:
+    """``text`` decomposed with its combining marks dropped: ``Zoë`` to ``Zoe``.
+
+    The one decomposition every fold here builds on (rule 8). NFKD, the
+    default, also unfolds compatibility forms (``ﬁ`` to ``fi``) for handles
+    made from names and for search. NFD touches accents only: the import's
+    rule, which must never alter a legacy handle beyond its accents.
+    """
+    return "".join(ch for ch in unicodedata.normalize(form, text) if not unicodedata.combining(ch))
+
+
+#: Latin letters with no decomposition, spelled as a reader would: without
+#: this ``Søren`` folds to ``s-ren`` and ``Łukasz`` to ``ukasz``. Names only;
+#: the import's fold (NFD, accents only) never uses it.
+_SPELLED = str.maketrans(
+    {
+        "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d",
+        "Ð": "D", "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe",
+        "Œ": "OE", "þ": "th", "Þ": "Th", "\u0131": "i", "ħ": "h", "Ħ": "H",
+        "ŋ": "n", "Ŋ": "N",
+    }
+)  # fmt: skip
+
+
+def fold_to_handle(text: str) -> str:
+    """``text`` as lowercase ``[a-z0-9]`` runs joined by one ``-``.
+
+    NFKD then dropping the combining marks takes ``Zoë`` to ``zoe``; a Latin
+    letter with no decomposition is spelled out (``ø`` to ``o``, ``ß`` to
+    ``ss``); any other character (``山``, punctuation, space) separates. Never
+    starts or ends with ``-``; empty when nothing usable is left.
+    """
+    spelled = strip_marks(text.translate(_SPELLED))
+    ascii_text = "".join(ch if ch.isascii() else " " for ch in spelled)
+    return _NOT_HANDLE.sub("-", ascii_text.lower()).strip("-")
+
+
+def random_token(length: int) -> str:
+    """``length`` characters of `HANDLE_ALPHABET`, from ``secrets``."""
+    return "".join(secrets.choice(HANDLE_ALPHABET) for _ in range(length))
