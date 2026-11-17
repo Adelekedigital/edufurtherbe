@@ -1,4 +1,4 @@
-"""Mentor profile link tracking: what a visit or a share records (decisions 346, 347).
+"""Mentor profile link tracking: what a visit or a share records (decisions 346-348).
 
 Pure: the client's hints are normalised here, and the visitor key is computed
 here, so the rules are tested without a request or a database. The writes are
@@ -8,7 +8,6 @@ and `/shares`.
 
 from __future__ import annotations
 
-import datetime as dt
 import hashlib
 import hmac
 import re
@@ -19,6 +18,8 @@ from app.domain.enums import LinkVia
 
 #: How long a visitor key is: one HMAC-SHA256 digest.
 VISITOR_KEY_BYTES = 32
+#: How long a day's random key is (decision 348), the HMAC-SHA256 output size.
+DAY_KEY_BYTES = 32
 #: The longest host name DNS allows; a longer referrer is dropped, not cut.
 MAX_REFERRER_HOST = 253
 
@@ -82,14 +83,13 @@ def guest_identity(address: str, user_agent: str) -> str:
     return f"guest:{address}\n{user_agent}"
 
 
-def visitor_key(secret: bytes, day: dt.date, mentor_id: UUID, identity: str) -> bytes:
+def visitor_key(day_key: bytes, mentor_id: UUID, identity: str) -> bytes:
     """The 32-byte key one visitor has for one mentor on one UTC day.
 
-    HMAC-SHA256 under a key derived from ``secret`` and ``day``, so yesterday's
-    keys cannot be matched with today's, over the mentor and the identity, so
-    one visitor's keys for two mentors cannot be matched either. Nothing about
-    the visitor can be read back from it without the secret.
+    HMAC-SHA256 under that day's random key (decision 348), over the mentor and
+    the identity, so one visitor's keys for two mentors or two days cannot be
+    matched. The day's key is deleted once the day is over, after which nobody
+    can recompute a stored key from a person.
     """
-    daily = hmac.new(secret, day.isoformat().encode(), hashlib.sha256).digest()
     message = f"{mentor_id}\n{identity}".encode()
-    return hmac.new(daily, message, hashlib.sha256).digest()
+    return hmac.new(day_key, message, hashlib.sha256).digest()

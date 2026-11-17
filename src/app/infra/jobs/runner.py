@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError, ValidationError
+from app.domain.activity import activity_day
 from app.domain.availability import booking_window
 from app.domain.credits import credit_ladder
 from app.domain.institutions import CatalogueError, CatalogueRow, to_catalogue_row
@@ -63,6 +64,7 @@ from app.infra.db.session_writer import (
 )
 from app.infra.db.session_writer.attendance import RECORDS_READ_BUDGET
 from app.infra.db.triggers import timestamps_from_source_across
+from app.infra.db.visitor_day_keys import prune_past_keys
 from app.infra.etl.institutions import country_ids, link_education, mirror
 from app.infra.jobs.manifest import RUNTIME_JOB_NAMES
 from app.infra.posthog_dashboards.run import Plan, sync_dashboards
@@ -80,13 +82,19 @@ CATALOGUE_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 SETTLE_SESSIONS_BUDGET = dt.timedelta(seconds=120)
 
 
-def retention_counts(files: dict[str, int], *, idempotency_keys: int) -> dict[str, int]:
+def retention_counts(
+    files: dict[str, int], *, idempotency_keys: int, visitor_day_keys: int
+) -> dict[str, int]:
     """What the daily retention job reports — the one place its keys are named.
 
     The file steps' keys come from `sweep_counts` and `message_sweep_counts`;
-    this adds the key sweep's. In a dry run each is what *would* be removed.
+    this adds the two key sweeps'. In a dry run each is what *would* be removed.
     """
-    return {**files, "idempotency_keys_deleted": idempotency_keys}
+    return {
+        **files,
+        "idempotency_keys_deleted": idempotency_keys,
+        "visitor_day_keys_deleted": visitor_day_keys,
+    }
 
 
 #: Per job, the counts that describe a run rather than count work done: a
@@ -387,12 +395,14 @@ class RuntimeJobs:
 
     async def _sweep_intake_files(self, *, dry_run: bool) -> dict[str, int]:
         """The daily retention job: intake files, message files never sent
-        (decision 302), then expired idempotency keys.
+        (decision 302), expired idempotency keys, and past visitor day keys.
 
-        The key sweep (#353) rides here rather than on a schedule of its own,
-        because both steps exist for one reason — not keeping a person's words
-        past their use — and a second schedule would be one more thing to set
-        up on every environment. It runs even with no storage configured.
+        The key sweeps (#353, decision 348) ride here rather than on schedules
+        of their own, because every step exists for one reason — not keeping
+        what could tie data to a person past its use — and another schedule
+        would be one more thing to set up on every environment. Visits delete
+        past day keys too; this run catches a day nobody visited after. Both
+        key sweeps run even with no storage configured.
         """
         settings = self.settings
         now = dt.datetime.now(dt.UTC)
@@ -401,6 +411,9 @@ class RuntimeJobs:
             factory = create_session_factory(engine)
             async with factory() as session:
                 keys = await sweep_expired_keys(session, now=now, dry_run=dry_run)
+            async with factory() as session:
+                day_keys = await prune_past_keys(session, today=activity_day(now), dry_run=dry_run)
+                await session.commit()
             with httpx.Client(timeout=CATALOGUE_TIMEOUT) as client:
                 storage = intake_storage_for(settings, client)
                 if storage is None:
@@ -427,7 +440,7 @@ class RuntimeJobs:
                             unused_hours=settings.intake_file_unused_hours,
                             dry_run=dry_run,
                         )
-            return retention_counts(files, idempotency_keys=keys)
+            return retention_counts(files, idempotency_keys=keys, visitor_day_keys=day_keys)
         finally:
             await engine.dispose()
 

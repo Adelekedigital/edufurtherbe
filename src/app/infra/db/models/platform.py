@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.enums import LinkVia, NotificationPreferenceType, ShareMethod
-from app.domain.link_tracking import MAX_REFERRER_HOST, VISITOR_KEY_BYTES
+from app.domain.link_tracking import DAY_KEY_BYTES, MAX_REFERRER_HOST, VISITOR_KEY_BYTES
 from app.infra.db.base import Base, TimestampMixin
 from app.infra.db.types import check_is_known, str_enum
 
@@ -389,8 +389,9 @@ class MentorProfileVisit(Base):
     (decision 346). Insert only; our own record of profile visits from launch.
 
     ``visitor_key`` is a keyed hash of who was looking, never who they are: the
-    signed-in user, or a guest's address and browser, hashed with a secret, the
-    day and the mentor (``domain.link_tracking.visitor_key``). ``UNIQUE
+    signed-in user, or a guest's address and browser, and the mentor, hashed
+    under the day's random key (``domain.link_tracking.visitor_key``,
+    ``VisitorDayKey``), which is deleted after its day. ``UNIQUE
     (mentor_user_id, day, visitor_key)`` makes a repeat on the same day a no-op,
     so recording is ``ON CONFLICT DO NOTHING`` and a race cannot count twice.
     ``via`` and ``referrer_host`` are the first visit's. Goes with the mentor.
@@ -469,4 +470,31 @@ class MentorProfileShare(Base):
         ),
         CheckConstraint(check_is_known("method", ShareMethod), name="method_is_known"),
         CheckConstraint("signed_in OR NOT own", name="own_is_signed_in"),
+    )
+
+
+class VisitorDayKey(Base):
+    """One UTC day's random key for profile link visitor keys (decision 348).
+
+    ``key`` is 32 random bytes, drawn by whichever process asks first that day;
+    ``UNIQUE (day)`` makes that get-or-create ``ON CONFLICT (day) DO NOTHING``,
+    so every process agrees. A key is deleted once its day is over, after which
+    no stored ``visitor_key`` of that day can be linked to anybody. Insert and
+    delete only.
+    """
+
+    __tablename__ = "visitor_day_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("uuid_generate_v7()")
+    )
+    day: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    key: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        UniqueConstraint("day", name="uq_visitor_day_keys_day"),
+        CheckConstraint(f"octet_length(key) = {DAY_KEY_BYTES}", name="key_is_32_bytes"),
     )

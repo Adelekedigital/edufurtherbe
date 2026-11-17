@@ -127,10 +127,10 @@ async def test_an_imported_handle_is_final_even_before_a_name(db_engine: AsyncEn
 async def test_a_clash_counts_up(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
         first = await add_user(
-            conn, "ada1.slug@example.com", first_name="Ada", last_name="Lovelace"
+            conn, "ada1.slug@example.com", slug=None, first_name="Ada", last_name="Lovelace"
         )
         second = await add_user(
-            conn, "ada2.slug@example.com", first_name="Ada", last_name="Lovelace"
+            conn, "ada2.slug@example.com", slug=None, first_name="Ada", last_name="Lovelace"
         )
     async with AsyncSession(db_engine) as session:
         for user_id in (first, second):
@@ -143,8 +143,10 @@ async def test_a_clash_counts_up(db_engine: AsyncEngine) -> None:
 
 async def test_the_backfill_fills_only_what_is_missing(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
-        named = await add_user(conn, "bf1.slug@example.com", first_name="Grace", last_name="Hopper")
-        nameless = await add_user(conn, "bf2.slug@example.com")
+        named = await add_user(
+            conn, "bf1.slug@example.com", slug=None, first_name="Grace", last_name="Hopper"
+        )
+        nameless = await add_user(conn, "bf2.slug@example.com", slug=None)
         kept = await add_user(conn, "bf3.slug@example.com", slug="kept-handle", first_name="Kat")
         odd = await add_user(conn, "bf4.slug@example.com", slug="-odd-handle")
     async with AsyncSession(db_engine) as session:
@@ -176,7 +178,7 @@ async def test_a_handle_a_deleted_account_can_restore_is_not_given_away(
             {"p": now + dt.timedelta(days=30), "u": gone},
         )
         newcomer = await add_user(
-            conn, "john.slug@example.com", first_name="John", last_name="Smith"
+            conn, "john.slug@example.com", slug=None, first_name="John", last_name="Smith"
         )
     async with AsyncSession(db_engine) as session:
         await give_slug(session, newcomer)
@@ -193,7 +195,7 @@ async def test_a_handle_a_deleted_account_cannot_restore_is_free(db_engine: Asyn
             conn, "removed.slug@example.com", slug="mary-jones", deleted_at=dt.datetime.now(dt.UTC)
         )
         newcomer = await add_user(
-            conn, "mary.slug@example.com", first_name="Mary", last_name="Jones"
+            conn, "mary.slug@example.com", slug=None, first_name="Mary", last_name="Jones"
         )
     async with AsyncSession(db_engine) as session:
         await give_slug(session, newcomer)
@@ -225,7 +227,7 @@ async def test_the_backfill_keeps_a_migrated_rows_modified_date(db_engine: Async
     legacy = dt.datetime(2024, 3, 1, 12, 0, tzinfo=dt.UTC)
     async with db_engine.begin() as conn:
         user_id = await add_user(
-            conn, "dated.slug@example.com", first_name="Dated", last_name="Row"
+            conn, "dated.slug@example.com", slug=None, first_name="Dated", last_name="Row"
         )
         async with timestamps_from_source(conn, "users"):
             await conn.execute(
@@ -351,7 +353,9 @@ async def test_a_reload_never_moves_a_final_handle(db_engine: AsyncEngine) -> No
 
 async def test_a_dry_run_backfill_writes_nothing(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as conn:
-        user_id = await add_user(conn, "dry.slug@example.com", first_name="Dry", last_name="Run")
+        user_id = await add_user(
+            conn, "dry.slug@example.com", slug=None, first_name="Dry", last_name="Run"
+        )
     async with AsyncSession(db_engine) as session:
         result = await backfill_slugs(session, apply=False)
         await session.commit()
@@ -364,7 +368,7 @@ async def test_a_last_name_alone_waits_for_a_first_name(db_engine: AsyncEngine) 
     """A handle is named after the person: without a first name it stays a
     placeholder, so a later first name still makes the real one."""
     async with db_engine.begin() as conn:
-        user_id = await add_user(conn, "lastname.slug@example.com", last_name="Okafor")
+        user_id = await add_user(conn, "lastname.slug@example.com", slug=None, last_name="Okafor")
     async with AsyncSession(db_engine) as session:
         await give_slug(session, user_id)
         await session.commit()
@@ -391,7 +395,12 @@ async def test_a_restored_account_without_a_handle_gets_one(db_engine: AsyncEngi
     now = dt.datetime.now(dt.UTC)
     async with db_engine.begin() as conn:
         user_id = await add_user(
-            conn, "restore.slug@example.com", first_name="Remy", last_name="Lebeau", deleted_at=now
+            conn,
+            "restore.slug@example.com",
+            slug=None,
+            first_name="Remy",
+            last_name="Lebeau",
+            deleted_at=now,
         )
         await conn.execute(
             text("UPDATE users SET deletion_purge_at = :p WHERE id = :u"),
@@ -410,7 +419,7 @@ async def test_a_purged_account_holds_no_handle_and_no_placeholder_flag(
     now = dt.datetime.now(dt.UTC)
     async with db_engine.begin() as conn:
         user_id = await add_user(
-            conn, "purge.slug@example.com", deleted_at=now - dt.timedelta(days=31)
+            conn, "purge.slug@example.com", slug=None, deleted_at=now - dt.timedelta(days=31)
         )
         await conn.execute(
             text(

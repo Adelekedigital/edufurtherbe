@@ -25,12 +25,9 @@ optional fields whose absence is silent.
 
 import base64
 import binascii
-import hashlib
-import hmac
 import json
 import os
 import re
-import secrets
 from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -713,14 +710,13 @@ class Settings(BaseSettings):
         default=None, validation_alias=env_key("edge_proxy_next_secret")
     )
 
-    @field_validator("edge_proxy_secret", "edge_proxy_next_secret", "visitor_key_secret")
+    @field_validator("edge_proxy_secret", "edge_proxy_next_secret")
     @classmethod
     def a_strong_secret(cls, value: SecretStr | None, info: ValidationInfo) -> SecretStr | None:
         """Blank is unset. Otherwise the value stops the app at start-up unless it
         is at least 32 visible ASCII characters: a short secret is a lock anyone
         can open, and a pasted space, newline or non-ASCII letter would never
-        equal the header the proxy sends, refusing every request. The visitor-key
-        secret (decision 347) is held to the same rule: short, it is guessable."""
+        equal the header the proxy sends, refusing every request."""
         if value is None or not value.get_secret_value().strip():
             return None
         if not _PROXY_SECRET.fullmatch(value.get_secret_value()):
@@ -967,26 +963,6 @@ class Settings(BaseSettings):
     link_events_per_minute: int = Field(
         default=600, ge=1, le=100_000, validation_alias=env_key("link_events_per_minute")
     )
-    #: **The key visitor keys are derived from** (decision 347): a visitor is
-    #: counted once a day by an HMAC under this key and the day, never by a
-    #: stored address, browser or user id. Unset, the key is derived from
-    #: `DATABASE_URL` (`visitor_secret`), which every process of a deployment
-    #: shares; setting it keeps counting steady through a database password
-    #: rotation. Changing either starts that day's counting afresh.
-    visitor_key_secret: SecretStr | None = Field(
-        default=None, validation_alias=env_key("visitor_key_secret")
-    )
-
-    def visitor_secret(self) -> bytes:
-        """The visitor-key secret every process of a deployment shares: the
-        setting, else an HMAC of the database URL (never the URL itself), else
-        a random key for a process with no database configured (tests)."""
-        if self.visitor_key_secret is not None:
-            return self.visitor_key_secret.get_secret_value().encode()
-        if self.database_url is not None:
-            dsn = self.database_url.get_secret_value().encode()
-            return hmac.new(dsn, b"edufurther visitor key", hashlib.sha256).digest()
-        return secrets.token_bytes(32)
 
     @field_validator(
         "supabase_intake_bucket",
