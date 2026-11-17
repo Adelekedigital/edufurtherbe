@@ -160,10 +160,11 @@ async def test_many_users_may_have_no_slug(db_engine: AsyncEngine) -> None:
     PostgreSQL treats nulls as distinct in a unique index, so this holds without
     the ``slug IS NOT NULL`` clause too — but four of the 43 dev users have no
     slug, and a regression here would block the load rather than fail a query.
+    The column stays nullable until every environment is filled (#684).
     """
     async with db_engine.begin() as conn:
         for i in range(3):
-            await add_user(conn, f"nobody{i}@example.com")
+            await add_user(conn, f"nobody{i}@example.com", slug=None)
 
         count = await conn.execute(text("SELECT count(*) FROM users WHERE slug IS NULL"))
         assert count.scalar_one() == 3

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.schemas.attribution import AnalyticsConsentRead
 from app.api.schemas.catalogue import CountryRef
-from app.api.schemas.common import AvatarFocusRead, LinkedInRead, StoredEmail
+from app.api.schemas.common import AvatarFocusRead, Handle, LinkedInRead, StoredEmail
 from app.api.schemas.links import LinkRead
 from app.api.schemas.mentors import LanguageRead
 from app.api.schemas.onboarding import OnboardingStatusRead
@@ -241,7 +241,7 @@ class UserRead(NormalisedEmail):
     id: UUID
     first_name: str | None = None
     last_name: str | None = None
-    slug: str | None = None
+    slug: Handle
     primary_role: PrimaryRole
     timezone: str
     email_verified_at: datetime | None = None
