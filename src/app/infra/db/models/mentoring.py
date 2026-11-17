@@ -730,10 +730,11 @@ class MentorStatusEvent(Base):
     status_type: Mapped[MentorStatusType] = mapped_column(
         str_enum(MentorStatusType), nullable=False
     )
-    #: Free text on a decline, and on an unlisting **either** an `UnlistedReason`
-    #: value or free text — `pause` writes `mentor_paused` and `decide` writes
+    #: The team's note on an approval or a decline (decision 350), and on an
+    #: unlisting **either** an `UnlistedReason` value or free text — `pause`
+    #: writes `mentor_paused` and `decide` writes
     #: `never_approved`, while an admin unlisting through `set_listing` writes
-    #: whatever `DeclineRequest.reason` carried.
+    #: whatever `ListingRequest.reason` carried.
     #:
     #: **So this column is not a closed set and takes no CHECK**, which is why
     #: `UnlistedReason` sits in `UNCONSTRAINED_ENUMS` rather than converting under

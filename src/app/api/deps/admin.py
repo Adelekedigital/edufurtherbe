@@ -28,9 +28,9 @@ from app.api.deps.core import (
 from app.api.schemas.admin import (
     AdminNoteWrite,
     BulkDecisionWrite,
-    DeclineRequest,
     FeaturedWrite,
     ListingRequest,
+    MentorDecisionWrite,
     MergeRequest,
     SessionTypeLimitWrite,
 )
@@ -231,13 +231,17 @@ async def pending_mentor_rows(
 
 async def decided_mentor(
     user_id: UUID,
-    payload: DeclineRequest,
+    payload: MentorDecisionWrite,
     admin_id: MentorAdminDep,
     session: SessionDep,
     approve: Annotated[bool, Query(description="True to approve, false to decline.")] = True,
 ) -> bool:
     changed = await decide(
-        session, user_id=user_id, admin_id=admin_id, approved=approve, reason=payload.reason
+        session,
+        user_id=user_id,
+        admin_id=admin_id,
+        approved=approve,
+        note=payload.note(approve=approve),
     )
     await session.commit()
     return changed
@@ -459,7 +463,9 @@ async def bulk_decided(
     failed: list[UUID] = []
     for user_id in dict.fromkeys(payload.user_ids):
         try:
-            done = await approve_application(session, user_id=user_id, admin_id=admin_id)
+            done = await approve_application(
+                session, user_id=user_id, admin_id=admin_id, note=payload.message
+            )
             await session.commit()
         except SQLAlchemyError:
             await session.rollback()

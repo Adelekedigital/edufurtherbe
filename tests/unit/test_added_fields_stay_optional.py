@@ -86,6 +86,16 @@ ADDED = {
         "this_month",
     ),
     "MenteeStatsWindowRead": ("completed_sessions", "minutes"),
+    # New with the profile link figures (decision 353), on the same terms: the
+    # days and the two blocks are required, every figure optional.
+    "MentorLinkStatsRead": ("window_days",),
+    "MentorLinkStatsWindowRead": (
+        "visits",
+        "visits_by_via",
+        "top_referrers",
+        "shares",
+        "shares_by_method",
+    ),
     # New with the monthly chart (decision 247), on the same terms.
     "MentorMonthlyStatsRead": ("months",),
     "MentorMonthRead": (
@@ -151,9 +161,10 @@ ADDED = {
     ),
     # The zone the analytics window was read in (decision 335).
     "WindowRead": ("tz",),
-    # Layered funnels and the figures beside them (decision 338).
-    "FunnelStepRead": ("layer",),
-    "AnalyticsFunnelRead": ("figures",),
+    # Layered funnels and the figures beside them (decision 338), and the
+    # median time beside every funnel (decision 351).
+    "FunnelStepRead": ("layer", "median_seconds_from_previous"),
+    "AnalyticsFunnelRead": ("figures", "median_seconds_to_complete"),
     # Weekly and monthly active users from this database (decision 342).
     "SubTracksRead": ("weekly_active_users", "monthly_active_users", "stickiness"),
     # Active members by role and the weekly trend (decision 343).

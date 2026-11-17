@@ -47,7 +47,7 @@ from app.domain.listing import (
     stage_before,
     stage_missed,
 )
-from app.domain.notifications import Notification
+from app.domain.notifications import Notification, team_note_variables
 from app.infra.db.mentor_listing import (
     newest_unlisting_is_self,
     paused_by_mentor,
@@ -175,7 +175,7 @@ async def decide(
     user_id: UUID,
     admin_id: UUID,
     approved: bool,
-    reason: str | None = None,
+    note: str | None = None,
 ) -> bool:
     """Approve or decline, and list or unlist to match.
 
@@ -183,6 +183,10 @@ async def decide(
     row that stated both would have to copy one forward — which is how two
     concurrent transitions record a state that never existed. Writing them as
     two facts costs one insert and keeps every row true on its own.
+
+    ``note`` is the team's note to the mentor (decision 350), either way: kept
+    on the decision's event, which already says who and when, and sent in the
+    email as `team_note`. The listing event keeps its own reason.
     """
     # Locked before the approval is read, so an account deleted meanwhile is
     # absent here rather than a decision that reports success and records
@@ -205,7 +209,7 @@ async def decide(
         user_id=user_id,
         status_type=MentorStatusType.APPROVED if approved else MentorStatusType.DECLINED,
         created_by=admin_id,
-        reason=None if approved else reason,
+        reason=note,
     )
     await record(
         session,
@@ -235,22 +239,26 @@ async def decide(
     # recipient here and it is the applicant.
     decided = ApprovalStatus.APPROVED if approved else ApprovalStatus.DECLINED
     if before != decided.value:
+        # The note as `team_note`, on any decision (decision 350). A decline
+        # also keeps `reason`, empty without a note: the live template reads
+        # it as `declineReason`.
+        variables = team_note_variables(note)
+        if not approved:
+            variables["reason"] = note or ""
         await enqueue(
             session,
             Notification.MENTOR_APPROVED if approved else Notification.MENTOR_DECLINED,
             entity_type="mentor_profile",
             entity_id=user_id,
             recipient_ids=(user_id,),
-            # **Nothing on an approval.** `reason` is already withheld from the
-            # approval event above for the same reason: there is no such thing as
-            # a reason for being approved, and a decline reason arriving on an
-            # approval would be somebody else's words in the wrong message.
-            variables=None if approved else {"reason": reason or ""},
+            variables=variables or None,
         )
     return True
 
 
-async def approve_application(session: AsyncSession, *, user_id: UUID, admin_id: UUID) -> bool:
+async def approve_application(
+    session: AsyncSession, *, user_id: UUID, admin_id: UUID, note: str | None = None
+) -> bool:
     """Approve one application that is still in review; ``False`` otherwise.
 
     The bulk approve's unit (decision 298): `decide` itself approves any live
@@ -262,7 +270,7 @@ async def approve_application(session: AsyncSession, *, user_id: UUID, admin_id:
         return False
     if not await _profile_flag(session, user_id, and_(*application_in_review())):
         return False
-    return await decide(session, user_id=user_id, admin_id=admin_id, approved=True)
+    return await decide(session, user_id=user_id, admin_id=admin_id, approved=True, note=note)
 
 
 def _pause_is_news() -> ColumnElement[bool]:

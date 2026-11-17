@@ -19,9 +19,16 @@ from tests.integration.factories import (
     make_public_mentor,
     status_event,
 )
-from tests.integration.test_api_admin_analytics_behaviour import PostHog, app_for, get
+from tests.integration.test_api_admin_analytics_behaviour import (
+    TIME_TO_CONVERT,
+    PostHog,
+    app_for,
+    get,
+    kind_of,
+)
 from tests.integration.test_api_admin_analytics_tabs import person, session_row
 
+from app.domain import analytics_behaviour
 from app.infra.storage.supabase import SupabaseStorage
 from conftest import client_for
 
@@ -179,9 +186,39 @@ async def test_mentor_activation_counts_real_rows_and_leaves_internal_mentors_ou
     # From the database: PostHog is asked only who shared, of the window's
     # consenting mentors (the previous cohort is empty, so nothing for it).
     assert posthog.asked("FunnelsQuery") == 0
+    assert posthog.asked(TIME_TO_CONVERT) == 0
     assert posthog.asked("admin_analytics_profile_links") == 1
     (asked,) = (q for q in posthog.seen if q.get("name") == "admin_analytics_profile_links")
     assert len(asked["values"]["mentors"]) == 3
+    # Four mentors at most made any step: too few for a median (decision 351).
+    assert [s["median_seconds_from_previous"] for s in steps] == [None] * 5
+    assert body["median_seconds_to_complete"] is None
+
+
+async def test_mentor_activation_times_are_medians_of_each_mentors_own_rows(
+    db_engine: AsyncEngine, api_storage: SupabaseStorage | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The threshold lowered, so this small cohort's times show.
+    monkeypatch.setattr(analytics_behaviour, "MEDIAN_MIN_PEOPLE", 1)
+    mentors = await cohort(db_engine)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE users SET signup_source = 'invite' WHERE id = :u"), {"u": mentors["ada"]}
+        )
+
+    def times(body: dict[str, Any]) -> list[Any]:
+        steps = [s["median_seconds_from_previous"] for s in body["steps"]]
+        return [*steps, body["median_seconds_to_complete"]]
+
+    everyone = await funnel(db_engine, api_storage, PostHog(), window="90d")
+    # Hours stood at approval for Ada, Cy and Ed: 0. An own type, Ada 2 days
+    # after her hours and Ed at once: 1 day; the same from approval.
+    assert times(everyone) == [None, 0, 86400, None, None, 86400]
+    # Only the same people as the counts: Ada alone, then the others.
+    invited = await funnel(db_engine, api_storage, PostHog(), window="90d", by="invite")
+    assert times(invited) == [None, 0, 172800, None, None, 172800]
+    direct = await funnel(db_engine, api_storage, PostHog(), window="90d", by="direct")
+    assert times(direct) == [None, 0, 0, None, None, 0]
 
 
 async def test_compare_false_nulls_every_previous(
@@ -273,9 +310,12 @@ async def test_the_other_funnels_still_read_posthog_and_application_has_its_revi
             name: (await get(client, token, f"/funnels/{name}", window="7d")).json()
             for name in ("signup", "booking", "mentee_activation", "mentor_application")
         }
-    series = [len(q["series"]) for q in posthog.seen if q["kind"] == "FunnelsQuery"]
+    series = [len(q["series"]) for q in posthog.seen if kind_of(q) == "FunnelsQuery"]
     # Each funnel twice (this period and the previous), with its new steps.
     assert series == [3, 3, 6, 6, 3, 3, 6, 6]
+    # And its time to complete once, this period's, to its last path step.
+    timed = [q for q in posthog.seen if kind_of(q) == TIME_TO_CONVERT]
+    assert [q["funnelsFilter"]["funnelToStep"] for q in timed] == [2, 5, 1, 5]
     assert all(bodies[name]["figures"] == [] for name in ("signup", "booking", "mentee_activation"))
     assert bodies["mentor_application"]["figures"] == [
         {

@@ -71,14 +71,36 @@ class Activation:
     shared: int | None
 
 
+#: The path's steps, in order, each needing the one before.
+PATH = ("approved", "availability_set", "session_type_created")
+
+
+def _first(spans: Sequence[Stood], approved_at: dt.datetime) -> dt.datetime:
+    """When the first of ``spans`` stood, never before approval."""
+    return max(approved_at, min(span.since for span in spans))
+
+
+def path_reached(mentor: ApprovedMentor) -> dict[str, dt.datetime]:
+    """Each path step the mentor reached, and when: approval; then their
+    hours, once some stood; then, with hours, an own type once one stood too.
+    What the step counts and the times (decision 351) both read."""
+    reached = {"approved": mentor.approved_at}
+    if not mentor.hours:
+        return reached
+    reached["availability_set"] = hours_at = _first(mentor.hours, mentor.approved_at)
+    if mentor.own_types:
+        reached["session_type_created"] = max(
+            hours_at, _first(mentor.own_types, mentor.approved_at)
+        )
+    return reached
+
+
 def activation_steps(mentors: Sequence[ApprovedMentor]) -> dict[str, int]:
     """Each `mentor_activation` step's count, by its key."""
-    hours = [m for m in mentors if m.hours]
+    reached = [path_reached(m) for m in mentors]
     booked = [m for m in mentors if m.booked]
     return {
-        "approved": len(mentors),
-        "availability_set": len(hours),
-        "session_type_created": sum(1 for m in hours if m.own_types),
+        **{key: sum(1 for r in reached if key in r) for key in PATH},
         "first_booking_received": len(booked),
         "first_session_delivered": sum(1 for m in booked if m.delivered),
     }
