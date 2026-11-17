@@ -17,6 +17,8 @@ from typing import NamedTuple
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from app.domain.activity import ACTIVITY_TZ, activity_day
+from app.domain.availability import local_day_start
 from app.domain.enums import LinkVia
 from app.domain.mentor_stats import Window
 
@@ -38,17 +40,19 @@ class DaySpan(NamedTuple):
 
 
 def _first_day_from(instant: dt.datetime) -> dt.date:
-    """The first UTC day whose midnight is at or after ``instant``."""
+    """The first activity day whose midnight is at or after ``instant``."""
     if instant.tzinfo is None:
         raise ValueError("instant must be timezone-aware")
-    utc = instant.astimezone(dt.UTC)
-    day = utc.date()
-    return day if utc == dt.datetime.combine(day, dt.time(), dt.UTC) else day + dt.timedelta(1)
+    day = activity_day(instant)
+    starts = local_day_start(day, ACTIVITY_TZ)
+    return day if starts == instant else day + dt.timedelta(days=1)
 
 
 def day_span(window: Window) -> DaySpan:
     """The UTC days whose midnight falls in ``window`` (decision 353).
 
+    A link event's day is its `activity_day`, the writer's rule, so this reads
+    the days in the same zone (`ACTIVITY_TZ`, UTC) rather than restating it.
     Link events are stored by UTC day, not by instant, so a dashboard window
     `[since, until)` counts the days that **start** inside it: the day under
     way at `until` is in, the part day at `since` is the previous window's. So

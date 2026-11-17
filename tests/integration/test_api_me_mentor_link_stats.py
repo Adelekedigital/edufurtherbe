@@ -185,6 +185,27 @@ async def test_top_referrers_are_the_most_visited_hosts_first(db_engine: AsyncEn
     ]
 
 
+async def test_a_tie_at_the_cut_is_decided_by_byte_order_not_collation(
+    db_engine: AsyncEngine,
+) -> None:
+    """`a-z.io` sorts before `ab.io` byte by byte (`-` < `b`), though a
+    language collation that skips punctuation puts `ab.io` first; the cut and
+    the listed order follow the byte order either way."""
+    mentor = await make_public_mentor(db_engine, "links-collation")
+    day = CURRENT.since
+    for n in range(TOP_REFERRERS - 1):
+        await visit(db_engine, mentor, day, referrer=f"busy-{n}.example", times=2)
+    await visit(db_engine, mentor, day, referrer="ab.io")
+    await visit(db_engine, mentor, day, referrer="a-z.io")
+
+    current, _ = await figures(db_engine, mentor)
+
+    assert [row["host"] for row in current["top_referrers"]] == [
+        *(f"busy-{n}.example" for n in range(TOP_REFERRERS - 1)),
+        "a-z.io",
+    ]
+
+
 async def test_only_the_mentors_own_rows_count(db_engine: AsyncEngine) -> None:
     mentor = await make_public_mentor(db_engine, "links-mine")
     other = await make_public_mentor(db_engine, "links-theirs")
@@ -230,6 +251,7 @@ async def test_a_mentor_reads_their_counts_and_nothing_per_visitor(
     default, today included, counts only."""
     mentor = await make_public_mentor(db_engine, "links-api")
     other = await make_public_mentor(db_engine, "links-api-other")
+    started = dt.datetime.now(dt.UTC)
     for handle in (mentor, other):
         recorded = await api_client.post(
             f"/api/v1/mentors/{handle}/visits",
@@ -237,15 +259,16 @@ async def test_a_mentor_reads_their_counts_and_nothing_per_visitor(
             headers={"User-Agent": "test", "X-Forwarded-For": "203.0.113.9"},
         )
         assert recorded.status_code == 204, recorded.text
-    today = dt.datetime.now(dt.UTC).date()
-    await share(db_engine, mentor, today, ShareMethod.COPY)
+    await share(db_engine, mentor, started.date(), ShareMethod.COPY)
 
     response = await api_client.get(URL, headers=bearer(await token_for(db_engine, mentor)))
 
+    if dt.datetime.now(dt.UTC).date() != started.date():
+        pytest.skip("the run crossed UTC midnight, so the window moved under it")
     assert response.status_code == 200, response.text
     assert response.headers["Cache-Control"] == PRIVATE_NO_STORE
     body = response.json()
-    current, previous = day_span_pair()
+    current, previous = day_span_pair(started)
     assert body["window_days"] == 90
     assert (body["current"]["since"], body["current"]["until"]) == current
     assert (body["previous"]["since"], body["previous"]["until"]) == previous
@@ -261,10 +284,8 @@ async def test_a_mentor_reads_their_counts_and_nothing_per_visitor(
     assert body["previous"]["visits"] == 0
 
 
-def day_span_pair(days: int = 90) -> tuple[tuple[str, str], tuple[str, str]]:
-    current, previous = (
-        day_span(window) for window in trend_windows(dt.datetime.now(dt.UTC), days)
-    )
+def day_span_pair(now: dt.datetime, days: int = 90) -> tuple[tuple[str, str], tuple[str, str]]:
+    current, previous = (day_span(window) for window in trend_windows(now, days))
     return (
         (current.since.isoformat(), current.until.isoformat()),
         (previous.since.isoformat(), previous.until.isoformat()),

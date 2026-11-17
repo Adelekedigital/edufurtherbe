@@ -20,6 +20,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Date,
     Integer,
     Text,
@@ -60,14 +61,14 @@ async def link_stats(
         return []
     rows = (await session.execute(_statement(mentor, spans))).all()
     blocks = [_empty(span) for span in spans]
-    for kind, position, key, count in rows:
+    for kind, position, key, count, rank in rows:
         block = blocks[position]
         if kind == _VIA:
             block["via"][None if key is None else LinkVia(key)] = count
         elif kind == _METHOD:
             block["method"][ShareMethod(key)] = count
         else:
-            block["referrers"].append((key, count))
+            block["referrers"].append((rank, key, count))
     return [_shaped(block) for block in blocks]
 
 
@@ -79,21 +80,26 @@ def _empty(span: DaySpan) -> dict[str, Any]:
 
 def _shaped(block: dict[str, Any]) -> dict[str, Any]:
     span: DaySpan = block["span"]
-    referrers = sorted(block["referrers"], key=lambda pair: (-pair[1], pair[0]))
+    referrers = sorted(block["referrers"])  # by the statement's rank, its one order
     return {
         "since": span.since,
         "until": span.until,
         "visits": sum(block["via"].values()),
         "visits_by_via": [{"key": key, "count": n} for key, n in block["via"].items()],
-        "top_referrers": [{"host": host, "count": n} for host, n in referrers],
+        "top_referrers": [{"host": host, "count": n} for _, host, n in referrers],
         "shares": sum(block["method"].values()),
         "shares_by_method": [{"key": key, "count": n} for key, n in block["method"].items()],
     }
 
 
 def _statement(mentor: UUID, spans: Sequence[DaySpan]) -> Any:
-    """`(kind, position, key, count)` rows: a `UNION ALL` of visits by channel,
-    the top referrers and shares by method, each grouped by span.
+    """`(kind, position, key, count, rank)` rows: a `UNION ALL` of visits by
+    channel, the top referrers and shares by method, each grouped by span.
+
+    **The referrers' order is decided once, here**: `rank` is most visits
+    first, then host name in byte order (`COLLATE "C"`), so which hosts make
+    the cut and the order they are listed in cannot depend on the database's
+    collation; the caller only sorts by `rank`. The other parts carry rank 0.
 
     The spans are a `VALUES` list, as the monthly chart's months are, joined by
     `during()`. Each part also bounds `day` by the outermost edges as
@@ -123,6 +129,7 @@ def _statement(mentor: UUID, spans: Sequence[DaySpan]) -> Any:
             span.position,
             cast(visit.via, Text).label("key"),
             func.count().label("count"),
+            literal(0, BigInteger).label("rank"),
         )
         .select_from(visit)
         .join(bounds, during(visit.day, span))
@@ -137,7 +144,7 @@ def _statement(mentor: UUID, spans: Sequence[DaySpan]) -> Any:
             func.row_number()
             .over(
                 partition_by=span.position,
-                order_by=(func.count().desc(), visit.referrer_host),
+                order_by=(func.count().desc(), visit.referrer_host.collate("C")),
             )
             .label("rank"),
         )
@@ -148,7 +155,11 @@ def _statement(mentor: UUID, spans: Sequence[DaySpan]) -> Any:
         .subquery("ranked")
     )
     top = select(
-        literal(_REFERRER).label("kind"), ranked.c.position, ranked.c.key, ranked.c.count
+        literal(_REFERRER).label("kind"),
+        ranked.c.position,
+        ranked.c.key,
+        ranked.c.count,
+        ranked.c.rank,
     ).where(ranked.c.rank <= TOP_REFERRERS)
     by_method = (
         select(
@@ -156,6 +167,7 @@ def _statement(mentor: UUID, spans: Sequence[DaySpan]) -> Any:
             span.position,
             cast(shared.method, Text).label("key"),
             func.count().label("count"),
+            literal(0, BigInteger).label("rank"),
         )
         .select_from(shared)
         .join(bounds, during(shared.day, span))
