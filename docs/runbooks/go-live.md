@@ -29,6 +29,18 @@ package, not this page.
 3. In the Supabase production project, configure Auth SMTP through Emailit in
    the console; the service does not send the sign-in code itself
    (`loops_api_key` comment, `src/app/core/config.py`).
+   Then check the auth limits (Authentication → Sign In / Providers → Email, and
+   Authentication → Rate Limits). They are the only guard on code guessing and
+   email flooding at launch, since #475 (our own lock and cap) is paused (owner,
+   2026-11-17):
+   - **Email code expiry: 600 seconds (10 minutes)**, not the 1-hour default
+     (ADR 0009 point 5). Set on production; check it again before opening.
+   - **Minimum gap between code emails to one address: 60 seconds.**
+   - **Project-wide auth emails per hour: enough for the launch-morning peak**
+     (a few hundred an hour as migrated users sign in). A low cap blocks real
+     people from getting their code. Raise it before Monday if it is lower.
+   - **Token verifications per IP:** leave the Supabase default unless the
+     Auth logs show guessing.
 4. Create the private intake bucket named by `SUPABASE_INTAKE_BUCKET`.
    **Owner to confirm:** bucket name and that it is private.
 
