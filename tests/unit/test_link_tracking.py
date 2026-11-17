@@ -1,7 +1,8 @@
-"""The pure rules behind profile link tracking (decisions 346, 347, 348)."""
+"""The pure rules behind profile link tracking (decisions 346, 347, 348, 353)."""
 
 from __future__ import annotations
 
+import datetime as dt
 from uuid import uuid4
 
 import pytest
@@ -12,12 +13,15 @@ from app.domain.enums import LinkVia
 from app.domain.link_tracking import (
     MAX_REFERRER_HOST,
     VISITOR_KEY_BYTES,
+    DaySpan,
+    day_span,
     guest_identity,
     member_identity,
     normalise_referrer_host,
     normalise_via,
     visitor_key,
 )
+from app.domain.mentor_stats import Window, trend_windows
 
 #: One day's random key (`visitor_day_keys`).
 DAY_KEY = b"s" * 32
@@ -111,3 +115,50 @@ def test_a_guest_is_the_first_forwarded_hop_else_the_peer(
     headers: dict[str, str], client: tuple[str, int] | None, expected: str
 ) -> None:
     assert client_address(_request(headers, client)) == expected
+
+
+def _at(day: int, hour: int = 0) -> dt.datetime:
+    return dt.datetime(2026, 11, day, hour, tzinfo=dt.UTC)
+
+
+@pytest.mark.parametrize(
+    ("since", "until", "expected"),
+    [
+        # Mid-day edges: a day counts in the window its midnight falls in, so
+        # today (begun before `until`) is in and the first, part day is not.
+        (_at(10, 9), _at(17, 9), DaySpan(dt.date(2026, 11, 11), dt.date(2026, 11, 18))),
+        # Midnight edges: `since`'s day is in, `until`'s is not.
+        (_at(10), _at(17), DaySpan(dt.date(2026, 11, 10), dt.date(2026, 11, 17))),
+        # One microsecond past midnight is the next day's window.
+        (
+            _at(10) + dt.timedelta(microseconds=1),
+            _at(17) + dt.timedelta(microseconds=1),
+            DaySpan(dt.date(2026, 11, 11), dt.date(2026, 11, 18)),
+        ),
+        # Another zone is read in UTC: 23:30 on the 9th at -02:00 is 01:30 on
+        # the 10th, so the 10th is a part day and the 11th the first.
+        (
+            dt.datetime(2026, 11, 9, 23, 30, tzinfo=dt.timezone(dt.timedelta(hours=-2))),
+            _at(17),
+            DaySpan(dt.date(2026, 11, 11), dt.date(2026, 11, 17)),
+        ),
+    ],
+)
+def test_a_window_covers_the_utc_days_whose_midnight_is_in_it(
+    since: dt.datetime, until: dt.datetime, expected: DaySpan
+) -> None:
+    span = day_span(Window(since, until))
+
+    assert span == expected
+    assert (span.until - span.since).days == (until - since).days
+
+
+def test_adjacent_windows_cover_adjacent_days() -> None:
+    current, previous = trend_windows(_at(17, 9), 7)
+
+    assert day_span(previous).until == day_span(current).since
+
+
+def test_a_naive_window_is_refused() -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        day_span(Window(dt.datetime(2026, 11, 10), dt.datetime(2026, 11, 17)))
