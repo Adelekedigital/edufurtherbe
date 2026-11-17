@@ -266,7 +266,9 @@ PUBLISHED_TEMPLATES: dict[str, list[str]] = {
     key: f"{_LINE_VARS},{names}".split(",")
     for key, names in {
         "credits": "recipientFirstName,intervalTime,creditCount",
-        "mentor_status": "recipientFirstName,declineReason",
+        # `teamNote`: the "A note from the team" section (decision 350), added
+        # to the template after the backend that fills it is deployed.
+        "mentor_status": "recipientFirstName,declineReason,teamNote",
         "suggested_time": "recipientFirstName,mentorName,sessionDate,sessionTime,holdUntilTime,"
         "reasonMessage,suggestedDate,suggestedTime,suggestedTimezone",
         "request_awaiting": f"recipientFirstName,menteeName,hours,reminderMessage,{_SESSION},"
@@ -308,6 +310,19 @@ def test_every_email_fills_its_published_shared_template(
     assert all(built[name] for name in ("emailSubject", "emailHeading", "buttonLabel"))
     if group == "messages":
         assert bool(built["sessionDate"]) is (email is N.MESSAGE_IN_SESSION_WINDOW)
+
+
+def test_the_mentor_status_samples_preview_the_team_note() -> None:
+    """Decision 350: a preview shows the note on the decisions that carry one,
+    and the admin's pause, whose reason is for admins, shows none."""
+    group = PUBLISHED_TEMPLATES["mentor_status"]
+    notes = {
+        email: build_variables(group, sample_context(email, "default"))["teamNote"]
+        for email in TEMPLATE_GROUPS["mentor_status"]
+    }
+    assert notes[N.MENTOR_APPROVED]
+    assert notes[N.MENTOR_DECLINED]
+    assert notes[N.MENTOR_PAUSED_BY_ADMIN] == ""
 
 
 @pytest.mark.parametrize(

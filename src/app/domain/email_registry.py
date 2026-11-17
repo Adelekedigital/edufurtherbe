@@ -43,7 +43,7 @@ from app.domain.message_emails import (
     unread_email,
 )
 from app.domain.messages import ALIASES, MessageContext, UnresolvedVariableError, resolve
-from app.domain.notifications import AUDIENCE, Audience, Notification
+from app.domain.notifications import AUDIENCE, TEAM_NOTE, Audience, Notification
 
 __all__ = [
     "EMAILS",
@@ -283,6 +283,9 @@ _SUGGESTED = {
 #: What the drain adds to a new booking's row (decision 334).
 _ANSWERED = {"answered_questions": "3"}
 
+#: A decline's note, sent as `reason` and as the team's note (decision 350).
+_DECLINE_NOTE = "Add a little more about your experience."
+
 #: What each email's producer puts on its outbox row (`variables=` at the
 #: enqueue, or the message email's values), by variant.
 SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
@@ -301,8 +304,11 @@ SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
     N.CREDITS_GRANTED: {"default": {"credit_count": "1"}},
     N.CREDITS_RENEWED: {"default": {"credit_count": "2"}},
     N.CREDITS_EXPIRING: {"default": {"kind": "c14", "interval": "two weeks", "credit_count": "1"}},
-    N.MENTOR_APPROVED: {"default": {}},
-    N.MENTOR_DECLINED: {"default": {"reason": "Add a little more about your experience."}},
+    # What `decide` queues with a note (decision 350).
+    N.MENTOR_APPROVED: {
+        "default": {TEAM_NOTE: "Welcome aboard! Start by adding your availability."}
+    },
+    N.MENTOR_DECLINED: {"default": dict.fromkeys(("reason", TEAM_NOTE), _DECLINE_NOTE)},
     N.MENTOR_PAUSED_BY_ADMIN: {"default": {}},
     N.MESSAGE_UNREAD_FEW: {
         ONE_MESSAGE: unread_email([_said("Ada")]),

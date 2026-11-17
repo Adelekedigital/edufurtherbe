@@ -286,7 +286,7 @@ TEXT_CHECK_ENUMS: dict[type[StrEnum], frozenset[str]] = {
 UNCONSTRAINED_ENUMS: dict[type[StrEnum], str] = {
     # `mentor_status_events.reason` is not a closed set. It carries free text on
     # a decline, an `UnlistedReason` value on a self-pause, and free admin text
-    # on an unlisting — `DeclineRequest.reason` reaches it through
+    # on an unlisting — `ListingRequest.reason` reaches it through
     # `set_listing`, up to 1000 characters of whatever an admin typed. A `CHECK`
     # naming these four values would reject the admin path, and one conditioned
     # on `status_type = 'unlisted'` would reject it too, because that is the very

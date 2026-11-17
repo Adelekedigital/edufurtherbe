@@ -44,6 +44,7 @@ __all__ = [
     "REVIEW_REMINDER_KIND",
     "SESSION_REMINDERS",
     "SESSION_REMINDER_KINDS",
+    "TEAM_NOTE",
     "Audience",
     "Channel",
     "CreditReminder",
@@ -53,6 +54,7 @@ __all__ = [
     "recipients",
     "reminders_for",
     "session_reminders_for",
+    "team_note_variables",
 ]
 
 
@@ -85,7 +87,8 @@ class Notification(StrEnum):
     REQUEST_EXPIRED = "request_expired"
 
     #: The application was approved. Not a session, so the audience table below
-    #: does not reach it — see `recipients`.
+    #: does not reach it — see `recipients`. Carries the team's optional note
+    #: as `team_note` (`teamNote`, decision 350), absent when none was left.
     MENTOR_APPROVED = "mentor_approved"
 
     #: A mentor's connected calendar stopped working — revoked in Google's own
@@ -203,14 +206,15 @@ class Notification(StrEnum):
     #: how a queue grows quietly.
     MENTOR_APPLICATION_RECEIVED = "mentor_application_received"
 
-    #: And declined, carrying whatever reason the reviewer gave.
+    #: And declined, carrying whatever note the reviewer gave: as `reason`
+    #: (`declineReason`, empty when none) and as `team_note` (decision 350).
     MENTOR_DECLINED = "mentor_declined"
 
     #: **An admin paused an approved mentor** (Admin PRD, 2026-10-26): hidden on
     #: Explore, booked sessions kept. Only when it is news: not when a mentor
     #: pauses themselves, nor when an admin's pause already stands. No
     #: variables beyond the name, and **never the reason**, which is for admins
-    #: only. Resuming sends nothing (Q8).
+    #: only, so its `teamNote` is empty. Resuming sends nothing (Q8).
     MENTOR_PAUSED_BY_ADMIN = "mentor_paused_by_admin"
 
     #: Up to two nudges per pending request, 24 and 12 hours before `respond_by`
@@ -388,6 +392,18 @@ def unique(ids: Iterable[UUID]) -> tuple[UUID, ...]:
     for value in ids:
         seen.setdefault(value, None)
     return tuple(seen)
+
+
+#: Where an admin decision's note to the person it is about rides its outbox
+#: row (decision 350); templates show it as `teamNote`. One key for every
+#: decision, so a later one needs no new variable or template section.
+TEAM_NOTE = "team_note"
+
+
+def team_note_variables(note: str | None) -> dict[str, str]:
+    """An admin decision's note as outbox variables: absent with none, so a
+    decision without one queues exactly what it did before."""
+    return {TEAM_NOTE: note} if note else {}
 
 
 #: How long before the deadline each reminder fires, keyed by a name that goes

@@ -9,7 +9,7 @@ weekly hours), so one client mapper reads them everywhere.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -172,11 +172,40 @@ class AdminPausedRead(BaseModel):
     reason: str | None = Field(description="An admin's reason; null for the mentor's own pause.")
 
 
-class AdminDeclinedRead(BaseModel):
-    """The decision on a declined application."""
+class AdminDecisionRead(BaseModel):
+    """The approval or decline that stands, from its own status event
+    (decision 350): one shape for every admin decision."""
 
-    at: dt.datetime | None
-    reason: str | None
+    at: dt.datetime | None = Field(
+        description="When it was decided; null when no event records it (the legacy app's)."
+    )
+    # Optional in the spec: added to `declined`, which clients already read.
+    by: UUID | None = Field(
+        default=None,
+        description="The deciding admin; null for a decision the legacy app made.",
+    )
+    message: str | None = Field(
+        default=None,
+        description=(
+            "The note the deciding admin left the mentor, or null. Emailed when the "
+            "decision changed the approval; a repeated decision's note is recorded, "
+            "not emailed."
+        ),
+    )
+
+
+class AdminDeclinedRead(AdminDecisionRead):
+    """The decline that stands. `reason` is `message` under its old name."""
+
+    # Still required, as it always was, so no client's type of it changes.
+    reason: str | None = Field(
+        description="**Deprecated**: the same as `message`, kept for older clients.",
+        json_schema_extra={"deprecated": True},
+    )
+
+    @classmethod
+    def of(cls, *, at: dt.datetime | None, by: UUID | None, message: str | None) -> Self:
+        return cls(at=at, by=by, message=message, reason=message)
 
 
 class AdminMentorRead(_AdminMentorBase):
@@ -193,6 +222,10 @@ class AdminMentorRead(_AdminMentorBase):
     stats: AdminMentorStatsRead
     recent_bookings: list[AdminRecentBookingRead]
     paused: AdminPausedRead | None
+    approved: AdminDecisionRead | None = Field(
+        default=None,
+        description="While approved (listed or paused): the approval and its note.",
+    )
     declined: AdminDeclinedRead | None
 
     @classmethod
@@ -237,8 +270,17 @@ class AdminMentorRead(_AdminMentorBase):
                 if row["paused_by"] is not None
                 else None
             ),
+            approved=(
+                AdminDecisionRead(
+                    at=row["approved_at"], by=row["approved_by"], message=row["approval_note"]
+                )
+                if row["is_approved"]
+                else None
+            ),
             declined=(
-                AdminDeclinedRead(at=row["decided_at"], reason=row["decline_reason"])
+                AdminDeclinedRead.of(
+                    at=row["decided_at"], by=row["declined_by"], message=row["decline_reason"]
+                )
                 if row["tab"] == AdminMentorTab.NOT_APPROVED
                 else None
             ),
