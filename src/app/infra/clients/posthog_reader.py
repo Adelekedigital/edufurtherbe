@@ -45,7 +45,7 @@ from app.domain.analytics_behaviour import (
     Counted,
     ExploreFigures,
     Funnel,
-    FunnelCounts,
+    FunnelReading,
     LoginCodes,
     Match,
     Searchers,
@@ -404,6 +404,13 @@ def _number(value: object) -> float | None:
     return float(value)
 
 
+def _kind(query: dict[str, Any]) -> str:
+    """What a log line calls ``query``: its kind, and a funnel's view when it
+    is not the steps (`time_to_complete_query`'s ``time_to_convert``)."""
+    view = query.get("funnelsFilter", {}).get("funnelVizType", "steps")
+    return f"{query.get('kind')}:{view}" if view != "steps" else str(query.get("kind"))
+
+
 def _seconds(value: object) -> float | None:
     """A conversion time: ``None``, or a number of seconds that is not negative."""
     seconds = _number(value)
@@ -485,7 +492,7 @@ class NullAnalyticsReader:
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> FunnelCounts:
+    ) -> FunnelReading:
         del funnel, by, window, internal
         raise self._refuse()
 
@@ -548,7 +555,7 @@ class PostHogReader:
             logger.warning(
                 "analytics read failed",
                 extra={
-                    "query_kind": query.get("kind"),
+                    "query_kind": _kind(query),
                     "failure": exc.failure,
                     "status": exc.status,
                     "reason": exc.reason,
@@ -568,27 +575,27 @@ class PostHogReader:
         except (_MalformedError, AttributeError, KeyError, TypeError) as exc:
             logger.warning(
                 "analytics answer unreadable",
-                extra={"query_kind": query.get("kind"), "why": str(exc)},
+                extra={"query_kind": _kind(query), "why": str(exc)},
             )
             raise AnalyticsUpstreamError(UNAVAILABLE) from exc
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> FunnelCounts:
+    ) -> FunnelReading:
         steps = len(funnel.tracked)
 
-        def parse(body: Any) -> FunnelCounts:
+        def parse(body: Any) -> FunnelReading:
             results = body["results"]
             # PostHog answers an empty list, not a row of zeros, when no person
             # entered the funnel (or its breakdown): nobody reached any step.
             if results == []:
-                return FunnelCounts(counts=[0] * steps, medians=[None] * steps)
+                return FunnelReading(counts=[0] * steps, medians=[None] * steps)
             if not isinstance(results, list) or len(results) != steps:
                 raise _MalformedError("not one result per step")
             ordered = sorted(results, key=lambda r: r.get("order", 0))
             # In seconds from the step before, null on the first
             # (https://posthog.com/docs/api/queries, "Funnel response").
-            return FunnelCounts(
+            return FunnelReading(
                 counts=[_int(r["count"]) for r in ordered],
                 medians=[_seconds(r.get("median_conversion_time")) for r in ordered],
             )

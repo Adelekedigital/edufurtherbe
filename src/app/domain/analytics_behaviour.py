@@ -98,6 +98,14 @@ class Funnel:
     #: Counted from this app's database, not PostHog (decision 338).
     in_database: bool = False
 
+    def __post_init__(self) -> None:
+        # Each step is timed from the one before it (decision 351), so the
+        # outcomes trail the path: a path step after an outcome would be
+        # timed from the outcome.
+        layers = [step.layer for step in self.steps]
+        if layers != sorted(layers, key=lambda layer: layer is FunnelLayer.SECONDARY):
+            raise ValueError(f"{self.name}: a primary step follows a secondary one")
+
     @property
     def tracked(self) -> tuple[Step, ...]:
         """The steps the vendor is asked about: those with an event, which
@@ -295,7 +303,7 @@ MEDIAN_MIN_PEOPLE = 5
 
 
 @dataclass(frozen=True, slots=True)
-class FunnelCounts:
+class FunnelReading:
     """What the vendor read for each tracked step: the people reaching it and
     the median seconds from the step before, of those who did (``None`` on
     the first step and where the vendor has none)."""
@@ -323,11 +331,12 @@ def path_end(funnel: Funnel) -> int | None:
 
 
 def shown_median(seconds: float | None, people: int | None) -> int | None:
-    """The one rule for every funnel median: whole seconds, or ``None`` with no
-    time or fewer than `MEDIAN_MIN_PEOPLE` people."""
+    """The one rule for every funnel median: whole seconds (`rounded`, halves
+    away from zero), or ``None`` with no time or fewer than `MEDIAN_MIN_PEOPLE`
+    people."""
     if seconds is None or people is None or people < MEDIAN_MIN_PEOPLE:
         return None
-    return round(seconds)
+    return int(rounded(seconds, 0) or 0)
 
 
 def median_times(funnel: Funnel, reached: Sequence[Mapping[str, dt.datetime]]) -> FunnelTimes:

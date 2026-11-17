@@ -50,8 +50,8 @@ from app.domain.analytics_behaviour import (
     FUNNEL_NAMES,
     BehaviourFigures,
     Funnel,
-    FunnelCounts,
     FunnelFigure,
+    FunnelReading,
     FunnelTab,
     FunnelTimes,
     LoginCodes,
@@ -354,7 +354,7 @@ async def _posthog_funnel(
     funnel: Funnel,
     chosen: str,
 ) -> FunnelTab:
-    async def compute() -> tuple[FunnelCounts, FunnelTimes, list[int] | None]:
+    async def compute() -> tuple[FunnelReading, FunnelTimes, list[int] | None]:
         internal = await internal_ids(session)
         window = ask.period.window
         current = await asyncio.to_thread(reader.funnel, funnel, chosen, window, internal)

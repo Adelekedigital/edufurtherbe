@@ -18,7 +18,7 @@ from app.domain.analytics_behaviour import (
     BehaviourFigures,
     ExploreFigures,
     Funnel,
-    FunnelCounts,
+    FunnelReading,
     LoginCodes,
 )
 from app.domain.mentor_stats import Window
@@ -60,7 +60,7 @@ class AnalyticsReader(Protocol):
 
     def funnel(
         self, funnel: Funnel, by: str, window: Window, internal: Sequence[UUID]
-    ) -> FunnelCounts:
+    ) -> FunnelReading:
         """People reaching each of the funnel's tracked steps, in order, for
         those entering it in ``window`` and narrowed by the ``by`` option, with
         each step's median seconds from the one before."""

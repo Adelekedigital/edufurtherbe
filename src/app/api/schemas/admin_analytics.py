@@ -756,7 +756,7 @@ class AnalyticsFunnelRead(SectionRead):
         description=(
             "The median whole seconds from the first step to the last `primary` "
             "step, of the people who reached that step. Null when the funnel has no "
-            "`primary` step after the first. " + _MEDIAN_NULL
+            "`primary` step after the first, or nothing tracks the last one yet. " + _MEDIAN_NULL
         ),
     )
 

@@ -19,7 +19,7 @@ from app.domain.analytics_behaviour import (
     FUNNELS,
     MEDIAN_MIN_PEOPLE,
     Funnel,
-    FunnelCounts,
+    FunnelReading,
     FunnelTimes,
     Step,
     funnel_tab,
@@ -44,6 +44,8 @@ def test_the_threshold_is_five_people() -> None:
 def test_a_median_is_shown_from_five_people_rounded_to_a_second() -> None:
     assert shown_median(30.4, 5) == 30
     assert shown_median(30.6, 100) == 31
+    # Halves away from zero, as every analytics figure (decision 171).
+    assert (shown_median(0.5, 5), shown_median(2.5, 5)) == (1, 3)
     assert shown_median(30.4, 4) is None
     assert shown_median(None, 100) is None
     assert shown_median(30.4, None) is None
@@ -88,6 +90,15 @@ def test_a_step_nothing_tracks_has_no_median_and_no_times_is_all_null() -> None:
     bare = funnel_tab(FUNNELS["signup"], "all", [10, 9, 8], [1, 1, 1])
     assert medians(bare) == [None, None, None]
     assert bare.median_seconds_to_complete is None
+
+
+def test_a_path_step_after_an_outcome_is_refused() -> None:
+    # It would be timed from the outcome before it.
+    outcome = FunnelLayer.SECONDARY
+    path = (Step("a", "A", ("x",)), Step("b", "B", ("y",), layer=outcome))
+    with pytest.raises(ValueError, match="follows a secondary"):
+        Funnel(name="signup", steps=(*path, Step("c", "C", ())), window_days=1, note="")
+    assert Funnel(name="signup", steps=path, window_days=1, note="").steps == path
 
 
 def test_the_path_ends_at_the_last_primary_step_that_is_counted() -> None:
@@ -159,12 +170,12 @@ def test_the_activation_counts_and_times_are_the_same_people() -> None:
 
 def test_posthogs_step_medians_come_with_the_counts() -> None:
     read, _ = posthog_reader(lambda _: funnel_answer(50, 40, 30, medians=(None, 61.5, 3600)))
-    assert read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL) == FunnelCounts(
+    assert read.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL) == FunnelReading(
         counts=[50, 40, 30], medians=[None, 61.5, 3600.0]
     )
     # Nobody entered: zeros, and nothing to time.
     empty, _ = posthog_reader(lambda _: httpx.Response(200, json={"results": []}))
-    assert empty.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL) == FunnelCounts(
+    assert empty.funnel(FUNNELS["signup"], "all", WINDOW, INTERNAL) == FunnelReading(
         counts=[0, 0, 0], medians=[None, None, None]
     )
     # A step without the field has no median, the counts still stand.
@@ -218,6 +229,38 @@ def test_an_unreadable_time_to_convert_answer_is_the_upstream_error(results: obj
     read, _ = posthog_reader(lambda _: httpx.Response(200, json={"results": results}))
     with pytest.raises(AnalyticsUpstreamError):
         read.time_to_complete(FUNNELS["signup"], "all", WINDOW, INTERNAL)
+
+
+def _timed_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("slow", request=request)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        lambda _: httpx.Response(503, json={"detail": "down"}),
+        lambda _: httpx.Response(200, content=b"<html>not json</html>"),
+        lambda _: httpx.Response(200, content=b'{"results": {"median_conversion_time": Infinity}}'),
+        _timed_out,
+    ],
+    ids=["5xx", "not-json", "infinite", "timeout"],
+)
+def test_any_failed_time_to_convert_read_is_the_upstream_error(answer: Any) -> None:
+    read, _ = posthog_reader(answer)
+    with pytest.raises(AnalyticsUpstreamError):
+        read.time_to_complete(FUNNELS["signup"], "all", WINDOW, INTERNAL)
+
+
+def test_time_to_complete_waits_as_long_as_the_counts() -> None:
+    timeouts: list[dict[str, float]] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"])
+        return time_answer(1.0)
+
+    read, _ = posthog_reader(answer)
+    read.time_to_complete(FUNNELS["signup"], "all", WINDOW, INTERNAL)
+    assert timeouts[0]["read"] >= 12.0
 
 
 def test_the_null_reader_refuses_time_to_complete() -> None:
