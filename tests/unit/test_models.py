@@ -158,6 +158,8 @@ EXPECTED_MODELS = {
     # A mentor profile link's visits and shares (decision 346).
     "MentorProfileVisit",
     "MentorProfileShare",
+    # Each UTC day's random key for profile link visitors (decision 348).
+    "VisitorDayKey",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -199,6 +201,8 @@ APPEND_ONLY = frozenset(
         # A visit or a share is a fact about one day; nothing edits it.
         "MentorProfileVisit",
         "MentorProfileShare",
+        # A day's key is drawn once and deleted after its day; never edited.
+        "VisitorDayKey",
     }
 )
 

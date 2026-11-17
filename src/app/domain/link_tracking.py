@@ -19,6 +19,8 @@ from app.domain.enums import LinkVia
 
 #: How long a visitor key is: one HMAC-SHA256 digest.
 VISITOR_KEY_BYTES = 32
+#: How long a day's random key is (decision 348), the HMAC-SHA256 output size.
+DAY_KEY_BYTES = 32
 #: The longest host name DNS allows; a longer referrer is dropped, not cut.
 MAX_REFERRER_HOST = 253
 
