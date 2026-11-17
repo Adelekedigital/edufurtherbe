@@ -389,8 +389,9 @@ class MentorProfileVisit(Base):
     (decision 346). Insert only; our own record of profile visits from launch.
 
     ``visitor_key`` is a keyed hash of who was looking, never who they are: the
-    signed-in user, or a guest's address and browser, hashed with a secret, the
-    day and the mentor (``domain.link_tracking.visitor_key``). ``UNIQUE
+    signed-in user, or a guest's address and browser, and the mentor, hashed
+    under the day's random key (``domain.link_tracking.visitor_key``,
+    ``VisitorDayKey``), which is deleted after its day. ``UNIQUE
     (mentor_user_id, day, visitor_key)`` makes a repeat on the same day a no-op,
     so recording is ``ON CONFLICT DO NOTHING`` and a race cannot count twice.
     ``via`` and ``referrer_host`` are the first visit's. Goes with the mentor.
