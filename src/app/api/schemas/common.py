@@ -574,6 +574,36 @@ Handle = Annotated[
     ),
 ]
 
+#: The longest note the team may add to an admin decision (decision 350).
+TEAM_NOTE_MAX_LENGTH = 1000
+
+
+def trimmed(value: object) -> object:
+    """A string trimmed, emptied as ``None``; anything else as it came. The one
+    rule `Normalised` applies to every field, and `TeamNote` to one."""
+    if isinstance(value, str):
+        # Before the trim, not after: a value that is *only* a NUL must end up
+        # `None` like any other emptied field, rather than a one-character
+        # string that passes every length check.
+        return storable(value).strip() or None
+    return value
+
+
+#: **The team's note on an admin decision, shown to the person it is about**
+#: (decision 350): one rule for every decision that carries one (rule 8).
+#: Trimmed, blank is ``null``, 1 to 1000 characters, plain text: stored with
+#: its line breaks and never read as HTML (how an email shows them is Loops').
+TeamNote = Annotated[
+    Annotated[str, Field(max_length=TEAM_NOTE_MAX_LENGTH)] | None,
+    BeforeValidator(trimmed),
+    Field(
+        description=(
+            "An optional note from the team, sent in the email about this decision. Plain "
+            f"text, trimmed; blank is `null`; 1 to {TEAM_NOTE_MAX_LENGTH} characters."
+        ),
+    ),
+]
+
 
 class Normalised(BaseModel):
     """Trims every string, and turns an emptied one into ``None``.
@@ -594,17 +624,7 @@ class Normalised(BaseModel):
         if not isinstance(data, dict):
             return data
 
-        normalised: dict[str, Any] = {}
-        for key, value in data.items():
-            if isinstance(value, str):
-                # Before the trim, not after: a value that is *only* a NUL must
-                # end up `None` like any other emptied field, rather than a
-                # one-character string that passes every length check.
-                stripped = storable(value).strip()
-                normalised[key] = stripped or None
-            else:
-                normalised[key] = value
-        return normalised
+        return {key: trimmed(value) for key, value in data.items()}
 
 
 def _published_link(network: SocialNetwork) -> Any:
