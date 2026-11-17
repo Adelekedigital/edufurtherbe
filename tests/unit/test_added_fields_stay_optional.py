@@ -86,6 +86,16 @@ ADDED = {
         "this_month",
     ),
     "MenteeStatsWindowRead": ("completed_sessions", "minutes"),
+    # New with the profile link figures (decision 353), on the same terms: the
+    # days and the two blocks are required, every figure optional.
+    "MentorLinkStatsRead": ("window_days",),
+    "MentorLinkStatsWindowRead": (
+        "visits",
+        "visits_by_via",
+        "top_referrers",
+        "shares",
+        "shares_by_method",
+    ),
     # New with the monthly chart (decision 247), on the same terms.
     "MentorMonthlyStatsRead": ("months",),
     "MentorMonthRead": (

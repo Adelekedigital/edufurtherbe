@@ -1,20 +1,24 @@
-"""Mentor profile link tracking: what a visit or a share records (decisions 346-348).
+"""Mentor profile link tracking: what a visit or a share records (decisions 346-348),
+and the days a window of its figures covers (decision 353).
 
 Pure: the client's hints are normalised here, and the visitor key is computed
 here, so the rules are tested without a request or a database. The writes are
 `infra/db/link_tracking`; the endpoints are `POST /mentors/{handle}/visits`
-and `/shares`.
+and `/shares`. The read is `infra/db/link_stats`.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import hmac
 import re
+from typing import NamedTuple
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from app.domain.enums import LinkVia
+from app.domain.mentor_stats import Window
 
 #: How long a visitor key is: one HMAC-SHA256 digest.
 VISITOR_KEY_BYTES = 32
@@ -22,6 +26,38 @@ VISITOR_KEY_BYTES = 32
 DAY_KEY_BYTES = 32
 #: The longest host name DNS allows; a longer referrer is dropped, not cut.
 MAX_REFERRER_HOST = 253
+#: How many referrer hosts a window of link figures lists (decision 353).
+TOP_REFERRERS = 10
+
+
+class DaySpan(NamedTuple):
+    """UTC days `[since, until)`: `since` is inside, `until` is not."""
+
+    since: dt.date
+    until: dt.date
+
+
+def _first_day_from(instant: dt.datetime) -> dt.date:
+    """The first UTC day whose midnight is at or after ``instant``."""
+    if instant.tzinfo is None:
+        raise ValueError("instant must be timezone-aware")
+    utc = instant.astimezone(dt.UTC)
+    day = utc.date()
+    return day if utc == dt.datetime.combine(day, dt.time(), dt.UTC) else day + dt.timedelta(1)
+
+
+def day_span(window: Window) -> DaySpan:
+    """The UTC days whose midnight falls in ``window`` (decision 353).
+
+    Link events are stored by UTC day, not by instant, so a dashboard window
+    `[since, until)` counts the days that **start** inside it: the day under
+    way at `until` is in, the part day at `since` is the previous window's. So
+    a window of N days covers N days, adjacent windows cover adjacent days, and
+    a calendar year covers exactly its own days. Raises `ValueError` on a naive
+    edge.
+    """
+    return DaySpan(_first_day_from(window.since), _first_day_from(window.until))
+
 
 #: One DNS label: letters, digits and inner hyphens, at most 63 characters.
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
