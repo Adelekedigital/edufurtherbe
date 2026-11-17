@@ -104,6 +104,29 @@ not record which DSN form works there).
 A migration that waits on a lock fails after 10 seconds (`migrations/env.py`,
 decision 238). Re-dispatch it; do not raise the timeout.
 
+### 4a. Clear the dress run before the real load (decision 349)
+
+Production holds rehearsal data until the final export is loaded. Before the
+loaders run, clear it with `scripts/reset_app_data.py`, through the production
+Railway token (`project-conventions`, Railway access):
+
+1. Dry run: `railway run --service edufurtherbe-prod -- uv run python
+   scripts/reset_app_data.py --confirm-database <project ref>`. It prints the
+   target, every kept table and every table it would clear, with row counts.
+2. Read it. Exit 1 means it refused and says why (a sign-up on the new app,
+   or activity at or after `--real-data-from`, default 2026-11-19 00:00 UTC);
+   nothing was written. Nothing overrides a real sign-up.
+3. Apply: the same command with `--apply`. One transaction; it commits only
+   if every cleared table is empty and every kept table hashes as before.
+4. Run the loaders in the cutover page's order, then `provision_auth.py`: each
+   reloaded account relinks to its existing Supabase sign-in by address.
+
+Kept: Alembic's version, countries, languages, degree levels, service
+offerings, legal documents, and the institution and scholarship catalogues
+(their user-typed rows are cleared). Supabase sign-ins and stored images are
+never touched. Files uploaded to the private intake bucket during the dress run
+are left as unreferenced objects.
+
 ## 5. Enable the schedules
 
 Production schedules ship **disabled** (ADR 0028 Decision 6;
