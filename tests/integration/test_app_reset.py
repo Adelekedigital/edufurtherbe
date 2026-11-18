@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from tests.integration.factories import add_session, make_bookable_mentor, make_institution
 
+from app.domain import app_reset
 from app.domain.app_reset import DEFAULT_REAL_DATA_FROM, Target
 from app.domain.enums import LinkVia, ShareMethod
 from app.domain.provisioning import Action, Candidate, plan_for
@@ -47,6 +48,16 @@ NOW = dt.datetime.now(dt.UTC)
 LATER = NOW + dt.timedelta(days=1)
 #: Everything seeded now is real data under this one.
 EARLIER = NOW - dt.timedelta(hours=1)
+#: The latest cutoff these tests allow. Rows are seeded now and must fall
+#: before `LATER`, so the cap moves with the clock once the real one (a fixed
+#: date) has passed; `test_app_reset_rules` pins the real value.
+CAP = max(DEFAULT_REAL_DATA_FROM, LATER)
+
+
+@pytest.fixture(autouse=True)
+def _cap_after_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_reset, "DEFAULT_REAL_DATA_FROM", CAP)
+
 
 LINK_TABLES = ("mentor_profile_visits", "mentor_profile_shares", "visitor_day_keys")
 
@@ -548,7 +559,7 @@ async def test_a_later_cutoff_than_the_default_is_refused(db_engine: AsyncEngine
         await add_user(conn, f"kept-{uuid4()}@example.test")
     await _migrated(db_engine)
     dsn = db_engine.url.render_as_string(hide_password=False)
-    later = DEFAULT_REAL_DATA_FROM + dt.timedelta(seconds=1)
+    later = CAP + dt.timedelta(seconds=1)
 
     code = await run(dsn, confirm=str(db_engine.url.database), apply=True, real_data_from=later)
 

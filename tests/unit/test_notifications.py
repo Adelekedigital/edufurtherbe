@@ -12,6 +12,7 @@ this codebase's integrations, silently both times.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 from typing import Any
@@ -22,21 +23,25 @@ import pytest
 
 from app.core.config import Settings
 from app.core.errors import ConfigurationError
+from app.domain.email_registry import sample_context
 from app.domain.messages import MessageContext
 from app.domain.notifications import (
     AUDIENCE,
     LAST_REMINDER_KIND,
     SESSION_REMINDER_KINDS,
+    TEAM_NOTE,
     Channel,
     Notification,
     recipients,
 )
 from app.infra.clients import notifications
 from app.infra.clients.notifications import (
+    PLAIN_TEXT_VARIABLES,
     DeliveryError,
     LoopsNotifier,
     NullNotifier,
     ZernioNotifier,
+    loops_data_variables,
     template_for,
 )
 from app.infra.clients.templates import StaticTemplates
@@ -347,6 +352,85 @@ def test_loops_refuses_a_channel_it_does_not_carry() -> None:
             context=CONTEXT,
             idempotency_key=str(uuid4()),
         )
+
+
+#: A name chosen to phish whoever reads the email: a working link, an ``&``,
+#: a ``"`` that would end an attribute, and an apostrophe that must survive.
+HOSTILE = '<a href="https://evil.example">Verify</a> & O\'Brien'
+HOSTILE_ESCAPED = "&lt;a href=&quot;https://evil.example&quot;&gt;Verify&lt;/a&gt; &amp; O'Brien"
+
+
+def _approval_payload() -> dict[str, str]:
+    """The variables Loops is sent for an approval naming a hostile mentor."""
+    template = "tmpl_status"
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"success": True})
+
+    context = dataclasses.replace(
+        sample_context(Notification.MENTOR_APPROVED, "default"),
+        recipient_first_name=HOSTILE,
+        extras={TEAM_NOTE: "Line one.\nLine two: <b>x</b>"},
+        line_overrides={("default", "subject"): "{recipientFirstName}, you're approved"},
+    )
+    declared = frozenset(
+        {"emailSubject", "emailHeading", "recipientFirstName", "teamNote", "buttonUrl"}
+    )
+    configured = settings(email_templates={str(Notification.MENTOR_APPROVED): template})
+    notifier = (
+        LoopsNotifier("key", client=httpx.Client(transport=httpx.MockTransport(record)))
+        .with_settings(configured)
+        .with_templates(StaticTemplates({template: declared}))
+    )
+    notifier.send(
+        notification=Notification.MENTOR_APPROVED,
+        channel=Channel.EMAIL,
+        to="mentor@example.test",
+        context=context,
+        idempotency_key="k",
+    )
+    (request,) = seen
+    variables: dict[str, str] = json.loads(request.content)["dataVariables"]
+    return variables
+
+
+def test_person_written_text_reaches_loops_escaped_for_html() -> None:
+    """**Loops does not escape data variables in the body** (rendered
+    2026-11-18), so a name of ``<a href=...>`` would be a working link in an
+    email somebody else reads. Every variable is escaped at the adapter unless
+    `PLAIN_TEXT_VARIABLES` names it (decision 355)."""
+    variables = _approval_payload()
+
+    assert variables["recipientFirstName"] == HOSTILE_ESCAPED
+    assert variables["emailHeading"] == f"Welcome aboard, {HOSTILE_ESCAPED}"
+    # Kept as a line break: Loops shows it through `white-space: pre-wrap`.
+    assert variables["teamNote"] == "Line one.\nLine two: &lt;b&gt;x&lt;/b&gt;"
+    # Our own link stays a valid href: an attribute's `&amp;` reads as `&`.
+    assert variables["buttonUrl"].startswith("https://")
+    assert "&amp;utm_medium=notification" in variables["buttonUrl"]
+
+
+def test_the_subject_reaches_loops_as_typed() -> None:
+    """Loops escapes the subject itself (its ``<title>`` reads ``&lt;``), and the
+    inbox shows the header as text, so escaping it here would show ``&amp;``."""
+    assert _approval_payload()["emailSubject"] == f"{HOSTILE}, you're approved"
+
+
+def test_a_value_under_an_old_alias_is_escaped_too() -> None:
+    """An older template's name for a value (`fName`) is sent under that name,
+    and the allowlist is matched on the exact name sent, so it is escaped."""
+    sent = loops_data_variables({"fName": HOSTILE, "emailSubject": HOSTILE})
+
+    assert sent == {"fName": HOSTILE_ESCAPED, "emailSubject": HOSTILE}
+
+
+def test_only_the_subject_is_sent_as_plain_text() -> None:
+    """**Pinned**: each name here is one Loops escapes itself in every place a
+    template uses it. A variable used in the body as well (``emailHeading`` is
+    also the preview text) stays escaped, since the body is the risk."""
+    assert frozenset({"emailSubject"}) == PLAIN_TEXT_VARIABLES
 
 
 def test_the_default_notifier_delivers_nothing_and_raises_nothing() -> None:
