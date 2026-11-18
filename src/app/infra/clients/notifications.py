@@ -29,19 +29,24 @@ database is necessarily reachable"*.
 
 from __future__ import annotations
 
+import html
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError, ConfigurationError
+from app.domain.email_lines import LINE_VARIABLES
+from app.domain.enums import EmailLine
 from app.domain.messages import LineNote, MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
 from app.infra.clients.templates import LoopsTemplates, StaticTemplates, TemplateVariables
 from app.infra.http.client import shared
 
 __all__ = [
+    "PLAIN_TEXT_VARIABLES",
     "DeliveryError",
     "LoopsNotifier",
     "NullNotifier",
@@ -57,6 +62,38 @@ LOOPS_API = "https://app.loops.so/api/v1/transactional"
 TIMEOUT = httpx.Timeout(15.0)
 
 logger = logging.getLogger(__name__)
+
+#: **The variables Loops is sent unescaped** (decision 355): only those a
+#: template uses solely where Loops treats the value as text and escapes it
+#: itself, the subject, its ``<title>`` and the preview text (rendered
+#: 2026-11-18). Escaping one of those here would show ``&amp;`` in an inbox.
+#: ``emailSubject`` is the backend's subject line and goes nowhere else. A
+#: variable also used in the body stays escaped even where a subject or
+#: preview shows it (``emailHeading`` is the preview text; ``mentorName`` is in
+#: a subject), so a rare ``&``, ``<``, ``>`` or ``"`` there reads as its entity:
+#: the body is where a value becomes a link, and a cosmetic slip is the price.
+PLAIN_TEXT_VARIABLES = frozenset({LINE_VARIABLES[EmailLine.SUBJECT]})
+
+
+def loops_data_variables(variables: Mapping[str, str]) -> dict[str, str]:
+    """``variables`` as Loops must receive them: HTML-escaped, except
+    `PLAIN_TEXT_VARIABLES`.
+
+    **Loops does not escape data variables in the body** (rendered 2026-11-18):
+    a name of ``<a href=...>`` would be a working link in an email somebody
+    else reads. Escaped here, at the one place a value leaves for Loops, so a
+    new variable is safe by default. ``&``, ``<``, ``>`` and ``"`` (a value in a
+    double-quoted attribute, as Loops writes them) are escaped; ``'`` is not,
+    since no attribute is single-quoted and a subject or preview showing a
+    variable would read "O&#x27;Brien". Line breaks are kept: Loops shows them.
+    Our links come out with ``&amp;``, which an ``href`` reads as ``&``.
+    """
+    return {
+        name: value
+        if name in PLAIN_TEXT_VARIABLES
+        else html.escape(value, quote=False).replace('"', "&quot;")
+        for name, value in variables.items()
+    }
 
 
 class DeliveryError(AppError):
@@ -224,7 +261,7 @@ class LoopsNotifier:
                     # See the class docstring: true would make every recipient a
                     # contact and move the account onto a paid plan.
                     "addToAudience": False,
-                    "dataVariables": variables,
+                    "dataVariables": loops_data_variables(variables),
                 },
             )
             response.raise_for_status()
