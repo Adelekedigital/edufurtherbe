@@ -223,6 +223,17 @@ sections with a **conditional section on a data variable** (Loops: *Sections*,
 | mentor_status | `mentor_approved`, `mentor_declined`, `mentor_paused_by_admin` |
 | messages | `message_unread_few`, `message_unread_many`, `message_in_session_window` |
 
+**Values arrive HTML-escaped** (decision 355): Loops does not escape data
+variables in the body, so the backend escapes `&`, `<`, `>` and `"` in every
+variable it sends (`loops_data_variables`), keeping line breaks. The one
+exception is `emailSubject`, sent as typed because Loops escapes the subject
+and preview text itself. So put `{emailSubject}` only in the Subject field,
+and a template should not put a person's text in an `href`. A variable also
+used in the body (e.g. `emailHeading` as the preview text) is escaped
+everywhere, so an `&` in it (a name, or an admin's heading such as "Q&A")
+shows as `&amp;` in the inbox preview. Giving the preview text its own
+variable would end that; it needs a template change in Loops.
+
 **What a shared template may ask for**, beyond the names below:
 
 | name | value |
@@ -322,7 +333,7 @@ again from Loops at send time, so this column is a record, not a contract.
 | `message_in_session_window` | App: Messages | `cmw9twkjg02190jzrf5176hyw` | the person the message was sent to | as `message_unread_few` |
 
 **`teamNote` (decision 350)** is the team's optional note on an admin decision,
-plain text, empty when none was left. App: Mentor status may ask for it on all
+plain text (escaped on the way out, decision 355), empty when none was left. App: Mentor status may ask for it on all
 three of its emails: the approved and declined emails carry the admin's note
 (the decline's also stays in `declineReason`), and the admin's pause has none.
 Add it to the template only once the backend that fills it is deployed:
