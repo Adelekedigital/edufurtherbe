@@ -70,8 +70,9 @@ logger = logging.getLogger(__name__)
 #: ``emailSubject`` is the backend's subject line and goes nowhere else. A
 #: variable also used in the body stays escaped even where a subject or
 #: preview shows it (``emailHeading`` is the preview text; ``mentorName`` is in
-#: a subject), so a rare ``&``, ``<``, ``>`` or ``"`` there reads as its entity:
-#: the body is where a value becomes a link, and a cosmetic slip is the price.
+#: a subject), so an ``&``, ``<``, ``>`` or ``"`` there (a name, or an admin's
+#: heading such as "Q&A") reads as its entity in the inbox: the body is where a
+#: value becomes a link, and a cosmetic slip is the price.
 PLAIN_TEXT_VARIABLES = frozenset({LINE_VARIABLES[EmailLine.SUBJECT]})
 
 

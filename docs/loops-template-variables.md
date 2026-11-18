@@ -230,7 +230,9 @@ exception is `emailSubject`, sent as typed because Loops escapes the subject
 and preview text itself. So put `{emailSubject}` only in the Subject field,
 and a template should not put a person's text in an `href`. A variable also
 used in the body (e.g. `emailHeading` as the preview text) is escaped
-everywhere, so a rare `&` in it shows as `&amp;` in the inbox preview.
+everywhere, so an `&` in it (a name, or an admin's heading such as "Q&A")
+shows as `&amp;` in the inbox preview. Giving the preview text its own
+variable would end that; it needs a template change in Loops.
 
 **What a shared template may ask for**, beyond the names below:
 

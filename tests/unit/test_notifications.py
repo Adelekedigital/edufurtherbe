@@ -41,6 +41,7 @@ from app.infra.clients.notifications import (
     LoopsNotifier,
     NullNotifier,
     ZernioNotifier,
+    loops_data_variables,
     template_for,
 )
 from app.infra.clients.templates import StaticTemplates
@@ -415,6 +416,14 @@ def test_the_subject_reaches_loops_as_typed() -> None:
     """Loops escapes the subject itself (its ``<title>`` reads ``&lt;``), and the
     inbox shows the header as text, so escaping it here would show ``&amp;``."""
     assert _approval_payload()["emailSubject"] == f"{HOSTILE}, you're approved"
+
+
+def test_a_value_under_an_old_alias_is_escaped_too() -> None:
+    """An older template's name for a value (`fName`) is sent under that name,
+    and the allowlist is matched on the exact name sent, so it is escaped."""
+    sent = loops_data_variables({"fName": HOSTILE, "emailSubject": HOSTILE})
+
+    assert sent == {"fName": HOSTILE_ESCAPED, "emailSubject": HOSTILE}
 
 
 def test_only_the_subject_is_sent_as_plain_text() -> None:
