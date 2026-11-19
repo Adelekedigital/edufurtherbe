@@ -107,7 +107,7 @@ of that cost.
 | `sessionTimezone` | the zone those two are rendered in, as its code at the session's moment: `WAT`, `EDT`; an offset such as `+04` where the zone has no common code |
 | `sessionTopic` | what the session is about |
 | `sessionDetail` | what the mentee wants to discuss |
-| `location` | the venue **label** — "Google Meet", "Daily". Never a URL |
+| `location` | the venue **label** — "Google Meet", "EduFurther video". Never a URL |
 | `sessionUrl` | the EduFurther **session page**. Never the meeting link |
 | `dashboardUrl` | the recipient's dashboard |
 | `adminMentorsUrl` | the admin app's Mentors page (`/admin/mentors` on the app's origin), where a new application is reviewed |
