@@ -197,6 +197,21 @@ so the front end must already be sending it.
 4. In Vercel Firewall, add one rate-limit rule on `/api/v1/*`, keyed by IP
    (available on Hobby and Pro). Start it with the **Log** action, then switch
    to the default `429` once the numbers look right.
+
+   **As set on 19 Nov 2026** (frontend, verified through the Vercel API):
+   - The old rule stays on all hosts, `/api/v1/` and `/api/monitoring`, **log
+     only** at 600 per 60 s, so the end-to-end agent on staging is not
+     throttled.
+   - "Production API per-IP limit (429)": host `app.edufurther.org` only, the
+     same paths, 300 per 60 s per IP, then `429`. It takes effect when `app`'s
+     DNS moves. **After the DNS move**, confirm it answers `429` past 300
+     requests a minute on `app.edufurther.org` and that staging is unaffected.
+   - Bot Protection and AI bots stay on **Log** through cutover; AI crawlers
+     stay allowed, for discovery in AI search (owner, 19 Nov). About three days
+     after go-live the frontend reads the bot log and decides on Challenge,
+     which must not challenge WhatsApp link previews or the end-to-end agent.
+   - Vercel Pro with Skew Protection (12 h); the owner set the spend limit
+     (Settings → Billing → Spend Management; the API cannot read it).
 5. Rotation: new value in `EDGE_PROXY_NEXT_SECRET` on Railway, switch Vercel to
    it, then move it to `EDGE_PROXY_SECRET` and clear the next one.
 
