@@ -804,7 +804,7 @@ async def _context_for(
 #: early — which the join window exists to prevent.
 VENUE_LABELS = {
     "google_meet": "Google Meet",
-    "daily": "Daily",
+    "daily": "EduFurther video",
     "zoom": "Zoom",
     "custom": "A link your mentor will share",
 }
