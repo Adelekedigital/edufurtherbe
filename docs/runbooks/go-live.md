@@ -170,7 +170,12 @@ never changes QStash.
    (`src/app/api/routes/callbacks.py`).
 2. Set `DAILY_WEBHOOK_SECRET` on Railway to the HMAC secret Daily issues:
    base64, at least 16 bytes (validator in `src/app/core/config.py`).
-3. Close #405. The Daily account is shared with the legacy app (#405), so this
+3. Verify live presence: two accounts join one EduFurther video session. Within
+   about 15 seconds each sees the other as "Here now" on `/sessions/{id}`, a
+   `session_room_stays` row appears, and its `left_at` fills in when one leaves.
+   Staging never had the webhook (0 stays ever on dev, so its join page shows
+   "Not in the call yet" for both); the owner chose to turn it on at cutover only.
+4. Close #405. The Daily account is shared with the legacy app (#405), so this
    is a cutover step, not earlier.
 
 ## 7. Lock the origin to the front end (#426)
