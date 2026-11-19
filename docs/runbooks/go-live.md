@@ -210,8 +210,10 @@ so the front end must already be sending it.
      stay allowed, for discovery in AI search (owner, 19 Nov). About three days
      after go-live the frontend reads the bot log and decides on Challenge,
      which must not challenge WhatsApp link previews or the end-to-end agent.
-   - Vercel Pro with Skew Protection (12 h); the owner set the spend limit
-     (Settings → Billing → Spend Management; the API cannot read it).
+   - Vercel Pro with Skew Protection (12 h) and a **$10 team spend limit**
+     (owner, 19 Nov), on usage beyond Pro's included $20: alerts at 50/75/100%,
+     pause off for launch week and on from about 30 Nov (Settings → Billing →
+     Spend Management; the API cannot read it).
 5. Rotation: new value in `EDGE_PROXY_NEXT_SECRET` on Railway, switch Vercel to
    it, then move it to `EDGE_PROXY_SECRET` and clear the next one.
 
