@@ -403,7 +403,7 @@ scenarios:
         a11y: true
         human: "Second sitting, in the join window: the join link is live. Both people then open it and enter the Daily room (attendance comes from Daily's webhook)."
       - {kind: job, id: settle, script: scripts/settle_sessions.py, after: mentor_joins, expect: {exit: 0},
-         human: "After the join window closes, run settlement."}
+         human: "About 5 minutes after the join window closes, run settlement. Daily's attendance records lag: a run in the first minute can find nothing to settle, so run it again."}
       - {kind: api, id: completed, viewer: mentee_with_credits, method: GET, path: "/api/v1/sessions/{session_id}",
          params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: completed}},
          human: "The session is completed. On Daily, attendance comes from Daily's webhook, so both must actually enter the room (join_ui)."}
@@ -458,7 +458,7 @@ scenarios:
          path: "/api/v1/sessions/{session_id}/join", params: {session_id: "${session_id}"},
          expect: {status: 200}, human: "Second sitting: only the mentor joins."}
       - {kind: job, id: settle, script: scripts/settle_sessions.py, after: mentor_joins, expect: {exit: 0},
-         human: "After the join window closes, run settlement."}
+         human: "About 5 minutes after the join window closes, run settlement. Daily's attendance records lag: a run in the first minute can find nothing to settle, so run it again."}
       - {kind: api, id: no_show, viewer: mentee_no_show, method: GET, path: "/api/v1/sessions/{session_id}",
          params: {session_id: "${session_id}"}, expect: {status: 200, json: {/status: no_show}},
          human: "The session reads as missed."}
@@ -706,7 +706,7 @@ scenarios:
           - {visible: {role: radiogroup, name: "How supported did you feel during the session?"}}
         screenshot: true
         a11y: true
-        human: "Open the completed session, choose Leave a review, give 5 stars and write a public review. The API step submits it."
+        human: "After the session's END time (not just settlement: until then the page still reads In progress), open the session, choose Leave a review, give 5 stars and write a public review. The API step submits it."
       - {kind: api, id: review, viewer: mentee_with_credits, method: POST, path: /api/v1/reviews,
          body: {session_id: "${session_id}", overall_rating: 5, communication_rating: great, knowledge_rating: great,
                 practicality_rating: okay, support_rating: great, valuable_rating: 5, nps_recommend_score: 9,
