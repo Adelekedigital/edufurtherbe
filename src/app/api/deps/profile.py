@@ -78,6 +78,7 @@ from app.infra.db.mentor_application_store import (
     mark_approved_seen,
     submit_application,
 )
+from app.infra.db.notice_store import dismissed_notices
 from app.infra.db.onboarding_store import get_onboarding, onboarding_state
 from app.infra.db.onboarding_writer import (
     OnboardingResult,
@@ -235,6 +236,8 @@ async def own_attributes(
         "onboarding": await onboarding_state(session, user_id),
         # The cookie answer, null until given (PRD 30).
         "analytics_consent": analytics_consent_of(user),
+        # The one-time notices dismissed, first first (decision 356).
+        "seen_items": await dismissed_notices(session, user_id),
     }
 
 

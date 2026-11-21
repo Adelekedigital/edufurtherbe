@@ -21,6 +21,7 @@ from app.domain.push import MAX_SUBSCRIPTIONS_PER_USER
 from app.infra.clients.web_push import PushOutcome
 from app.infra.db.models.push import PushSubscription
 from app.infra.db.models.user import User
+from app.infra.db.per_user_cap import keep_newest
 from app.infra.db.predicates import LIVE
 from app.infra.db.user_locks import lock_users
 
@@ -56,16 +57,13 @@ async def subscribe(
         .returning(literal_column("xmax = 0"))
     )
     created = bool(result.scalar_one())
-    kept = (
-        select(PushSubscription.id)
-        .where(PushSubscription.user_id == user_id)
-        .order_by(PushSubscription.updated_at.desc(), PushSubscription.id.desc())
-        .limit(MAX_SUBSCRIPTIONS_PER_USER)
-    )
-    await session.execute(
-        delete(PushSubscription).where(
-            PushSubscription.user_id == user_id, PushSubscription.id.not_in(kept)
-        )
+    await keep_newest(
+        session,
+        PushSubscription,
+        PushSubscription.user_id,
+        user_id,
+        newest=PushSubscription.updated_at,
+        keep=MAX_SUBSCRIPTIONS_PER_USER,
     )
     return created
 

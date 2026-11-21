@@ -12,7 +12,8 @@ and their events in product analytics (PRD 30), and the rest
 that is only theirs and that nothing kept points at: sign-in identities, calendar
 tokens, social links, awards, onboarding, interest, writing-assist counts,
 idempotency keys, a mentor's availability, listings, guide countries and
-personal meeting links, their browsers' push subscriptions, their analytics
+personal meeting links, their browsers' push subscriptions, the notices they
+dismissed, their analytics
 cookie answer, the days they were active (decision 342) and the analytics
 events about them not yet sent. Every handle
 their invite link carried goes too, and the address of the invite they arrived
@@ -67,6 +68,7 @@ from app.infra.db.models.mentoring import (
     MentorServiceOffering,
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
+from app.infra.db.models.notices import UserDismissedNotice
 from app.infra.db.models.platform import (
     FeatureInterest,
     IdempotencyKey,
@@ -123,6 +125,7 @@ _OWN_ROWS: tuple[tuple[Any, Any], ...] = (
     (PushSubscription, PushSubscription.user_id),
     (AnalyticsConsent, AnalyticsConsent.user_id),
     (UserActivityDay, UserActivityDay.user_id),
+    (UserDismissedNotice, UserDismissedNotice.user_id),
     # A purged mentor's link visits and shares count nothing (decision 346).
     (MentorProfileVisit, MentorProfileVisit.mentor_user_id),
     (MentorProfileShare, MentorProfileShare.mentor_user_id),

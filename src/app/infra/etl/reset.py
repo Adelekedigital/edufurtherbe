@@ -160,6 +160,7 @@ CLEAR: frozenset[str] = frozenset(
         "sessions",
         "user_activity_days",
         "user_awards",
+        "user_dismissed_notices",
         "user_languages",
         "user_legal_consents",
         "user_links",

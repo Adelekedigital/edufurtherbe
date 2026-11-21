@@ -160,6 +160,8 @@ EXPECTED_MODELS = {
     "MentorProfileShare",
     # Each UTC day's random key for profile link visitors (decision 348).
     "VisitorDayKey",
+    # The one-time notices a user dismissed (decision 356).
+    "UserDismissedNotice",
 }
 
 TIMESTAMP_COLUMNS = ("created_at", "updated_at")
@@ -203,6 +205,9 @@ APPEND_ONLY = frozenset(
         "MentorProfileShare",
         # A day's key is drawn once and deleted after its day; never edited.
         "VisitorDayKey",
+        # A dismissed notice is the fact that someone closed it, then; a repeat
+        # keeps the first time and nothing edits it.
+        "UserDismissedNotice",
     }
 )
 
