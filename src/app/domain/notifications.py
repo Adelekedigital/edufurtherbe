@@ -165,6 +165,10 @@ class Notification(StrEnum):
     #: credit before the lot exists. Signing up is free and finishing a profile
     #: is work — the message has to arrive where the work did.
     #:
+    #: **Also when a save completes an onboarded mentee's four answers**
+    #: (decision 358): migrated mentees who finished onboarding with none are
+    #: paid the starter credit then, with the same notice.
+    #:
     #: Only on the call that actually paid. A retried completion pays nothing,
     #: so it says nothing: an empty `top_up_levels` result is what the producer
     #: branches on.
