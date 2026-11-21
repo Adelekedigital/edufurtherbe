@@ -31,12 +31,12 @@ MENTOR = "1720393627919x464416579629646660"
 OTHER = "1734290858394x940262126235280600"
 NOT_A_MENTOR = "9999999999999x000000000000000000"
 
-ZONES = {MENTOR: "Africa/Lagos", OTHER: "America/New_York"}
-MENTORS = {MENTOR, OTHER}
+CHICAGO = "1721923606694x527450996330713000"
+MENTORS = {MENTOR, OTHER, CHICAGO}
 
 
 def rule_record(**overrides: Any) -> dict[str, Any]:
-    """A canonicalised `CalendarSettings` row, Gen B by default.
+    """A canonicalised `CalendarSettings` row, owned by the New York mentor.
 
     Values mirror what `JsonExportSource` produces: blanks already collapsed to
     `None` by `blank_to_none`, and `Creation Date` renamed to `created_at`.
@@ -58,8 +58,9 @@ def rule_record(**overrides: Any) -> dict[str, Any]:
 
 
 USERS = [
-    {"bubble_id": MENTOR, "Mentor": "m-1", "UserTimezonID": "Africa/Lagos"},
-    {"bubble_id": OTHER, "Mentor": "m-2", "UserTimezonID": "America/New_York"},
+    {"bubble_id": MENTOR, "Mentor": "m-1", "UserTimezonID": "America/New_York"},
+    {"bubble_id": OTHER, "Mentor": "m-2", "UserTimezonID": "Europe/Vienna"},
+    {"bubble_id": CHICAGO, "Mentor": "m-3", "UserTimezonID": "America/Chicago"},
 ]
 
 
@@ -67,7 +68,6 @@ def plan(
     rules: list[dict[str, Any]],
     extra: list[dict[str, Any]] | None = None,
     users: list[dict[str, Any]] | None = None,
-    as_of: date = date(2026, 11, 22),
     session_minutes: dict[str, int] | None = None,
 ) -> Any:
     return plan_availability(
@@ -75,168 +75,121 @@ def plan(
         rules,
         extra or [],
         export_timezone=EXPORT_TIMEZONE,
-        as_of=as_of,
         session_minutes=session_minutes or {},
     )
 
 
 # --------------------------------------------------------------------------
-# The two generations — the five-hour question
+# One rule: the stored stamps, in the mentor's own zone (decision 360)
 # --------------------------------------------------------------------------
 
 
-def test_a_gen_b_row_keeps_the_printed_time() -> None:
-    """`timeZone` is set, so the export's rendering IS the declared wall clock.
-
-    Converting here — the obvious move, since `parse_timestamp` is the project's
-    blessed parser and returns aware UTC — would store 14:00 for a mentor who
-    said 09:00.
-    """
+def test_a_slot_is_its_stored_times_in_the_mentors_zone() -> None:
     result = plan([rule_record()])
 
-    assert len(result.rules) == 1
-    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
-    assert result.rules[0].timezone == "America/New_York"
-
-
-def test_a_gen_a_row_loads_as_its_utc_moment_in_the_owners_zone() -> None:
-    """Decision 359: no `timeZone` on the row, so the stored instant is the
-    slot. 426 production bookings fall inside Gen A windows read that way,
-    against 142 for the printed reading in the owner's zone.
-
-    Printed 02:00 in the export's zone is 07:00 UTC, which is 08:00 in Lagos.
-    """
-    result = plan(
-        [rule_record(timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 2:15 am")]
-    )
-
-    assert len(result.rules) == 1
     rule = result.rules[0]
-    assert (rule.start_time, rule.end_time) == (time(8, 0), time(8, 15))
-    assert rule.timezone == "Africa/Lagos"
-    assert result.read_from_utc == ("cs-1",)
-
-
-def test_a_gen_a_row_takes_the_owners_offset_on_the_as_of_date() -> None:
-    """07:00 UTC is 02:00 in New York in winter and 03:00 in summer. The
-    cutover date decides it, so every row converts with the same offset."""
-    record = rule_record(
-        Creator=OTHER, timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 3:00 am"
+    assert (rule.start_time, rule.end_time, rule.timezone) == (
+        time(9, 0),
+        time(12, 0),
+        "America/New_York",
     )
 
-    winter = plan([record]).rules[0]
-    summer = plan([record], as_of=date(2026, 7, 1)).rules[0]
 
-    assert (winter.start_time, winter.timezone) == (time(2, 0), "America/New_York")
-    assert summer.start_time == time(3, 0)
-
-
-def test_a_gen_a_row_moves_to_the_owners_weekday() -> None:
-    """The legacy weekday is the UTC one. Monday 23:30-00:00 UTC is Tuesday
-    00:30-01:00 in Lagos, and a booking on Tuesday there must find it."""
-    result = plan(
-        [rule_record(timeZone=None, startTime="Nov 9, 2024 6:30 pm", endTime="Nov 9, 2024 7:00 pm")]
-    )
-
-    rule = result.rules[0]
-    assert (rule.day_of_week, rule.start_time, rule.end_time) == (2, time(0, 30), time(1, 0))
-
-
-def test_a_zero_length_gen_a_row_is_refused_not_stretched_to_a_day() -> None:
-    result = plan(
-        [rule_record(timeZone=None, startTime="Nov 9, 2024 9:00 am", endTime="Nov 9, 2024 9:00 am")]
-    )
-
-    assert result.rules == ()
-    assert "does not move forward" in result.midnight_crossing[0].reason
-
-
-def test_every_weekday_of_a_zone_takes_one_offset() -> None:
-    """New York leaves DST on Sunday 1 Nov 2026. With the cutover on Friday 30
-    Oct, a Friday and a Sunday slot at 12:00 UTC must both read 08:00: one
-    mentor's hours never sit an hour apart from one day to the next."""
-    rows = [
-        rule_record(
-            bubble_id=anchor,
-            Creator=OTHER,
-            timeZone=None,
-            startTime="Nov 9, 2024 7:00 am",
-            endTime="Nov 9, 2024 8:00 am",
-            **{"dayOfWeekIn#️⃣": day, "daysOfWeek-O/S🔛": name},
-        )
-        for anchor, day, name in (("fri", "5", "Friday"), ("sun", "0", "Sunday"))
-    ]
-
-    result = plan(rows, as_of=date(2026, 10, 30))
-
-    assert {(r.day_of_week, r.start_time) for r in result.rules} == {
-        (5, time(8, 0)),
-        (0, time(8, 0)),
-    }
-
-
-def test_windows_in_two_zones_are_never_merged() -> None:
-    """The union of 10:00-12:00 Lagos and 11:00-13:00 New York is not
-    10:00-13:00 in either; the later one is reported and not loaded."""
+def test_a_slot_converts_into_the_mentors_own_zone() -> None:
+    """Production, Ujunwa: printed 11:00 New York on 31 Mar 2000 is 16:00 UTC,
+    which is 18:00 in Vienna, and her bookings sat at 18:00 Vienna all year.
+    The old reading stored 11:00 in the slot's own zone, six hours early."""
     result = plan(
         [
             rule_record(
-                bubble_id="lagos",
+                Creator=OTHER,
                 timeZone="Africa/Lagos",
-                startTime="Dec 15, 2025 10:00 am",
-                endTime="Dec 15, 2025 12:00 pm",
+                startTime="Mar 31, 2000 11:00 am",
+                endTime="Mar 31, 2000 11:45 am",
+            )
+        ]
+    )
+
+    rule = result.rules[0]
+    assert (rule.start_time, rule.end_time, rule.timezone) == (
+        time(18, 0),
+        time(18, 45),
+        "Europe/Vienna",
+    )
+
+
+def test_each_stamp_takes_the_offset_of_its_own_date() -> None:
+    """Production, Segun: a start saved in June 2025 (20:00 UTC) and an end in
+    July 2026 (21:30 UTC) are 15:00 and 16:30 Chicago, both in daylight time;
+    a start saved on 31 Mar 2000 (21:00 UTC, standard time) is 15:00 too. His
+    bookings sat at 15:00 Chicago in summer and winter."""
+    result = plan(
+        [
+            rule_record(
+                bubble_id="wed",
+                Creator=CHICAGO,
+                startTime="Jun 10, 2025 4:00 pm",
+                endTime="Jul 26, 2026 5:30 pm",
             ),
             rule_record(
-                bubble_id="ny", startTime="Dec 15, 2025 11:00 am", endTime="Dec 15, 2025 1:00 pm"
+                bubble_id="fri",
+                Creator=CHICAGO,
+                startTime="Mar 31, 2000 4:00 pm",
+                endTime="Mar 31, 2000 4:30 pm",
+                **{"dayOfWeekIn#\ufe0f\u20e3": "5", "daysOfWeek-O/S\U0001f51b": "Friday"},
             ),
         ]
     )
 
-    assert [(r.legacy_bubble_id, r.end_time) for r in result.rules] == [("lagos", time(12, 0))]
-    assert result.merged_overlaps == ()
-    assert result.dropped == ()
-    assert result.zone_clashes[0].legacy_bubble_id == "ny"
-    assert "in Africa/Lagos and this in America/New_York" in result.zone_clashes[0].reason
-    assert "ny" in result.accounted_for()
+    by_anchor = {r.legacy_bubble_id: (r.start_time, r.end_time) for r in result.rules}
+    assert by_anchor == {"wed": (time(15, 0), time(16, 30)), "fri": (time(15, 0), time(15, 30))}
 
 
-def test_a_refused_gen_a_row_is_not_reported_as_a_zone_default() -> None:
+def test_the_weekday_is_the_legacy_one() -> None:
+    result = plan([rule_record(Creator=OTHER)])
+
+    assert result.rules[0].day_of_week == 1
+
+
+def test_the_slot_zone_is_not_read_and_a_difference_is_reported() -> None:
+    result = plan([rule_record(timeZone="Africa/Lagos")])
+
+    assert (result.rules[0].start_time, result.rules[0].timezone) == (
+        time(9, 0),
+        "America/New_York",
+    )
+    assert "slot says Africa/Lagos" in result.zone_differs[0]
+
+
+def test_a_slot_zone_that_matches_is_not_reported() -> None:
+    assert plan([rule_record()]).zone_differs == ()
+
+
+def test_the_display_text_is_not_read() -> None:
+    """The text was written once in the creating browser's zone and often went
+    stale, so a healthy row keeps its stamps whatever its text says."""
     result = plan(
-        [
-            rule_record(
-                timeZone=None, startTime="Nov 9, 2024 9:00 am", endTime="Nov 9, 2024 9:00 am"
-            )
-        ],
+        [rule_record(**{"24hr-locatStartTime-TXT": "12:30", "24hr-localEndTime-TXT": "13:45"})]
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
+
+
+def test_an_owner_with_no_zone_lands_in_utc_and_is_reported() -> None:
+    """Printed 09:00 New York in December is 14:00 UTC."""
+    result = plan([rule_record()], users=[{"bubble_id": MENTOR, "Mentor": "m-1"}])
+
+    assert (result.rules[0].start_time, result.rules[0].timezone) == (time(14, 0), "UTC")
+    assert "has no timezone of their own" in result.zone_defaults[0]
+
+
+def test_a_refused_row_is_not_reported_as_a_zone_default() -> None:
+    result = plan(
+        [rule_record(startTime="Nov 9, 2024 9:00 am", endTime="Nov 9, 2024 9:00 am")],
         users=[{"bubble_id": MENTOR, "Mentor": "m-1"}],
     )
 
     assert result.midnight_crossing and result.zone_defaults == ()
-
-
-def test_the_discriminator_reads_none_not_empty_string() -> None:
-    """`blank_to_none` runs during canonicalisation, so a blank column arrives as
-    `None`. A `== ""` test would classify every row as Gen B and apply the wrong
-    time rule to half the table — the same five-hour defect, one line away."""
-    as_none = plan([rule_record(timeZone=None)])
-    as_blank = plan([rule_record(timeZone="")])
-
-    assert as_none.read_from_utc == as_blank.read_from_utc == ("cs-1",)
-    assert as_none.rules == as_blank.rules
-    assert as_none.rules[0].timezone == "Africa/Lagos"
-
-
-def test_a_gen_a_row_whose_owner_has_no_zone_lands_in_utc_and_is_reported() -> None:
-    result = plan(
-        [
-            rule_record(
-                timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 2:15 am"
-            )
-        ],
-        users=[{"bubble_id": MENTOR, "Mentor": "m-1"}],
-    )
-
-    assert (result.rules[0].start_time, result.rules[0].timezone) == (time(7, 0), "UTC")
-    assert "has no timezone of their own" in result.zone_defaults[0]
 
 
 # --------------------------------------------------------------------------
@@ -294,77 +247,18 @@ def test_a_zero_length_window_is_refused() -> None:
     assert "does not move forward" in result.midnight_crossing[0].reason
 
 
-def test_a_gen_a_window_crossing_midnight_in_utc_loads_in_the_owners_zone() -> None:
-    """23:30-00:30 UTC crosses midnight, but each end converts on its own, so
-    in New York it is 18:30-19:30 and loads. The ordering check runs on the
-    reading that is stored, never on the UTC one."""
+def test_a_window_crossing_midnight_in_the_mentors_zone_is_reported() -> None:
+    """17:30-18:30 New York is 23:30-00:30 in Vienna."""
     result = plan(
         [
             rule_record(
-                Creator=OTHER,
-                timeZone=None,
-                startTime="Nov 9, 2024 6:30 pm",
-                endTime="Nov 9, 2024 7:30 pm",
+                Creator=OTHER, startTime="Dec 15, 2025 5:30 pm", endTime="Dec 15, 2025 6:30 pm"
             )
         ]
-    )
-
-    assert result.midnight_crossing == ()
-    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(18, 30), time(19, 30))
-
-
-def test_a_gen_a_window_crossing_midnight_in_the_owners_zone_is_reported() -> None:
-    """22:30-23:30 UTC is 23:30-00:30 in Lagos: not a window the column holds."""
-    result = plan(
-        [rule_record(timeZone=None, startTime="Nov 9, 2024 5:30 pm", endTime="Nov 9, 2024 6:30 pm")]
     )
 
     assert result.rules == ()
     assert "23:30-00:30 does not move forward" in result.midnight_crossing[0].reason
-
-
-def test_a_gen_b_row_with_a_broken_end_is_read_from_its_display_text() -> None:
-    """Production: a Sunday 1:00-2:45 PM slot whose `endTime` carries another
-    date and reads 03:00. The 24-hour text is what the legacy app showed the
-    mentor, so it is used when, and only when, the stamps do not move forward."""
-    result = plan(
-        [
-            rule_record(
-                startTime="Mar 31, 2000 1:00 pm",
-                endTime="Nov 6, 2026 3:00 am",
-                **{"24hr-locatStartTime-TXT": "13:00", "24hr-localEndTime-TXT": "14:45"},
-            )
-        ]
-    )
-
-    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(13, 0), time(14, 45))
-    assert result.repaired_from_text == ("cs-1",)
-    assert result.midnight_crossing == ()
-
-
-def test_display_text_that_does_not_move_forward_either_is_still_reported() -> None:
-    result = plan(
-        [
-            rule_record(
-                startTime="Mar 31, 2000 7:00 pm",
-                endTime="Mar 31, 2000 7:45 am",
-                **{"24hr-locatStartTime-TXT": "19:00", "24hr-localEndTime-TXT": "07:45"},
-            )
-        ]
-    )
-
-    assert result.rules == () and result.repaired_from_text == ()
-    assert "does not move forward" in result.midnight_crossing[0].reason
-
-
-def test_display_text_on_a_healthy_row_is_ignored() -> None:
-    """The text is stale on rows a mentor later edited; the stamps win."""
-    result = plan(
-        [rule_record(**{"24hr-locatStartTime-TXT": "12:30", "24hr-localEndTime-TXT": "13:45"})]
-    )
-
-    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
-    assert result.repaired_from_text == ()
 
 
 def test_a_zero_length_window_is_one_session_long() -> None:
@@ -420,16 +314,22 @@ def test_an_unreadable_block_date_value_is_reported_not_ignored() -> None:
     assert "yielded no dates" in result.dropped[0].reason
 
 
-def test_an_unrecognised_timezone_is_refused_rather_than_stored() -> None:
-    """`availability_rules.timezone` is `text` with no CHECK — PostgreSQL will
-    not accept `pg_timezone_names` in one — so this is the only place the value
-    is checked at all. Left unvalidated it passes NOT NULL and then raises
-    `ZoneInfoNotFoundError` inside the projection, long after the ETL exited 0.
-    """
+def test_an_unrecognised_slot_zone_is_never_stored() -> None:
+    """`availability_rules.timezone` is `text` with no CHECK, so only a zone
+    validated here may reach it: the owner's, never the slot's own."""
     result = plan([rule_record(timeZone="Eastern Standard Time")])
 
-    assert result.rules == ()
-    assert "is not an IANA zone" in result.dropped[0].reason
+    assert result.rules[0].timezone == "America/New_York"
+    assert "slot says Eastern Standard Time" in result.zone_differs[0]
+
+
+def test_an_unrecognised_owner_zone_refuses_the_run() -> None:
+    result = plan(
+        [rule_record()],
+        users=[{"bubble_id": MENTOR, "Mentor": "m-1", "UserTimezonID": "Mars/Base"}],
+    )
+
+    assert not result.ok
 
 
 def test_a_daily_cap_of_zero_is_not_carried() -> None:
@@ -627,14 +527,13 @@ def test_one_legacy_row_fans_out_to_one_exception_per_date() -> None:
 
 def test_an_exception_takes_its_zone_from_the_owner() -> None:
     """`CalendarExtra` has no timezone field at all, so the owner's
-    `users.timezone` is the only source. Rules never reach this path: a rule
-    without a zone is Gen A, read from its UTC moment in the owner's zone."""
+    `users.timezone` is the only source, as it is for every rule."""
     result = plan(
         [],
         [{"bubble_id": "ce-1", "Creator": MENTOR, "block-Date(s)": "Jan 13, 2025 12:00 am"}],
     )
 
-    assert result.exceptions[0].timezone == "Africa/Lagos"
+    assert result.exceptions[0].timezone == "America/New_York"
     assert result.zone_defaults == ()
 
 
@@ -660,15 +559,15 @@ def test_an_owner_with_no_timezone_falls_back_and_is_reported() -> None:
 def test_the_report_states_every_outcome_a_run_can_have() -> None:
     """The report **is** the deliverable, not a log line.
 
-    It says how many rules were read from their UTC moment, and it is the only
-    place a merged or dropped row is ever mentioned. An untested renderer that
+    It is the only place a merged, dropped or zone-differing row is ever
+    mentioned. An untested renderer that
     quietly stops printing one of those sections would leave the run looking
     clean.
     """
     result = plan(
         [
             rule_record(bubble_id="loaded"),
-            rule_record(bubble_id="genA", timeZone=None, Creator=OTHER),
+            rule_record(bubble_id="lagos", Creator=OTHER, timeZone="Africa/Lagos"),
             rule_record(bubble_id="orphan", Creator=None),
         ],
         [{"bubble_id": "ce-1", "Creator": MENTOR, "block-Date(s)": "Jan 13, 2025 12:00 am"}],
@@ -677,9 +576,8 @@ def test_the_report_states_every_outcome_a_run_can_have() -> None:
 
     assert "rules loaded        2" in text
     assert "exceptions loaded   1" in text
-    assert "read from UTC       1" in text
     assert "dropped             1" in text
-    assert "read from UTC moment (no slot zone) (1):\n  genA" in text
+    assert "slot zone differs from the owner's (owner's used) (1):\n  lagos" in text
 
 
 def test_the_report_is_quiet_when_there_is_nothing_to_say() -> None:
@@ -689,7 +587,7 @@ def test_the_report_is_quiet_when_there_is_nothing_to_say() -> None:
 
     assert "rules loaded        1" in text
     assert "dropped (" not in text
-    assert "read from UTC moment" not in text
+    assert "slot zone differs" not in text
 
 
 def test_timestamps_come_from_bubble_not_the_import_clock() -> None:

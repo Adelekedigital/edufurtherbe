@@ -1,11 +1,10 @@
 """Transform a legacy snapshot into the availability tables, then report.
 
     # transform and report, touching no database
-    uv run python scripts/load_availability.py --from-export script-data-dev \
-        --as-of 2026-11-22 --dry-run
+    uv run python scripts/load_availability.py --from-export script-data-dev --dry-run
 
     # load
-    uv run python scripts/load_availability.py --from-export script-data-dev --as-of 2026-11-22
+    uv run python scripts/load_availability.py --from-export script-data-dev
 
 **Run this after ``load_identity.py`` and ``load_profiles.py``.** Every rule
 hangs off ``mentor_profiles``, so out of order it fails on a foreign key.
@@ -24,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime as dt
 import sys
 from pathlib import Path
 
@@ -48,7 +46,7 @@ from app.infra.etl.reconcile import reconcile_availability
 from app.infra.etl.satellites import user_id_map
 
 
-def build_plan(directory: Path, as_of: dt.date) -> AvailabilityPlan:
+def build_plan(directory: Path) -> AvailabilityPlan:
     source = open_export(directory)
     users = list(source.read("allusers"))
     settings_records = list(source.read("calendarsettings"))
@@ -57,15 +55,12 @@ def build_plan(directory: Path, as_of: dt.date) -> AvailabilityPlan:
     # Raw records in. Deciding what a user's timezone is, and who counts as a
     # mentor, are mapping decisions — and this directory is checked by ruff
     # alone, so a rule written here is a rule nothing verifies (#44).
-    # The cutover date, given rather than read from the clock, so a re-run
-    # converts a Gen A instant with the same offset (decision 359).
     session_minutes, _ = durations_by_mentor(settings_records)
     return plan_availability(
         users,
         settings_records,
         extra_records,
         export_timezone=EXPORT_TIMEZONE,
-        as_of=as_of,
         session_minutes=session_minutes,
     )
 
@@ -103,16 +98,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-export", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
-        "--as-of",
-        type=dt.date.fromisoformat,
-        required=True,
-        help="the cutover date (YYYY-MM-DD) whose offsets place legacy UTC slots",
-    )
     args = parser.parse_args()
 
     configure_streams()
-    plan = build_plan(args.from_export, args.as_of)
+    plan = build_plan(args.from_export)
     print(plan.report())
 
     if not plan.ok:
@@ -125,9 +114,8 @@ def main() -> int:
         plan.zone_defaults
         or plan.merged_overlaps
         or plan.midnight_crossing
-        or plan.zone_clashes
-        or plan.repaired_from_text
         or plan.fitted_to_session
+        or plan.zone_differs
     )
 
     if args.dry_run:

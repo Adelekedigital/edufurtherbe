@@ -726,7 +726,7 @@ def durations_by_mentor(
     have exactly one definition.
 
     **Generation A rows count here.** Their *times* are read differently
-    (decisions #81, #359); ``meetingDuration-TxT`` is a different field and is
+    (decisions #81, #360); ``meetingDuration-TxT`` is a different field and is
     populated on all 12 rows of each generation. The availability transform
     uses these lengths too, to end a slot whose window does not move forward.
     """
