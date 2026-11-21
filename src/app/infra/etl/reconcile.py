@@ -308,10 +308,10 @@ class AvailabilityReconciliation:
     """Both availability tables, plus the two checks unique to this phase.
 
     **Row counts do not reconcile one-to-one, and that is correct.** Every prior
-    phase compared source rows to loaded rows; availability breaks that three
-    ways at once — exceptions fan out 1:N, Gen A rules are quarantined on
-    purpose, and overlapping windows merge so one anchor never reaches the
-    table. Asserting `source == loaded` would fail every run, and the fix
+    phase compared source rows to loaded rows; availability breaks that two ways
+    at once — exceptions fan out 1:N, and overlapping windows merge so one
+    anchor never reaches the table. Asserting `source == loaded` would fail
+    every run, and the fix
     somebody would reach for is a loosened comparison that checks nothing.
 
     So the identity checked is that every source rule was **accounted for**, and
@@ -319,8 +319,8 @@ class AvailabilityReconciliation:
     """
 
     checks: tuple[TableCheck, ...]
-    #: Source rules in no outcome at all — neither loaded, quarantined, dropped,
-    #: refused nor absorbed. A row here vanished without anybody deciding it
+    #: Source rules in no outcome at all — neither loaded, dropped, refused nor
+    #: absorbed. A row here vanished without anybody deciding it
     #: should, which is the failure no row count would show.
     unaccounted: tuple[str, ...] = ()
     #: **There is deliberately no per-source fan-out check.** One was written
@@ -409,8 +409,8 @@ async def reconcile_availability(
 def _unaccounted(plan: AvailabilityPlan) -> tuple[str, ...]:
     """Source rules the plan reached no decision about.
 
-    Every anchor the transform was handed must appear in one of five outcomes —
-    loaded, quarantined, dropped, refused for not moving forward, or absorbed
+    Every anchor the transform was handed must appear in one of four outcomes —
+    loaded, dropped, refused for not moving forward, or absorbed
     into a neighbour. A row in none of them vanished without anybody deciding it
     should, which is silent data loss that no row count would show: the loaded
     total is *meant* to be smaller than the source total here, so a smaller one

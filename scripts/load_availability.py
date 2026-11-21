@@ -9,10 +9,10 @@
 **Run this after ``load_identity.py`` and ``load_profiles.py``.** Every rule
 hangs off ``mentor_profiles``, so out of order it fails on a foreign key.
 
-**The dry run is the point of this script, not a rehearsal of the write.** The
-Gen A quarantine, the merged overlaps, the dropped rows and the mentors who must
-re-declare their availability are all decided by the transform, which touches
-nothing — so ``--dry-run`` produces the entire report without a database.
+**The dry run is the point of this script, not a rehearsal of the write.** How
+each row is read, the merged overlaps and the dropped rows are all decided by
+the transform, which touches nothing — so ``--dry-run`` produces the entire
+report without a database.
 
 Wiring only. No SQL and no business rule lives here: ``scripts/`` is checked by
 ruff alone — not mypy, not bandit, and not by coverage — so anything it contains
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -54,8 +55,14 @@ def build_plan(directory: Path) -> AvailabilityPlan:
     # Raw records in. Deciding what a user's timezone is, and who counts as a
     # mentor, are mapping decisions — and this directory is checked by ruff
     # alone, so a rule written here is a rule nothing verifies (#44).
+    # Today is the cutover: the date whose offset converts a Gen A instant into
+    # its owner's zone (decision 359).
     return plan_availability(
-        users, settings_records, extra_records, export_timezone=EXPORT_TIMEZONE
+        users,
+        settings_records,
+        extra_records,
+        export_timezone=EXPORT_TIMEZONE,
+        as_of=dt.datetime.now(dt.UTC).date(),
     )
 
 
@@ -103,8 +110,8 @@ def main() -> int:
         return EXIT_REFUSED
     # A run that loaded cleanly but left something for a human is not a clean
     # run, and `EXIT_UNRESOLVED` exists for exactly that. Returning 0 here
-    # would let a freeze-window runbook read "quarantined 11" as success.
-    unresolved = bool(plan.quarantined or plan.zone_defaults or plan.merged_overlaps)
+    # would let a freeze-window runbook read "midnight-crossing 5" as success.
+    unresolved = bool(plan.zone_defaults or plan.merged_overlaps or plan.midnight_crossing)
 
     if args.dry_run:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK

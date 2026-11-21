@@ -1,4 +1,4 @@
-"""The calendar transform: what loads, what is quarantined, what is refused.
+"""The calendar transform: what loads, how it is read, what is refused.
 
 **On watch-fail.** These tests were written after the transform, against the
 approved checklist's instruction to write them first. That is a real deviation
@@ -67,12 +67,14 @@ def plan(
     rules: list[dict[str, Any]],
     extra: list[dict[str, Any]] | None = None,
     users: list[dict[str, Any]] | None = None,
+    as_of: date = date(2026, 11, 22),
 ) -> Any:
     return plan_availability(
         USERS if users is None else users,
         rules,
         extra or [],
         export_timezone=EXPORT_TIMEZONE,
+        as_of=as_of,
     )
 
 
@@ -93,27 +95,58 @@ def test_a_gen_b_row_keeps_the_printed_time() -> None:
     assert len(result.rules) == 1
     assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
     assert result.rules[0].timezone == "America/New_York"
-    assert result.quarantined == ()
 
 
-def test_a_gen_a_row_is_quarantined_with_both_readings() -> None:
-    """No `timeZone`, so which reading is real cannot be settled from this data.
+def test_a_gen_a_row_loads_as_its_utc_moment_in_the_owners_zone() -> None:
+    """Decision 359: no `timeZone` on the row, so the stored instant is the
+    slot. 426 production bookings fall inside Gen A windows read that way,
+    against 142 for the printed reading in the owner's zone.
 
-    The displayed value is the UTC rendering, five hours from the printed one —
-    measured against the legacy `12hr-…-TXT` column on every Gen A row in the
-    export.
+    Printed 02:00 in the export's zone is 07:00 UTC, which is 08:00 in Lagos.
     """
     result = plan(
         [rule_record(timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 2:15 am")]
     )
 
+    assert len(result.rules) == 1
+    rule = result.rules[0]
+    assert (rule.start_time, rule.end_time) == (time(8, 0), time(8, 15))
+    assert rule.timezone == "Africa/Lagos"
+    assert result.read_from_utc == ("cs-1",)
+
+
+def test_a_gen_a_row_takes_the_owners_offset_on_the_as_of_date() -> None:
+    """07:00 UTC is 02:00 in New York in winter and 03:00 in summer. The
+    cutover date decides it, so every row converts with the same offset."""
+    record = rule_record(
+        Creator=OTHER, timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 3:00 am"
+    )
+
+    winter = plan([record]).rules[0]
+    summer = plan([record], as_of=date(2026, 7, 1)).rules[0]
+
+    assert (winter.start_time, winter.timezone) == (time(2, 0), "America/New_York")
+    assert summer.start_time == time(3, 0)
+
+
+def test_a_gen_a_row_moves_to_the_owners_weekday() -> None:
+    """The legacy weekday is the UTC one. Monday 23:30-00:00 UTC is Tuesday
+    00:30-01:00 in Lagos, and a booking on Tuesday there must find it."""
+    result = plan(
+        [rule_record(timeZone=None, startTime="Nov 9, 2024 6:30 pm", endTime="Nov 9, 2024 7:00 pm")]
+    )
+
+    rule = result.rules[0]
+    assert (rule.day_of_week, rule.start_time, rule.end_time) == (2, time(0, 30), time(1, 0))
+
+
+def test_a_zero_length_gen_a_row_is_refused_not_stretched_to_a_day() -> None:
+    result = plan(
+        [rule_record(timeZone=None, startTime="Nov 9, 2024 9:00 am", endTime="Nov 9, 2024 9:00 am")]
+    )
+
     assert result.rules == ()
-    assert len(result.quarantined) == 1
-    held = result.quarantined[0]
-    assert held.as_printed == time(2, 0)
-    assert held.as_displayed == time(7, 0)
-    assert held.end_as_printed == time(2, 15)
-    assert held.end_as_displayed == time(7, 15)
+    assert "does not move forward" in result.midnight_crossing[0].reason
 
 
 def test_the_discriminator_reads_none_not_empty_string() -> None:
@@ -123,9 +156,23 @@ def test_the_discriminator_reads_none_not_empty_string() -> None:
     as_none = plan([rule_record(timeZone=None)])
     as_blank = plan([rule_record(timeZone="")])
 
-    assert len(as_none.quarantined) == 1
-    assert len(as_blank.quarantined) == 1
-    assert as_none.rules == as_blank.rules == ()
+    assert as_none.read_from_utc == as_blank.read_from_utc == ("cs-1",)
+    assert as_none.rules == as_blank.rules
+    assert as_none.rules[0].timezone == "Africa/Lagos"
+
+
+def test_a_gen_a_row_whose_owner_has_no_zone_lands_in_utc_and_is_reported() -> None:
+    result = plan(
+        [
+            rule_record(
+                timeZone=None, startTime="Nov 9, 2024 2:00 am", endTime="Nov 9, 2024 2:15 am"
+            )
+        ],
+        users=[{"bubble_id": MENTOR, "Mentor": "m-1"}],
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].timezone) == (time(7, 0), "UTC")
+    assert "has no timezone of their own" in result.zone_defaults[0]
 
 
 # --------------------------------------------------------------------------
@@ -136,7 +183,7 @@ def test_the_discriminator_reads_none_not_empty_string() -> None:
 def test_a_row_with_no_creator_is_dropped() -> None:
     result = plan([rule_record(Creator=None)])
 
-    assert result.rules == () and result.quarantined == ()
+    assert result.rules == ()
     assert "no Creator" in result.dropped[0].reason
 
 
@@ -183,20 +230,14 @@ def test_a_zero_length_window_is_refused() -> None:
     assert "does not move forward" in result.midnight_crossing[0].reason
 
 
-def test_a_gen_a_evening_window_still_reaches_the_quarantine() -> None:
-    """Found by review. The ordering check used to run before the quarantine
-    branch, on the Gen A *displayed* reading — so a window printed 18:30-19:30
-    shifted to 23:30-00:30, failed `end > start`, and was reported as a
-    midnight-crossing window nobody entered instead of reaching the quarantine.
-
-    That block is what the production reading is decided from, so a row leaving
-    it silently is worse than a wrong time: nobody knows to ask about it. Dev's
-    Gen A rows all sit at 00:45-21:30 so both ends shift together — luck, not
-    coverage.
-    """
+def test_a_gen_a_window_crossing_midnight_in_utc_loads_in_the_owners_zone() -> None:
+    """23:30-00:30 UTC crosses midnight, but each end converts on its own, so
+    in New York it is 18:30-19:30 and loads. The ordering check runs on the
+    reading that is stored, never on the UTC one."""
     result = plan(
         [
             rule_record(
+                Creator=OTHER,
                 timeZone=None,
                 startTime="Nov 9, 2024 6:30 pm",
                 endTime="Nov 9, 2024 7:30 pm",
@@ -204,9 +245,62 @@ def test_a_gen_a_evening_window_still_reaches_the_quarantine() -> None:
         ]
     )
 
-    assert len(result.quarantined) == 1
     assert result.midnight_crossing == ()
-    assert result.quarantined[0].as_printed == time(18, 30)
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(18, 30), time(19, 30))
+
+
+def test_a_gen_a_window_crossing_midnight_in_the_owners_zone_is_reported() -> None:
+    """22:30-23:30 UTC is 23:30-00:30 in Lagos: not a window the column holds."""
+    result = plan(
+        [rule_record(timeZone=None, startTime="Nov 9, 2024 5:30 pm", endTime="Nov 9, 2024 6:30 pm")]
+    )
+
+    assert result.rules == ()
+    assert "23:30-00:30 does not move forward" in result.midnight_crossing[0].reason
+
+
+def test_a_gen_b_row_with_a_broken_end_is_read_from_its_display_text() -> None:
+    """Production: a Sunday 1:00-2:45 PM slot whose `endTime` carries another
+    date and reads 03:00. The 24-hour text is what the legacy app showed the
+    mentor, so it is used when, and only when, the stamps do not move forward."""
+    result = plan(
+        [
+            rule_record(
+                startTime="Mar 31, 2000 1:00 pm",
+                endTime="Nov 6, 2026 3:00 am",
+                **{"24hr-locatStartTime-TXT": "13:00", "24hr-localEndTime-TXT": "14:45"},
+            )
+        ]
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(13, 0), time(14, 45))
+    assert result.repaired_from_text == ("cs-1",)
+    assert result.midnight_crossing == ()
+
+
+def test_display_text_that_does_not_move_forward_either_is_still_reported() -> None:
+    result = plan(
+        [
+            rule_record(
+                startTime="Mar 31, 2000 7:00 pm",
+                endTime="Mar 31, 2000 7:45 am",
+                **{"24hr-locatStartTime-TXT": "19:00", "24hr-localEndTime-TXT": "07:45"},
+            )
+        ]
+    )
+
+    assert result.rules == () and result.repaired_from_text == ()
+    assert "does not move forward" in result.midnight_crossing[0].reason
+
+
+def test_display_text_on_a_healthy_row_is_ignored() -> None:
+    """The text is stale on rows a mentor later edited; the stamps win."""
+    result = plan(
+        [rule_record(**{"24hr-locatStartTime-TXT": "12:30", "24hr-localEndTime-TXT": "13:45"})]
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
+    assert result.repaired_from_text == ()
 
 
 def test_an_unreadable_block_date_value_is_reported_not_ignored() -> None:
@@ -431,7 +525,7 @@ def test_one_legacy_row_fans_out_to_one_exception_per_date() -> None:
 def test_an_exception_takes_its_zone_from_the_owner() -> None:
     """`CalendarExtra` has no timezone field at all, so the owner's
     `users.timezone` is the only source. Rules never reach this path: a rule
-    without a zone is Gen A by definition, and Gen A is quarantined."""
+    without a zone is Gen A, read from its UTC moment in the owner's zone."""
     result = plan(
         [],
         [{"bubble_id": "ce-1", "Creator": MENTOR, "block-Date(s)": "Jan 13, 2025 12:00 am"}],
@@ -460,30 +554,13 @@ def test_an_owner_with_no_timezone_falls_back_and_is_reported() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_quarantined_mentors_are_named_as_needing_to_redeclare() -> None:
-    """The list that makes the availability write surface a cutover dependency.
-
-    A mentor whose only rules are quarantined arrives with an empty schedule. A
-    mentor who also has a loaded rule does not, so they are excluded.
-    """
-    result = plan(
-        [
-            rule_record(bubble_id="a", Creator=MENTOR, timeZone=None),
-            rule_record(bubble_id="b", Creator=OTHER),
-        ]
-    )
-
-    assert result.mentors_needing_redeclaration() == (MENTOR,)
-
-
 def test_the_report_states_every_outcome_a_run_can_have() -> None:
     """The report **is** the deliverable, not a log line.
 
-    It is what the Gen A reading gets decided from at the production extract, it
-    is what tells an operator which mentors arrive with an empty schedule, and
-    it is the only place a merged or dropped row is ever mentioned. An untested
-    renderer that quietly stops printing one of those sections would leave the
-    run looking clean.
+    It says how many rules were read from their UTC moment, and it is the only
+    place a merged or dropped row is ever mentioned. An untested renderer that
+    quietly stops printing one of those sections would leave the run looking
+    clean.
     """
     result = plan(
         [
@@ -495,16 +572,11 @@ def test_the_report_states_every_outcome_a_run_can_have() -> None:
     )
     text = result.report()
 
-    assert "rules loaded        1" in text
+    assert "rules loaded        2" in text
     assert "exceptions loaded   1" in text
-    assert "quarantined (Gen A) 1 across 1 mentors" in text
+    assert "read from UTC       1" in text
     assert "dropped             1" in text
-    # Both readings, side by side — a comparison rather than a re-derivation.
-    assert "printed" in text and "displayed" in text
-    assert "09:00-12:00" in text and "14:00-17:00" in text
-    # And the cutover consequence, named.
-    assert "must re-declare it at cutover" in text
-    assert OTHER in text
+    assert "read from UTC moment (no slot zone) (1):\n  genA" in text
 
 
 def test_the_report_is_quiet_when_there_is_nothing_to_say() -> None:
@@ -514,8 +586,7 @@ def test_the_report_is_quiet_when_there_is_nothing_to_say() -> None:
 
     assert "rules loaded        1" in text
     assert "dropped (" not in text
-    assert "quarantined Gen A rules" not in text
-    assert "must re-declare" not in text
+    assert "read from UTC moment" not in text
 
 
 def test_timestamps_come_from_bubble_not_the_import_clock() -> None:
