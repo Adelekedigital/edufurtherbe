@@ -82,7 +82,9 @@ from app.infra.db.notice_store import dismissed_notices
 from app.infra.db.onboarding_store import get_onboarding, onboarding_state
 from app.infra.db.onboarding_writer import (
     OnboardingResult,
+    answers_complete,
     complete_onboarding,
+    pay_if_answers_completed,
     record_last_step,
 )
 from app.infra.db.pending_requests import booking_counts
@@ -457,9 +459,21 @@ async def deleted_education(entry_id: UUID, user_id: OwnerDep, session: SessionD
     return removed
 
 
-async def upserted_goal(payload: GoalWrite, user_id: OwnerDep, session: SessionDep) -> UUID:
-    """One goal per user, so this replaces rather than appends."""
+async def upserted_goal(
+    payload: GoalWrite, user_id: OwnerDep, session: SessionDep, ladder: LadderDep
+) -> UUID:
+    """One goal per user, so this replaces rather than appends. A save that
+    completes an onboarded mentee's answers pays the starter credit at once
+    (`pay_if_answers_completed`, decision 358)."""
+    complete_before = await answers_complete(session, user_id)
     goal_id: UUID = await upsert_goal(session, user_id, payload.model_dump(exclude_unset=True))
+    await pay_if_answers_completed(
+        session,
+        user_id,
+        complete_before=complete_before,
+        ladder=ladder,
+        now=dt.datetime.now(dt.UTC),
+    )
     await session.commit()
     return goal_id
 
@@ -532,13 +546,23 @@ async def updated_mentor_profile(
 
 
 async def upserted_profile(
-    payload: UserProfileWrite, user_id: OwnerDep, session: SessionDep
+    payload: UserProfileWrite, user_id: OwnerDep, session: SessionDep, ladder: LadderDep
 ) -> None:
+    """The caller's profile. A save that completes an onboarded mentee's answers
+    (origin lives here) pays the starter credit at once (decision 358)."""
     sent = payload.model_dump(exclude_unset=True)
     # Where the bio came from (decision 267): checked whole, before anything is written.
     if (problem := provenance_problem(sent)) is not None:
         raise ValidationError(problem[1], field_errors=(problem,))
+    complete_before = await answers_complete(session, user_id)
     await upsert_profile(session, user_id, sent)
+    await pay_if_answers_completed(
+        session,
+        user_id,
+        complete_before=complete_before,
+        ladder=ladder,
+        now=dt.datetime.now(dt.UTC),
+    )
     await session.commit()
 
 

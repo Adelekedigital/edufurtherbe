@@ -38,6 +38,7 @@ __all__ = [
     "ProfileEvidence",
     "finishes_as_mentee",
     "may_complete_onboarding",
+    "mentee_answers_complete",
     "missing_codes",
     "missing_requirements",
     "published_step",
@@ -120,8 +121,21 @@ def may_complete_onboarding(evidence: ProfileEvidence) -> bool:
     too, and gating on the mentee answers would refuse the half of the platform
     that does not book — and a dual-role user who did the mentor half first.
     """
-    mentee_done = evidence.has_mentee_goal and not missing_requirements(evidence)
-    return evidence.has_profile and (mentee_done or evidence.has_mentor_profile)
+    return evidence.has_profile and (_mentee_done(evidence) or evidence.has_mentor_profile)
+
+
+def _mentee_done(evidence: ProfileEvidence) -> bool:
+    """A goal with every mentee requirement met: the one statement of the
+    mentee bar, read by `may_complete_onboarding` and `mentee_answers_complete`."""
+    return evidence.has_mentee_goal and not missing_requirements(evidence)
+
+
+def mentee_answers_complete(evidence: ProfileEvidence) -> bool:
+    """Whether every answer a mentee's onboarding asks for is saved: a profile,
+    a goal, and nothing in `missing_requirements` (help area, origin, degree,
+    field). The bar the starter credit pays for (decision 358), the same as
+    `may_complete_onboarding`'s mentee half."""
+    return evidence.has_profile and not evidence.has_mentor_profile and _mentee_done(evidence)
 
 
 def finishes_as_mentee(evidence: ProfileEvidence) -> bool:
