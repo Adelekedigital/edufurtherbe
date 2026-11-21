@@ -229,6 +229,8 @@ async def test_the_first_way_in_adds_the_meet(
     )
 
     assert entered.status_code == 200, entered.text
+    # Neither address is Gmail, so neither is named (decision 357): both are
+    # handed the one stored Meet as it is.
     assert entered.json()["meeting_url"] == FAKE_MEET
     assert again.json()["meeting_url"] == FAKE_MEET
     assert len(calendar.conferences) == 1

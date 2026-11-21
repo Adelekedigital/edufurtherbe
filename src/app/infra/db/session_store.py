@@ -295,6 +295,21 @@ def _missed_reason_sent(viewer_id: UUID) -> Any:
     )
 
 
+def _viewer_email(viewer_id: UUID) -> Any:
+    """**The viewer's own** stored address when they are a party, else null.
+
+    For `SessionRead.meet_invite_email` (decision 357), which turns it into the
+    address the invite went to. Read from the party joins the statement already
+    has, so it costs no query; an admin listing somebody's sessions is no party
+    and reads null, and neither party ever reads the other's.
+    """
+    return case(
+        (Session.mentee_id == viewer_id, _MENTEE.email),
+        (Session.mentor_id == viewer_id, _MENTOR.email),
+        else_=None,
+    ).label("viewer_email")
+
+
 def is_a_party(viewer_id: UUID) -> Any:
     """The predicate every read here is scoped by.
 
@@ -372,7 +387,14 @@ async def list_sessions(
     """
     keys = (Session.starts_at, Session.id)
     statement = (
-        _with_parties(select(*_SESSION_COLUMNS, *_PARTY_COLUMNS, _missed_reason_sent(viewer_id)))
+        _with_parties(
+            select(
+                *_SESSION_COLUMNS,
+                *_PARTY_COLUMNS,
+                _missed_reason_sent(viewer_id),
+                _viewer_email(viewer_id),
+            )
+        )
         .where(_on_side(user_id, side) if side is not None else is_a_party(user_id))
         .order_by(*(k.asc() if ascending else k.desc() for k in keys))
     )
@@ -408,7 +430,12 @@ async def get_session(
     """
     result = await session.execute(
         _with_parties(
-            select(*_SESSION_COLUMNS, *_PARTY_COLUMNS, _missed_reason_sent(viewer_id))
+            select(
+                *_SESSION_COLUMNS,
+                *_PARTY_COLUMNS,
+                _missed_reason_sent(viewer_id),
+                _viewer_email(viewer_id),
+            )
         ).where(Session.id == session_id, is_a_party(viewer_id))
     )
     row = result.mappings().one_or_none()

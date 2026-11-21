@@ -33,7 +33,12 @@ CUSTOM_URL = "https://mentor.example.test/room"
 
 
 async def a_mentor_on(
-    engine: AsyncEngine, tag: str, provider: str | None, *, confirmation: bool = False
+    engine: AsyncEngine,
+    tag: str,
+    provider: str | None,
+    *,
+    confirmation: bool = False,
+    mentee_email: str | None = None,
 ) -> dict[str, Any]:
     """A bookable mentor whose default venue is `provider`, or who has none."""
     mentor = await make_public_mentor(engine, tag)
@@ -45,7 +50,7 @@ async def a_mentor_on(
     async with engine.begin() as conn:
         await add_user(
             conn,
-            f"mentee-{tag}@example.test",
+            mentee_email or f"mentee-{tag}@example.test",
             auth_id=mentee_auth,
             first_name="Mo",
             primary_role="mentee",
@@ -690,7 +695,8 @@ async def test_a_meet_session_returns_the_stored_link_unchanged(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
 ) -> None:
     """Meet's link is on the calendar event and is not ours to gate. Minting a
-    Daily token for it would produce a URL that goes nowhere."""
+    Daily token for it would produce a URL that goes nowhere. A non-Gmail
+    caller is handed it exactly as stored (decision 357)."""
     setup = await a_mentor_on(db_engine, "door-meet", "google_meet")
     session = await joinable(db_engine, api_client, setup)
     async with db_engine.begin() as conn:

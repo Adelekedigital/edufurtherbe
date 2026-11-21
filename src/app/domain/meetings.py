@@ -22,8 +22,9 @@ refusal if you only read the response.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app.domain.emails import calendar_invite_address, is_gmail
 from app.domain.enums import ConferencingProvider
 
 __all__ = [
@@ -31,6 +32,8 @@ __all__ = [
     "OFFERING_VENUES",
     "PLATFORM_DEFAULT_PROVIDER",
     "MeetingPlan",
+    "meet_invite_for",
+    "meet_link_for",
     "meeting_link",
     "plan_for",
 ]
@@ -113,3 +116,43 @@ def meeting_link(url: str) -> str:
     if parts.username is not None or parts.password is not None:
         raise ValueError("a link must not carry a username or password")
     return link
+
+
+def meet_invite_for(provider: object, address: str | None) -> str | None:
+    """The address a party was invited to a session's Meet as, or ``None`` when
+    the session is not on Meet or the party has no address (decision 357).
+
+    One answer for `SessionRead.meet_invite_email` and the link `/join` and
+    `/door` hand over, so what a party is told and where they are sent cannot
+    disagree. It is the invite's own rule over the party's stored address;
+    nobody can change their address after sign-up, so it is the address the
+    invite went to (store the invited address if that ever changes).
+    """
+    if provider != ConferencingProvider.GOOGLE_MEET or not address:
+        return None
+    return calendar_invite_address(address)
+
+
+def meet_link_for(url: str, invited: str | None) -> str:
+    """A Meet link as one party is handed it: opening under their invited
+    Google account (decision 357).
+
+    ``authuser`` names the account Google opens Meet as, or asks the person to
+    sign in to. Without it a rejoin in a browser that is already on Meet opens
+    under that browser's default account, which Meet treats as uninvited, so
+    the party waits to be admitted. **Only a Gmail address is named**: it is a
+    Google account by construction, where another address may not be one, and
+    naming it would send that person to a sign-in for an account that does not
+    exist. Any query the link has is kept, blanks included, and an
+    ``authuser`` already on it is replaced.
+    """
+    if not invited or not is_gmail(invited):
+        return url
+    parts = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key != "authuser"
+    ]
+    query.append(("authuser", invited))
+    return urlunsplit(parts._replace(query=urlencode(query)))
