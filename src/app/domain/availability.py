@@ -514,13 +514,17 @@ def _span(
     return UtcInterval(_resolve(day, start_time, zone), _resolve(day, end_time, zone))
 
 
+def legacy_weekday(day: dt.date) -> int:
+    """0 = Sunday, the legacy ``dayOfWeekIn`` convention every rule stores.
+    `isoweekday()` is Monday=1..Sunday=7, so `% 7` lands Sunday on 0."""
+    return day.isoweekday() % 7
+
+
 def _from_rules(
     rules: Sequence[WeeklyWindow], start: dt.date, end: dt.date
 ) -> Iterator[UtcInterval]:
     for day in _dates(start, end):
-        # `isoweekday()` is Monday=1..Sunday=7, so `% 7` lands Sunday on 0 —
-        # the legacy `dayOfWeekIn` convention — without a lookup table.
-        weekday = day.isoweekday() % 7
+        weekday = legacy_weekday(day)
         for rule in rules:
             if rule.day_of_week != weekday:
                 continue

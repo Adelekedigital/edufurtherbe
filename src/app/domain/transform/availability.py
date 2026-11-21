@@ -24,13 +24,25 @@ TXT value agree with the printed time instead.
 and it is a one-line mistake in both directions: ``parse_timestamp(...).time()``
 is right for Gen A and wrong for Gen B; the naive parse is the reverse.
 
-**Gen A is not loaded.** Which reading is a mentor's real availability cannot be
-settled from this export — no mentor here owns both a Gen A rule and a booking,
-so the 1,073 production bookings are the only oracle and they are not available
-until cutover. Loading under a guess would put times a mentor may then edit into
-a table the product reads, and a re-run could no longer safely correct them. So
-they are reported with **both** candidate readings side by side and the decision
-is taken once, at the production extract, where it is still cheap.
+**Gen A loads from its UTC moment, in the owner's zone** (decision 359,
+2026-11-21). The production bookings were the oracle this waited for: 426 of
+them fall inside Gen A windows read as the stored instant, against 142 for the
+printed time in the owner's zone. The legacy app booked those slots as fixed
+instants, so the instant is converted to the owner's ``users.timezone`` with
+that zone's offset on the ``as_of`` date (the cutover), and stored there; a
+mentor then sees and edits it as their own local time. An owner with no zone
+gets ``UTC``, and is reported.
+
+**A Gen B row whose stamps do not move forward is read from its 24-hour text**,
+and only then: on a healthy row the text can be stale (a mentor edited the
+stamps and the text was not rewritten), so the stamps win. Production has a
+1:00-2:45 PM slot whose ``endTime`` carries another date; its text is right.
+
+**A window that still does not move forward ends one session after its start**
+(owner, 2026-11-21): 144 of 191 production slots are exactly the mentor's
+session length and 23 more a multiple of it, so a slot is a session. Zero-length
+stamps and overnight slips (9:00 pm to 5:30 am) become one session; only a row
+with no length to use, or one whose session would pass midnight, is reported.
 
 **Attribution is ``Creator`` alone**, which makes this the second exception to
 the user-side-link rule after ``Scholarship-Awards`` (settled decision #60).
@@ -44,10 +56,12 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from app.domain.availability import legacy_weekday
 from app.domain.bubble import legacy_anchor, parse_timestamp
 from app.domain.enums import AvailabilityExceptionType
 from app.domain.transform.identity import (
@@ -84,16 +98,19 @@ DAILY_SESSIONS_FIELD = "meetingDailySessions"
 #: Dropped, each for a recorded reason. `meetingVenue` holds Google Meet URLs,
 #: the string `meet.g`, and two rows of profile bio text — it is not a venue
 #: type, and D21 forbids carrying a static room link forward. `meetingDuration`
-#: belongs to session types (settled decision #58). The four display columns are
-#: the same fact pre-formatted, which is what breaks across DST.
+#: belongs to session types (settled decision #58). The 12-hour display columns
+#: are the same fact as the 24-hour ones, pre-formatted.
 DROPPED_FIELDS = (
     "meetingVenue",
     "meetingDuration-TxT",
     "12hr-localStartTime-TXT",
     "12hr-localEndTime-TXT",
-    "24hr-locatStartTime-TXT",
-    "24hr-localEndTime-TXT",
 )
+#: What the legacy app displayed, `13:00` or `9:00`. Read only to repair a Gen B
+#: row whose stamps do not move forward (decision 359). The start column's name
+#: is misspelt at the source.
+START_TEXT_FIELD = "24hr-locatStartTime-TXT"
+END_TEXT_FIELD = "24hr-localEndTime-TXT"
 
 DAY_NAMES = {
     "0": "Sunday",
@@ -175,29 +192,21 @@ class MergedWindow:
 
 
 @dataclass(frozen=True, slots=True)
-class QuarantinedRule:
-    """A Gen A row, with both readings, awaiting the production decision."""
-
-    legacy_bubble_id: str
-    mentor_bubble_id: str
-    day_of_week: int
-    #: The printed time — what Gen B would call the declared wall clock.
-    as_printed: dt.time
-    #: The UTC rendering — what the legacy UI displayed on these rows.
-    as_displayed: dt.time
-    end_as_printed: dt.time
-    end_as_displayed: dt.time
-
-
-@dataclass(frozen=True, slots=True)
 class AvailabilityPlan:
     rules: tuple[AvailabilityRuleRow, ...]
     exceptions: tuple[AvailabilityExceptionRow, ...]
 
-    #: Gen A. Reported, never loaded.
-    quarantined: tuple[QuarantinedRule, ...] = ()
+    #: Gen A anchors: read from their UTC moment in the owner's zone.
+    read_from_utc: tuple[str, ...] = ()
+    #: Gen B anchors whose stamps did not move forward, read from their text.
+    repaired_from_text: tuple[str, ...] = ()
+    #: Anchors whose window did not move forward, ended one session after start.
+    fitted_to_session: tuple[str, ...] = ()
+    #: Rules overlapping another of the mentor's in a different zone. Not
+    #: loaded, and **accounting**: a declared window a person must look at.
+    zone_clashes: tuple[DroppedRow, ...] = ()
     #: Every source row that did not become one. **Accounting, not a
-    #: diagnostic**: reconciliation adds these to the loaded and quarantined
+    #: diagnostic**: reconciliation adds these to the loaded
     #: counts and expects the source total.
     dropped: tuple[DroppedRow, ...] = ()
     #: Windows merged into their union before insert, so the exclusion
@@ -227,9 +236,9 @@ class AvailabilityPlan:
         """Every source rule anchor this run reached a decision about.
 
         The identity reconciliation checks. A source row must be **loaded, or
-        quarantined, or dropped, or refused for not moving forward, or absorbed
-        into a neighbour** — five outcomes, and a row in none of them vanished
-        without anybody deciding it should.
+        dropped, or refused for not moving forward, or refused for clashing
+        across zones, or absorbed into a neighbour** — five outcomes, and a
+        row in none of them vanished without anybody deciding it should.
 
         ``midnight_crossing`` belongs here and is easy to miss: those rows are
         reported rather than loaded, so leaving them out makes the identity fail
@@ -237,21 +246,11 @@ class AvailabilityPlan:
         """
         return (
             tuple(row.legacy_bubble_id for row in self.rules)
-            + tuple(row.legacy_bubble_id for row in self.quarantined)
             + tuple(row.legacy_bubble_id for row in self.dropped)
             + tuple(row.legacy_bubble_id for row in self.midnight_crossing)
+            + tuple(row.legacy_bubble_id for row in self.zone_clashes)
             + tuple(note.absorbed for note in self.merged_overlaps)
         )
-
-    def mentors_needing_redeclaration(self) -> tuple[str, ...]:
-        """Mentors whose availability does not survive the migration.
-
-        Quarantined rules belong to somebody, and that somebody arrives at
-        cutover with an empty schedule. This list is what makes the availability
-        write surface a cutover dependency rather than a nice-to-have.
-        """
-        loaded = {row.mentor_bubble_id for row in self.rules}
-        return tuple(sorted({row.mentor_bubble_id for row in self.quarantined} - loaded))
 
     def report(self) -> str:
         """The operator-facing account of one run.
@@ -259,17 +258,11 @@ class AvailabilityPlan:
         Lives in ``domain`` beside the decisions it summarises, per settled
         decision #45 — these counts *are* the result, and a store that formats
         text for a terminal has stopped being a store.
-
-        **The quarantine block is the deliverable, not a footnote.** It is what
-        the Gen A reading is decided from at the production extract, and it
-        prints both candidates side by side so that decision is a comparison
-        rather than a re-derivation.
         """
         lines = [
             f"rules loaded        {len(self.rules)}",
             f"exceptions loaded   {len(self.exceptions)}",
-            f"quarantined (Gen A) {len(self.quarantined)}"
-            f" across {len({q.mentor_bubble_id for q in self.quarantined})} mentors",
+            f"read from UTC       {len(self.read_from_utc)}",
             f"dropped             {len(self.dropped)}",
         ]
 
@@ -278,31 +271,16 @@ class AvailabilityPlan:
             ("merged overlaps", self.merged_overlaps),
             ("day-of-week disagreements", self.day_mismatches),
             ("midnight-crossing windows", self.midnight_crossing),
+            ("overlaps across two zones (not loaded)", self.zone_clashes),
+            ("read from UTC moment (no slot zone)", self.read_from_utc),
+            ("read from display text (stamps did not move forward)", self.repaired_from_text),
+            ("ended one session after start (window did not move forward)", self.fitted_to_session),
             ("timezone defaulted to UTC", self.zone_defaults),
             ("errors", self.errors),
         ):
             if values:
                 lines.append(f"\n{label} ({len(values)}):")
                 lines.extend(f"  {value}" for value in values)
-
-        if self.quarantined:
-            lines.append("\nquarantined Gen A rules — both readings, for the production decision:")
-            lines.append("  day  printed        displayed      mentor")
-            for held in self.quarantined:
-                lines.append(
-                    f"  {held.day_of_week}    "
-                    f"{held.as_printed:%H:%M}-{held.end_as_printed:%H:%M}   "
-                    f"{held.as_displayed:%H:%M}-{held.end_as_displayed:%H:%M}  "
-                    f"{held.mentor_bubble_id}"
-                )
-
-        needing = self.mentors_needing_redeclaration()
-        if needing:
-            lines.append(
-                f"\n{len(needing)} mentors have no availability after this load and must "
-                f"re-declare it at cutover:"
-            )
-            lines.extend(f"  {mentor}" for mentor in needing)
 
         return "\n".join(lines)
 
@@ -333,19 +311,58 @@ def _printed(raw: str, *, bubble_id: str, field_name: str) -> dt.datetime:
         raise TransformError(bubble_id, f"{field_name}: {raw!r} is not a Bubble timestamp") from exc
 
 
-def _declared_time(
-    raw: str, *, generation: str, export_timezone: dt.tzinfo, bubble_id: str, field_name: str
-) -> dt.time:
-    """The wall clock the mentor actually declared, per generation.
+def _gen_a_window(
+    start_raw: str,
+    end_raw: str,
+    *,
+    day_of_week: int,
+    zone: str,
+    as_of: dt.date,
+    export_timezone: dt.tzinfo,
+) -> tuple[int, dt.time, dt.time]:
+    """A Gen A row as ``(weekday, start, end)`` on the wall clock in ``zone``.
 
-    The whole milestone turns on this function being branched. ``parse_timestamp``
-    returns aware **UTC**, so ``.time()`` on it yields the UTC rendering — which
-    is what the legacy UI displayed on Gen A rows and is five hours away from
-    what it displayed on Gen B ones.
+    The legacy app held the slot as UTC times of day on a UTC weekday; the
+    stamps' own dates mean nothing (often 2000-03-31). So every row of a zone
+    takes **one** offset, the zone's at noon UTC on ``as_of`` (a DST change
+    later that week must not split one mentor's hours by an hour), and the
+    **weekday moves with it** (Saturday 17:00 UTC is Sunday 01:00 in Kuala
+    Lumpur). A UTC window running past UTC midnight ends the next UTC day. One
+    that crosses local midnight comes back with ``end <= start``, for the
+    caller to report.
     """
-    if generation == "A":
-        return parse_timestamp(raw, assume=export_timezone).time()
-    return _printed(raw, bubble_id=bubble_id, field_name=field_name).time()
+
+    def utc_time(raw: str) -> dt.time:
+        return parse_timestamp(raw, assume=export_timezone).astimezone(dt.UTC).time()
+
+    noon = dt.datetime.combine(as_of, dt.time(12), tzinfo=dt.UTC)
+    offset = noon.astimezone(ZoneInfo(zone)).utcoffset() or dt.timedelta()
+    # A Sunday anchor (2000-01-02 was one), so the date's legacy weekday is
+    # `day_of_week` itself and moves only by what the offset adds.
+    day = dt.date(2000, 1, 2) + dt.timedelta(days=day_of_week)
+    opens = dt.datetime.combine(day, utc_time(start_raw))
+    closes = dt.datetime.combine(day, utc_time(end_raw))
+    if closes < opens:
+        closes += dt.timedelta(days=1)
+    local_open, local_close = opens + offset, closes + offset
+    return legacy_weekday(local_open.date()), local_open.time(), local_close.time()
+
+
+def _one_session(start: dt.time, minutes: int | None) -> dt.time | None:
+    """``start`` plus one session, or ``None`` with no length or past midnight."""
+    if not minutes:
+        return None
+    day = dt.date(2000, 1, 2)
+    end = dt.datetime.combine(day, start) + dt.timedelta(minutes=minutes)
+    return end.time() if end.date() == day else None
+
+
+def _text_time(raw: Any) -> dt.time | None:
+    """A 24-hour display value, ``13:00`` or ``9:00``; ``None`` if unreadable."""
+    try:
+        return dt.datetime.strptime(str(raw or "").strip(), "%H:%M").time()
+    except ValueError:
+        return None
 
 
 def _generation(record: dict[str, Any]) -> str:
@@ -397,7 +414,7 @@ def _int_or_none(value: Any) -> int | None:
 
 def _merge_windows(
     rows: Sequence[AvailabilityRuleRow],
-) -> tuple[tuple[AvailabilityRuleRow, ...], tuple[MergedWindow, ...]]:
+) -> tuple[tuple[AvailabilityRuleRow, ...], tuple[MergedWindow, ...], tuple[DroppedRow, ...]]:
     """Fold overlapping windows on one mentor-weekday into their union.
 
     Required, not tidiness. ``availability_rules`` carries a partial ``EXCLUDE``
@@ -405,9 +422,15 @@ def _merge_windows(
     it **aborts the load** on the second row. Merging is lossless because the
     union is what the two rows mean, and the earliest row's anchor is kept so a
     re-run lands on the same target.
+
+    **Only within one zone.** The constraint compares wall-clock numbers and
+    ignores the zone, but the union of 10:00-12:00 Lagos and 11:00-13:00 New
+    York is not 10:00-13:00 in either. Such a pair cannot be loaded as two rows
+    or as one, so the later row is returned as a clash: reported, not loaded.
     """
     merged: list[AvailabilityRuleRow] = []
     notes: list[MergedWindow] = []
+    clashes: list[DroppedRow] = []
     # **Partitioned by `is_active`, and that is load-bearing.** The constraint
     # this merge exists to satisfy is partial — `WHERE is_active AND deleted_at
     # IS NULL` — so an inactive window never collides with anything and never
@@ -438,6 +461,15 @@ def _merge_windows(
             and previous.is_active == row.is_active
         )
         if same_group and previous is not None and row.start_time < previous.end_time:
+            if row.timezone != previous.timezone:
+                clashes.append(
+                    DroppedRow(
+                        row.legacy_bubble_id,
+                        f"overlaps {previous.legacy_bubble_id}, which is in "
+                        f"{previous.timezone} and this in {row.timezone}",
+                    )
+                )
+                continue
             merged[-1] = replace(previous, end_time=max(previous.end_time, row.end_time))
             notes.append(
                 MergedWindow(
@@ -455,7 +487,7 @@ def _merge_windows(
             )
         else:
             merged.append(row)
-    return tuple(merged), tuple(notes)
+    return tuple(merged), tuple(notes), tuple(clashes)
 
 
 def owner_timezones(user_records: list[dict[str, Any]]) -> tuple[dict[str, str], tuple[str, ...]]:
@@ -494,6 +526,8 @@ def plan_availability(
     calendar_extra: list[dict[str, Any]],
     *,
     export_timezone: dt.tzinfo,
+    as_of: dt.date,
+    session_minutes: Mapping[str, int],
     default_zone: str = DEFAULT_TIMEZONE,
 ) -> AvailabilityPlan:
     """Every calendar row, attributed and classified, before anything is written.
@@ -506,17 +540,30 @@ def plan_availability(
     entirely.
 
     The owner's zone is the **only** source of one for exceptions, because
-    ``CalendarExtra`` has no timezone field. Rules never fall back: a rule with
-    no zone is Gen A by definition, and Gen A is quarantined.
+    ``CalendarExtra`` has no timezone field, and for Gen A rules, which have
+    none of their own. ``as_of`` is the date whose offset converts a Gen A
+    instant into that zone: the cutover, passed by the caller.
+    ``session_minutes`` is each mentor's session length
+    (``transform.sessions.durations_by_mentor``), passed in because that module
+    imports this one.
     """
     owner_zones, errors_from_zones = owner_timezones(user_records)
     mentor_bubble_ids = mentor_owners(user_records)
     rules: list[AvailabilityRuleRow] = []
-    quarantined: list[QuarantinedRule] = []
+    read_from_utc: list[str] = []
+    repaired_from_text: list[str] = []
+    fitted_to_session: list[str] = []
     dropped: list[DroppedRow] = []
     day_mismatches: list[str] = []
     midnight: list[DroppedRow] = []
     zone_defaults: list[str] = []
+
+    def note_if_defaulted(zone: str, owner: str, anchor: str) -> None:
+        """A row in the owner's zone that fell back to the default is
+        reported, because a row silently in UTC looks right."""
+        if zone == default_zone:
+            zone_defaults.append(f"{anchor}: owner {owner} has no timezone of their own")
+
     errors: list[str] = []
 
     for record in calendar_settings:
@@ -549,74 +596,57 @@ def plan_availability(
             dropped.append(DroppedRow(bubble_id, "no start or end time"))
             continue
 
-        generation = _generation(record)
+        read_how: list[str] | None = None
         try:
-            start = _declared_time(
-                str(start_raw),
-                generation=generation,
-                export_timezone=export_timezone,
-                bubble_id=bubble_id,
-                field_name=START_FIELD,
-            )
-            end = _declared_time(
-                str(end_raw),
-                generation=generation,
-                export_timezone=export_timezone,
-                bubble_id=bubble_id,
-                field_name=END_FIELD,
-            )
+            if _generation(record) == "A":
+                rule_zone = owner_zones.get(str(owner), default_zone)
+                day_of_week, start, end = _gen_a_window(
+                    str(start_raw),
+                    str(end_raw),
+                    day_of_week=day_of_week,
+                    zone=rule_zone,
+                    as_of=as_of,
+                    export_timezone=export_timezone,
+                )
+                read_how = read_from_utc
+            else:
+                # Validated, and stored stripped. `availability_rules.timezone`
+                # is `text` with no CHECK — `pg_timezone_names` is not immutable,
+                # so PostgreSQL will not accept it in one — which makes this the
+                # only place the value is checked. An unrecognised zone would
+                # otherwise raise `ZoneInfoNotFoundError` inside the projection,
+                # long after the ETL exited 0.
+                try:
+                    rule_zone = _resolve_timezone(record.get(ZONE_FIELD), bubble_id)
+                except TransformError as exc:
+                    dropped.append(DroppedRow(bubble_id, str(exc)))
+                    continue
+                start = _printed(str(start_raw), bubble_id=bubble_id, field_name=START_FIELD).time()
+                end = _printed(str(end_raw), bubble_id=bubble_id, field_name=END_FIELD).time()
+                if end <= start:
+                    text_start = _text_time(record.get(START_TEXT_FIELD))
+                    text_end = _text_time(record.get(END_TEXT_FIELD))
+                    if text_start is not None and text_end is not None:
+                        start, end = text_start, text_end
+                        read_how = repaired_from_text
         except (TransformError, ValueError) as exc:
             errors.append(f"{bubble_id}: {exc}")
             continue
 
-        # **Quarantine before the ordering check, not after.** The check used to
-        # run first, on the Gen A *displayed* reading — so any Gen A window
-        # printed between 19:00 and midnight shifted past midnight once
-        # converted, failed `end > start`, and was reported as a
-        # midnight-crossing window nobody entered instead of reaching the
-        # quarantine block. That block is the deliverable the production
-        # decision is made from, so a row silently leaving it is worse than a
-        # wrong time: it is a row nobody knows to ask about. Dev's Gen A rows
-        # all sit at 00:45-21:30 so both ends shift together — luck, not
-        # coverage.
-        if generation == "A":
-            quarantined.append(
-                QuarantinedRule(
-                    legacy_bubble_id=bubble_id,
-                    mentor_bubble_id=str(owner),
-                    day_of_week=day_of_week,
-                    as_printed=_printed(
-                        str(start_raw), bubble_id=bubble_id, field_name=START_FIELD
-                    ).time(),
-                    as_displayed=start,
-                    end_as_printed=_printed(
-                        str(end_raw), bubble_id=bubble_id, field_name=END_FIELD
-                    ).time(),
-                    end_as_displayed=end,
-                )
-            )
-            continue
-
-        # Applied only to the reading that will actually be loaded.
+        # Applied to the reading that is stored, never to an intermediate one.
         if end <= start:
-            midnight.append(
-                DroppedRow(bubble_id, f"{start:%H:%M}-{end:%H:%M} does not move forward")
-            )
-            continue
-
-        # Validated, and stored stripped. `availability_rules.timezone` is `text`
-        # with no CHECK — `pg_timezone_names` is not immutable, so PostgreSQL
-        # will not accept it in one — which means this is the only place the
-        # value is checked at all. An unrecognised zone otherwise passes NOT NULL
-        # and raises `ZoneInfoNotFoundError` inside the projection, long after
-        # the ETL exited 0. `_generation` already strips before testing, so
-        # storing unstripped would classify a padded zone as Gen B and then save
-        # a string `ZoneInfo` rejects.
-        try:
-            rule_zone = _resolve_timezone(record.get(ZONE_FIELD), bubble_id)
-        except TransformError as exc:
-            dropped.append(DroppedRow(bubble_id, str(exc)))
-            continue
+            session_end = _one_session(start, session_minutes.get(str(owner)))
+            if session_end is None:
+                midnight.append(
+                    DroppedRow(bubble_id, f"{start:%H:%M}-{end:%H:%M} does not move forward")
+                )
+                continue
+            end = session_end
+            fitted_to_session.append(bubble_id)
+        if read_how is not None:
+            read_how.append(bubble_id)
+        if read_how is read_from_utc:
+            note_if_defaulted(rule_zone, str(owner), bubble_id)
 
         rules.append(
             AvailabilityRuleRow(
@@ -641,8 +671,7 @@ def plan_availability(
             continue
 
         zone = owner_zones.get(str(owner), default_zone)
-        if zone == default_zone:
-            zone_defaults.append(f"{bubble_id}: owner {owner} has no timezone of their own")
+        note_if_defaulted(zone, str(owner), bubble_id)
 
         raw_dates = record.get(BLOCK_DATES_FIELD)
         days = block_dates(raw_dates)
@@ -669,13 +698,16 @@ def plan_availability(
                 )
             )
 
-    merged_rules, merge_notes = _merge_windows(rules)
+    merged_rules, merge_notes, zone_clashes = _merge_windows(rules)
     return AvailabilityPlan(
         source_rule_ids=tuple(legacy_anchor(record) for record in calendar_settings),
         rules=merged_rules,
         exceptions=tuple(exceptions),
-        quarantined=tuple(quarantined),
+        read_from_utc=tuple(read_from_utc),
+        repaired_from_text=tuple(repaired_from_text),
+        fitted_to_session=tuple(fitted_to_session),
         dropped=tuple(dropped),
+        zone_clashes=zone_clashes,
         merged_overlaps=merge_notes,
         zone_defaults=tuple(zone_defaults),
         day_mismatches=tuple(day_mismatches),

@@ -7,12 +7,11 @@ that Bubble's timestamps survive was asserted by an integration test and by
 nothing at run time.
 
 **Row counts do not reconcile one-to-one here, and that is correct.** Every
-prior phase compared source rows to loaded rows; availability breaks that three
-ways at once — exceptions fan out 1:N, Gen A rules are quarantined on purpose,
-and overlapping windows merge so one anchor never reaches the table. Asserting
-`source == loaded` would fail every run. What is asserted instead is that every
-source row was *accounted for*: loaded, quarantined, dropped, refused, or
-absorbed. A row in none of those vanished without anybody deciding it should.
+prior phase compared source rows to loaded rows; availability breaks that:
+exceptions fan out 1:N, and overlapping windows merge so one anchor never
+reaches the table. Asserting `source == loaded` would fail every run. What is
+asserted instead is that every source row was *accounted for*: loaded,
+dropped, refused, or absorbed. A row in none of those vanished without anybody deciding it should.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from app.domain.transform.availability import (
     AvailabilityRuleRow,
     DroppedRow,
     MergedWindow,
-    QuarantinedRule,
 )
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.reconcile import reconcile_availability
@@ -163,7 +161,13 @@ async def test_a_timestamp_rewritten_by_the_importer_is_a_failure(
 #: parametrisation is the point: `accounted_for()` is a union of five terms, and
 #: a test exercising only one of them lets the other four be deleted with the
 #: whole suite green.
-ACCOUNTING_OUTCOMES = ("rules", "quarantined", "dropped", "midnight_crossing", "merged_overlaps")
+ACCOUNTING_OUTCOMES = (
+    "rules",
+    "dropped",
+    "midnight_crossing",
+    "zone_clashes",
+    "merged_overlaps",
+)
 
 
 def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPlan:
@@ -183,22 +187,10 @@ def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPl
 
     if outcome == "rules":
         extra = {"rules": (rule(anchor),)}
-    elif outcome == "quarantined":
-        extra = {
-            "quarantined": (
-                QuarantinedRule(
-                    legacy_bubble_id=anchor,
-                    mentor_bubble_id=MENTOR_BUBBLE_ID,
-                    day_of_week=1,
-                    as_printed=dt.time(2, 0),
-                    as_displayed=dt.time(7, 0),
-                    end_as_printed=dt.time(2, 15),
-                    end_as_displayed=dt.time(7, 15),
-                ),
-            )
-        }
     elif outcome == "dropped":
         extra = {"dropped": (DroppedRow(anchor, "no Creator"),)}
+    elif outcome == "zone_clashes":
+        extra = {"zone_clashes": (DroppedRow(anchor, "overlaps cs-other in another zone"),)}
     elif outcome == "midnight_crossing":
         extra = {"midnight_crossing": (DroppedRow(anchor, "22:00-02:00 does not move forward"),)}
     else:
@@ -249,7 +241,7 @@ async def test_a_source_row_the_transform_decided_nothing_about_is_a_failure(
     """Silent data loss, and the one failure no row count can show.
 
     The loaded total is *meant* to be smaller than the source total here —
-    quarantine and merging both shrink it — so a row that simply disappeared
+    dropping and merging both shrink it — so a row that simply disappeared
     looks exactly like a row that was correctly withheld. Only the accounting
     identity separates them.
 
