@@ -44,7 +44,9 @@ from conftest import A_REASON, bearer, default_ladder
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
-AT = dt.datetime(2026, 11, 20, 14, 0, tzinfo=dt.UTC)
+# The real clock, as the factories time their sessions: a fixed date here
+# stopped settling anything once the calendar passed it (21 Nov 2026).
+AT = dt.datetime.now(dt.UTC).replace(microsecond=0)
 
 
 async def events(engine: AsyncEngine, event: str | None = None) -> list[dict[str, Any]]:

@@ -686,7 +686,9 @@ async def test_no_party_email_reaches_the_response(
     """`users` carries email, `email_verified_at`, `slug` and `last_active_at`.
 
     The parties are meeting; that does not make the rest of each other's account
-    their business.
+    their business. The one email-named key is `meet_invite_email`, which is
+    only ever the viewer's own invited address on a Meet session (decision
+    357), so it is null here and no address of either party appears.
     """
     mentor, _, mentee, mentee_auth = await pair(db_engine, "no-email")
     await make_session(db_engine, mentor, mentee)
@@ -694,4 +696,5 @@ async def test_no_party_email_reaches_the_response(
     raw = (await api_client.get(sessions_url(mentee), headers=bearer(api_token(mentee_auth)))).text
 
     assert "mentor-no-email@example.test" not in raw
-    assert "email" not in raw
+    assert "@example.test" not in raw
+    assert raw.replace('"meet_invite_email":null', "").count("email") == 0

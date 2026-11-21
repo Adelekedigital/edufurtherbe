@@ -17,6 +17,7 @@ from app.domain.attendance import (
     JOIN_LEAD_CEILING,
     door_window,
 )
+from app.domain.emails import calendar_invite_address
 from app.domain.enums import (
     ConferencingProvider,
     MeetingProvider,
@@ -168,9 +169,11 @@ async def provision_meeting(
             # platform": mentors never had sessions on their own calendar, and
             # on Meet an uninvited mentor knocks with nobody present to admit
             # them.
-            attendee_emails=(
-                str(emails.get(row["mentee_id"]) or ""),
-                str(emails.get(row["mentor_id"]) or ""),
+            # **As Google knows them** (decision 357): a Gmail "+" alias is
+            # invited as the account's address, or Meet keeps them waiting.
+            attendee_emails=tuple(
+                calendar_invite_address(address) if address else ""
+                for address in (emails.get(row["mentee_id"]), emails.get(row["mentor_id"]))
             ),
             starts_at=row["starts_at"],
             duration_minutes=int(row["duration_minutes"]),

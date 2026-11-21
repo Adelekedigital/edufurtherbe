@@ -41,6 +41,7 @@ from app.domain.enums import (
     SessionStatus,
 )
 from app.domain.intake import MAX_ANSWER_LENGTH, MAX_OPTIONS, MAX_QUESTIONS
+from app.domain.meetings import meet_invite_for
 from app.domain.missed_reasons import NOTE_MAX_LENGTH
 from app.domain.refunds import RefundPolicy
 from app.domain.request_reminders import REMINDER_MESSAGE_MAX_LENGTH
@@ -289,6 +290,18 @@ class SessionRead(BaseModel):
             "joiner walks into the previous one."
         ),
     )
+    meet_invite_email: str | None = Field(
+        default=None,
+        description=(
+            "On a Google Meet session, the address **you**, the caller, were "
+            "invited with: sign in to Google with this account and Meet lets you "
+            "straight in; any other account waits to be admitted. A Gmail `+` "
+            "alias is invited as the plain address (`ada+edu@gmail.com` → "
+            "`ada@gmail.com`). Null on any other venue, and for a caller who is "
+            "not a party. Never the other party's address."
+        ),
+        examples=["ada@gmail.com"],
+    )
     respond_by: dt.datetime | None = Field(
         default=None,
         description=(
@@ -475,6 +488,7 @@ class SessionRead(BaseModel):
                 MeetingProvider(str(row["meeting_provider"])) if row["meeting_provider"] else None
             ),
             meeting_url=str(row["meeting_url"]) if row["meeting_url"] else None,
+            meet_invite_email=_meet_invite_email(row),
             respond_by=row.get("respond_by"),  # type: ignore[arg-type]
             join_opens_at=opens,
             join_closes_at=closes,
@@ -493,6 +507,13 @@ class SessionRead(BaseModel):
             missed_reason_sent=bool(row.get("missed_reason_sent")),
             reminder_sent_at=row.get("reminder_sent_at"),  # type: ignore[arg-type]
         )
+
+
+def _meet_invite_email(row: dict[str, object]) -> str | None:
+    """The viewer's invited address on a Meet session (decision 357), by the
+    rule the link `/join` hands over also reads."""
+    viewer_email = row.get("viewer_email")
+    return meet_invite_for(row["meeting_provider"], str(viewer_email) if viewer_email else None)
 
 
 def _answers_preview(row: dict[str, object]) -> AnswerPreviewRead | None:
