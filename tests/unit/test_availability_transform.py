@@ -68,6 +68,7 @@ def plan(
     extra: list[dict[str, Any]] | None = None,
     users: list[dict[str, Any]] | None = None,
     as_of: date = date(2026, 11, 22),
+    session_minutes: dict[str, int] | None = None,
 ) -> Any:
     return plan_availability(
         USERS if users is None else users,
@@ -75,6 +76,7 @@ def plan(
         extra or [],
         export_timezone=EXPORT_TIMEZONE,
         as_of=as_of,
+        session_minutes=session_minutes or {},
     )
 
 
@@ -147,6 +149,66 @@ def test_a_zero_length_gen_a_row_is_refused_not_stretched_to_a_day() -> None:
 
     assert result.rules == ()
     assert "does not move forward" in result.midnight_crossing[0].reason
+
+
+def test_every_weekday_of_a_zone_takes_one_offset() -> None:
+    """New York leaves DST on Sunday 1 Nov 2026. With the cutover on Friday 30
+    Oct, a Friday and a Sunday slot at 12:00 UTC must both read 08:00: one
+    mentor's hours never sit an hour apart from one day to the next."""
+    rows = [
+        rule_record(
+            bubble_id=anchor,
+            Creator=OTHER,
+            timeZone=None,
+            startTime="Nov 9, 2024 7:00 am",
+            endTime="Nov 9, 2024 8:00 am",
+            **{"dayOfWeekIn#️⃣": day, "daysOfWeek-O/S🔛": name},
+        )
+        for anchor, day, name in (("fri", "5", "Friday"), ("sun", "0", "Sunday"))
+    ]
+
+    result = plan(rows, as_of=date(2026, 10, 30))
+
+    assert {(r.day_of_week, r.start_time) for r in result.rules} == {
+        (5, time(8, 0)),
+        (0, time(8, 0)),
+    }
+
+
+def test_windows_in_two_zones_are_never_merged() -> None:
+    """The union of 10:00-12:00 Lagos and 11:00-13:00 New York is not
+    10:00-13:00 in either; the later one is reported and not loaded."""
+    result = plan(
+        [
+            rule_record(
+                bubble_id="lagos",
+                timeZone="Africa/Lagos",
+                startTime="Dec 15, 2025 10:00 am",
+                endTime="Dec 15, 2025 12:00 pm",
+            ),
+            rule_record(
+                bubble_id="ny", startTime="Dec 15, 2025 11:00 am", endTime="Dec 15, 2025 1:00 pm"
+            ),
+        ]
+    )
+
+    assert [(r.legacy_bubble_id, r.end_time) for r in result.rules] == [("lagos", time(12, 0))]
+    assert result.merged_overlaps == ()
+    assert result.dropped[0].legacy_bubble_id == "ny"
+    assert "in Africa/Lagos and this in America/New_York" in result.dropped[0].reason
+
+
+def test_a_refused_gen_a_row_is_not_reported_as_a_zone_default() -> None:
+    result = plan(
+        [
+            rule_record(
+                timeZone=None, startTime="Nov 9, 2024 9:00 am", endTime="Nov 9, 2024 9:00 am"
+            )
+        ],
+        users=[{"bubble_id": MENTOR, "Mentor": "m-1"}],
+    )
+
+    assert result.midnight_crossing and result.zone_defaults == ()
 
 
 def test_the_discriminator_reads_none_not_empty_string() -> None:
@@ -301,6 +363,45 @@ def test_display_text_on_a_healthy_row_is_ignored() -> None:
 
     assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(12, 0))
     assert result.repaired_from_text == ()
+
+
+def test_a_zero_length_window_is_one_session_long() -> None:
+    """Owner, 2026-11-21: a slot is a session. 144 of 191 production slots are
+    exactly the mentor's session length; zero-length stamps get one session."""
+    result = plan(
+        [rule_record(startTime="Dec 15, 2025 9:00 am", endTime="Dec 15, 2025 9:00 am")],
+        session_minutes={MENTOR: 30},
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(9, 0), time(9, 30))
+    assert result.fitted_to_session == ("cs-1",)
+    assert result.midnight_crossing == ()
+
+
+def test_an_overnight_slip_is_one_session_from_its_start() -> None:
+    result = plan(
+        [rule_record(startTime="Dec 15, 2025 9:00 pm", endTime="Dec 15, 2025 5:30 am")],
+        session_minutes={MENTOR: 45},
+    )
+
+    assert (result.rules[0].start_time, result.rules[0].end_time) == (time(21, 0), time(21, 45))
+
+
+def test_a_session_that_would_pass_midnight_is_still_reported() -> None:
+    result = plan(
+        [rule_record(startTime="Dec 15, 2025 11:45 pm", endTime="Dec 15, 2025 11:45 pm")],
+        session_minutes={MENTOR: 30},
+    )
+
+    assert result.rules == () and result.fitted_to_session == ()
+    assert "does not move forward" in result.midnight_crossing[0].reason
+
+
+def test_a_healthy_window_keeps_its_length() -> None:
+    result = plan([rule_record()], session_minutes={MENTOR: 30})
+
+    assert result.rules[0].end_time == time(12, 0)
+    assert result.fitted_to_session == ()
 
 
 def test_an_unreadable_block_date_value_is_reported_not_ignored() -> None:

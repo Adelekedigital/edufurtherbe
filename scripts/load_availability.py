@@ -1,10 +1,11 @@
 """Transform a legacy snapshot into the availability tables, then report.
 
     # transform and report, touching no database
-    uv run python scripts/load_availability.py --from-export script-data-dev --dry-run
+    uv run python scripts/load_availability.py --from-export script-data-dev \
+        --as-of 2026-11-22 --dry-run
 
     # load
-    uv run python scripts/load_availability.py --from-export script-data-dev
+    uv run python scripts/load_availability.py --from-export script-data-dev --as-of 2026-11-22
 
 **Run this after ``load_identity.py`` and ``load_profiles.py``.** Every rule
 hangs off ``mentor_profiles``, so out of order it fails on a foreign key.
@@ -32,6 +33,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import get_settings
 from app.domain.bubble import EXPORT_TIMEZONE
 from app.domain.transform.availability import AvailabilityPlan, plan_availability
+from app.domain.transform.sessions import durations_by_mentor
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.cli import (
@@ -46,7 +48,7 @@ from app.infra.etl.reconcile import reconcile_availability
 from app.infra.etl.satellites import user_id_map
 
 
-def build_plan(directory: Path) -> AvailabilityPlan:
+def build_plan(directory: Path, as_of: dt.date) -> AvailabilityPlan:
     source = open_export(directory)
     users = list(source.read("allusers"))
     settings_records = list(source.read("calendarsettings"))
@@ -55,14 +57,16 @@ def build_plan(directory: Path) -> AvailabilityPlan:
     # Raw records in. Deciding what a user's timezone is, and who counts as a
     # mentor, are mapping decisions — and this directory is checked by ruff
     # alone, so a rule written here is a rule nothing verifies (#44).
-    # Today is the cutover: the date whose offset converts a Gen A instant into
-    # its owner's zone (decision 359).
+    # The cutover date, given rather than read from the clock, so a re-run
+    # converts a Gen A instant with the same offset (decision 359).
+    session_minutes, _ = durations_by_mentor(settings_records)
     return plan_availability(
         users,
         settings_records,
         extra_records,
         export_timezone=EXPORT_TIMEZONE,
-        as_of=dt.datetime.now(dt.UTC).date(),
+        as_of=as_of,
+        session_minutes=session_minutes,
     )
 
 
@@ -99,10 +103,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-export", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--as-of",
+        type=dt.date.fromisoformat,
+        required=True,
+        help="the cutover date (YYYY-MM-DD) whose offsets place legacy UTC slots",
+    )
     args = parser.parse_args()
 
     configure_streams()
-    plan = build_plan(args.from_export)
+    plan = build_plan(args.from_export, args.as_of)
     print(plan.report())
 
     if not plan.ok:
@@ -111,7 +121,13 @@ def main() -> int:
     # A run that loaded cleanly but left something for a human is not a clean
     # run, and `EXIT_UNRESOLVED` exists for exactly that. Returning 0 here
     # would let a freeze-window runbook read "midnight-crossing 5" as success.
-    unresolved = bool(plan.zone_defaults or plan.merged_overlaps or plan.midnight_crossing)
+    unresolved = bool(
+        plan.zone_defaults
+        or plan.merged_overlaps
+        or plan.midnight_crossing
+        or plan.repaired_from_text
+        or plan.fitted_to_session
+    )
 
     if args.dry_run:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK
