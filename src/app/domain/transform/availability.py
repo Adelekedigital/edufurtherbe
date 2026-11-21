@@ -202,6 +202,9 @@ class AvailabilityPlan:
     repaired_from_text: tuple[str, ...] = ()
     #: Anchors whose window did not move forward, ended one session after start.
     fitted_to_session: tuple[str, ...] = ()
+    #: Rules overlapping another of the mentor's in a different zone. Not
+    #: loaded, and **accounting**: a declared window a person must look at.
+    zone_clashes: tuple[DroppedRow, ...] = ()
     #: Every source row that did not become one. **Accounting, not a
     #: diagnostic**: reconciliation adds these to the loaded
     #: counts and expects the source total.
@@ -233,9 +236,9 @@ class AvailabilityPlan:
         """Every source rule anchor this run reached a decision about.
 
         The identity reconciliation checks. A source row must be **loaded, or
-        dropped, or refused for not moving forward, or absorbed into a
-        neighbour** — four outcomes, and a row in none of them vanished without
-        anybody deciding it should.
+        dropped, or refused for not moving forward, or refused for clashing
+        across zones, or absorbed into a neighbour** — five outcomes, and a
+        row in none of them vanished without anybody deciding it should.
 
         ``midnight_crossing`` belongs here and is easy to miss: those rows are
         reported rather than loaded, so leaving them out makes the identity fail
@@ -245,6 +248,7 @@ class AvailabilityPlan:
             tuple(row.legacy_bubble_id for row in self.rules)
             + tuple(row.legacy_bubble_id for row in self.dropped)
             + tuple(row.legacy_bubble_id for row in self.midnight_crossing)
+            + tuple(row.legacy_bubble_id for row in self.zone_clashes)
             + tuple(note.absorbed for note in self.merged_overlaps)
         )
 
@@ -267,6 +271,7 @@ class AvailabilityPlan:
             ("merged overlaps", self.merged_overlaps),
             ("day-of-week disagreements", self.day_mismatches),
             ("midnight-crossing windows", self.midnight_crossing),
+            ("overlaps across two zones (not loaded)", self.zone_clashes),
             ("read from UTC moment (no slot zone)", self.read_from_utc),
             ("read from display text (stamps did not move forward)", self.repaired_from_text),
             ("ended one session after start (window did not move forward)", self.fitted_to_session),
@@ -701,7 +706,8 @@ def plan_availability(
         read_from_utc=tuple(read_from_utc),
         repaired_from_text=tuple(repaired_from_text),
         fitted_to_session=tuple(fitted_to_session),
-        dropped=tuple(dropped) + zone_clashes,
+        dropped=tuple(dropped),
+        zone_clashes=zone_clashes,
         merged_overlaps=merge_notes,
         zone_defaults=tuple(zone_defaults),
         day_mismatches=tuple(day_mismatches),

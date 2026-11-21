@@ -319,8 +319,8 @@ class AvailabilityReconciliation:
     """
 
     checks: tuple[TableCheck, ...]
-    #: Source rules in no outcome at all — neither loaded, dropped, refused nor
-    #: absorbed. A row here vanished without anybody deciding it
+    #: Source rules in no outcome at all — neither loaded, dropped, refused,
+    #: clashing nor absorbed. A row here vanished without anybody deciding it
     #: should, which is the failure no row count would show.
     unaccounted: tuple[str, ...] = ()
     #: **There is deliberately no per-source fan-out check.** One was written
@@ -409,12 +409,12 @@ async def reconcile_availability(
 def _unaccounted(plan: AvailabilityPlan) -> tuple[str, ...]:
     """Source rules the plan reached no decision about.
 
-    Every anchor the transform was handed must appear in one of four outcomes —
-    loaded, dropped, refused for not moving forward, or absorbed
-    into a neighbour. A row in none of them vanished without anybody deciding it
-    should, which is silent data loss that no row count would show: the loaded
-    total is *meant* to be smaller than the source total here, so a smaller one
-    looks correct.
+    Every anchor the transform was handed must appear in one of five outcomes —
+    loaded, dropped, refused for not moving forward, refused for clashing
+    across zones, or absorbed into a neighbour. A row in none of them vanished
+    without anybody deciding it should, which is silent data loss that no row
+    count would show: the loaded total is *meant* to be smaller than the source
+    total here, so a smaller one looks correct.
 
     An earlier version of this function returned duplicated anchors instead and
     claimed in its docstring to do this. Every test passed, because none of them

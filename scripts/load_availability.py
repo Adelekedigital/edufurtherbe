@@ -125,6 +125,7 @@ def main() -> int:
         plan.zone_defaults
         or plan.merged_overlaps
         or plan.midnight_crossing
+        or plan.zone_clashes
         or plan.repaired_from_text
         or plan.fitted_to_session
     )

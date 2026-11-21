@@ -194,8 +194,10 @@ def test_windows_in_two_zones_are_never_merged() -> None:
 
     assert [(r.legacy_bubble_id, r.end_time) for r in result.rules] == [("lagos", time(12, 0))]
     assert result.merged_overlaps == ()
-    assert result.dropped[0].legacy_bubble_id == "ny"
-    assert "in Africa/Lagos and this in America/New_York" in result.dropped[0].reason
+    assert result.dropped == ()
+    assert result.zone_clashes[0].legacy_bubble_id == "ny"
+    assert "in Africa/Lagos and this in America/New_York" in result.zone_clashes[0].reason
+    assert "ny" in result.accounted_for()
 
 
 def test_a_refused_gen_a_row_is_not_reported_as_a_zone_default() -> None:
