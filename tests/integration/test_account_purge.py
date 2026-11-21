@@ -123,6 +123,8 @@ async def a_full_account(engine: AsyncEngine, tag: str) -> tuple[UUID, UUID]:
             "VALUES (:u, 'social', 'x', 'https://x.com/ada')",
             "INSERT INTO user_onboarding (user_id) VALUES (:u)",
             "INSERT INTO user_activity_days (user_id, day) VALUES (:u, current_date)",
+            "INSERT INTO user_dismissed_notices (user_id, notice_key) "
+            "VALUES (:u, 'whats-new:2026-11-migration')",
             "INSERT INTO mentor_profile_visits (mentor_user_id, day, visitor_key, signed_in) "
             "VALUES (:u, current_date, decode(repeat('ab', 32), 'hex'), false)",
             "INSERT INTO mentor_profile_shares "
@@ -153,6 +155,7 @@ PURGED_TABLES = (
     ("user_onboarding", "user_id"),
     ("user_links", "user_id"),
     ("user_activity_days", "user_id"),
+    ("user_dismissed_notices", "user_id"),
     ("mentor_profile_visits", "mentor_user_id"),
     ("mentor_profile_shares", "mentor_user_id"),
 )

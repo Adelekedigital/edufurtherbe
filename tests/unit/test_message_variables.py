@@ -32,6 +32,7 @@ from app.domain.messages import (
     clock,
 )
 from app.domain.notifications import AUDIENCE, Notification
+from app.infra.db.outbox import VENUE_LABELS
 
 LAGOS = "Africa/Lagos"  # UTC+1, no DST ever.
 TORONTO = "America/Toronto"
@@ -193,11 +194,11 @@ def test_the_link_is_the_session_page_and_carries_no_meeting_url() -> None:
     the start, so that nobody joins early and a Join press is something the
     platform can record. A meeting URL here would hand the room out days ahead.
     """
-    built = build_variables(["sessionUrl", "location"], context(venue="Daily"))
+    built = build_variables(["sessionUrl", "location"], context(venue="EduFurther video"))
 
     assert built["sessionUrl"] == "https://app.edufurther.org/sessions/01a0-session"
     # The venue is a label, never a URL.
-    assert built["location"] == "Daily"
+    assert built["location"] == "EduFurther video"
     assert "daily.co" not in built["sessionUrl"]
 
 
@@ -584,3 +585,9 @@ def test_an_answered_count_that_is_not_a_number_refuses_by_name() -> None:
     bad = context(extras={"answered_questions": "three"})
     with pytest.raises(UnresolvedVariableError, match="answeredQuestions"):
         build_variables(["answeredQuestions"], bad)
+
+
+def test_an_edufurther_video_session_is_named_as_the_app_names_it() -> None:
+    """The email's "Where" line uses the product name, not the vendor's (owner, 2026-11-19)."""
+    assert VENUE_LABELS["daily"] == "EduFurther video"
+    assert VENUE_LABELS["google_meet"] == "Google Meet"

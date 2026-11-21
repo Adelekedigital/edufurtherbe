@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import MAX_FILE_MB, MessageFileDownloadDep, UploadedMessageFileDep
 from app.api.deps.files import FILE_REFUSED
-from app.api.errors import retry_after_header
+from app.api.errors import UNAUTHORISED, retry_after_header
 from app.api.limits import MAX_BODY_MB
 from app.api.schemas.intake import IntakeFileRead
 from app.core.config import Settings
@@ -27,12 +27,6 @@ router = APIRouter(prefix="/api/v1", tags=["messages"])
 #: defaults, which "unless this deployment configures otherwise" qualifies).
 UNUSED_HOURS = Settings.model_fields["intake_file_unused_hours"].default
 UPLOADS_PER_HOUR = Settings.model_fields["intake_uploads_per_hour"].default
-
-UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
-    status.HTTP_401_UNAUTHORIZED: {
-        "description": "The bearer token is absent, malformed, expired or wrongly signed."
-    },
-}
 
 
 @router.post(
@@ -59,7 +53,7 @@ UNAUTHENTICATED: dict[int | str, dict[str, str]] = {
         "the number of seconds until another upload is allowed."
     ),
     responses={
-        **UNAUTHENTICATED,
+        **UNAUTHORISED,
         status.HTTP_409_CONFLICT: {
             "description": f"You already hold {MAX_PENDING_UPLOADS} unsent files."
         },
@@ -99,7 +93,7 @@ async def upload_message_file(
         "unsent."
     ),
     responses={
-        **UNAUTHENTICATED,
+        **UNAUTHORISED,
         status.HTTP_200_OK: {
             "content": {kind.value: {} for kind in IntakeFileType},
             "description": "The file's bytes.",

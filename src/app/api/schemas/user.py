@@ -356,6 +356,14 @@ class UserRead(NormalisedEmail):
             "until they answer, which is when the banner shows."
         ),
     )
+    seen_items: list[str] = Field(
+        description=(
+            "The keys of the one-time notices you have seen, finished or closed "
+            '(`PUT /me/seen-items/{key}`), the first seen first: a "what\'s new" '
+            "tour, an announcement, a nudge. `[]` when none; never null."
+        ),
+        examples=[["whats-new:2026-11-migration"]],
+    )
 
 
 class AccountDeletionWrite(BaseModel):

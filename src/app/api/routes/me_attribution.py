@@ -7,7 +7,7 @@ shared, the subject (analytics, decision 329) is not.
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import RecordedAcquisitionDep, RecordedConsentDep
-from app.api.routes.me_referrals import UNAUTHORISED
+from app.api.errors import UNAUTHORISED
 from app.api.schemas.attribution import AcquisitionRead, AnalyticsConsentRead
 
 router = APIRouter(prefix="/api/v1/me", tags=["analytics"])

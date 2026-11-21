@@ -170,7 +170,12 @@ never changes QStash.
    (`src/app/api/routes/callbacks.py`).
 2. Set `DAILY_WEBHOOK_SECRET` on Railway to the HMAC secret Daily issues:
    base64, at least 16 bytes (validator in `src/app/core/config.py`).
-3. Close #405. The Daily account is shared with the legacy app (#405), so this
+3. Verify live presence: two accounts join one EduFurther video session. Within
+   about 15 seconds each sees the other as "Here now" on `/sessions/{id}`, a
+   `session_room_stays` row appears, and its `left_at` fills in when one leaves.
+   Staging never had the webhook (0 stays ever on dev, so its join page shows
+   "Not in the call yet" for both); the owner chose to turn it on at cutover only.
+4. Close #405. The Daily account is shared with the legacy app (#405), so this
    is a cutover step, not earlier.
 
 ## 7. Lock the origin to the front end (#426)
@@ -192,6 +197,23 @@ so the front end must already be sending it.
 4. In Vercel Firewall, add one rate-limit rule on `/api/v1/*`, keyed by IP
    (available on Hobby and Pro). Start it with the **Log** action, then switch
    to the default `429` once the numbers look right.
+
+   **As set on 19 Nov 2026** (frontend, verified through the Vercel API):
+   - The old rule stays on all hosts, `/api/v1/` and `/api/monitoring`, **log
+     only** at 600 per 60 s, so the end-to-end agent on staging is not
+     throttled.
+   - "Production API per-IP limit (429)": host `app.edufurther.org` only, the
+     same paths, 300 per 60 s per IP, then `429`. It takes effect when `app`'s
+     DNS moves. **After the DNS move**, confirm it answers `429` past 300
+     requests a minute on `app.edufurther.org` and that staging is unaffected.
+   - Bot Protection and AI bots stay on **Log** through cutover; AI crawlers
+     stay allowed, for discovery in AI search (owner, 19 Nov). About three days
+     after go-live the frontend reads the bot log and decides on Challenge,
+     which must not challenge WhatsApp link previews or the end-to-end agent.
+   - Vercel Pro with Skew Protection (12 h) and a **$10 team spend limit**
+     (owner, 19 Nov), on usage beyond Pro's included $20: alerts at 50/75/100%,
+     pause off for launch week and on from about 30 Nov (Settings → Billing →
+     Spend Management; the API cannot read it).
 5. Rotation: new value in `EDGE_PROXY_NEXT_SECRET` on Railway, switch Vercel to
    it, then move it to `EDGE_PROXY_SECRET` and clear the next one.
 

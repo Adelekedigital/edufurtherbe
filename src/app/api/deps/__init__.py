@@ -114,6 +114,7 @@ from app.api.deps.messages import (
     SentMessageDep,
     UploadedMessageFileDep,
 )
+from app.api.deps.notices import DismissedNoticeDep
 from app.api.deps.preview import (
     CanPreviewDep,
     EndedPreviewDep,
@@ -275,6 +276,7 @@ __all__ = [
     "DeletedOwnSessionTypeDep",
     "DeletedSessionTypeWindowDep",
     "DisconnectedCalendarDep",
+    "DismissedNoticeDep",
     "EditedReviewDep",
     "EducationDep",
     "EndedPreviewDep",

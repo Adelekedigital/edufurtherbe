@@ -21,6 +21,7 @@ from app.api.deps import (
     PickedInviteHandleDep,
     ToggledInviteLinkDep,
 )
+from app.api.errors import UNAUTHORISED
 from app.api.schemas.referrals import InviteLinkRead, ReferralClaimRead, ReferralRead
 from app.core.config import Settings
 from app.domain.referrals import (
@@ -40,12 +41,6 @@ CLAIM_WINDOW_TEXT = (
     "the deployment's claim window, `INVITE_CLAIM_WINDOW_HOURS` hours "
     f"(default {CLAIM_WINDOW_DEFAULT_HOURS} = {CLAIM_WINDOW_DEFAULT_HOURS / 24:g} days)"
 )
-
-UNAUTHORISED: dict[int | str, dict[str, str]] = {
-    status.HTTP_401_UNAUTHORIZED: {
-        "description": "The bearer token is absent, malformed, expired or wrongly signed."
-    }
-}
 
 
 @router.post(
