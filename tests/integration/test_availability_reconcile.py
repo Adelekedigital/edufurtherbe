@@ -285,3 +285,54 @@ async def test_a_fan_out_date_that_fails_to_land_is_caught(
 
     assert not result.ok
     assert "ce-1:2025-01-19" in result.report()
+
+
+async def test_a_rerun_that_moves_windows_past_each_other_loads(
+    mentor: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """Production, decision 360's reload: re-reading the legacy slots moved one
+    of a mentor's windows onto a sibling that had not moved yet, and the
+    overlap constraint aborted the whole load. The final state never overlaps;
+    only the order of the row updates did."""
+    conn, users = mentor
+    first = AvailabilityPlan(
+        rules=(
+            rule("cs-a", start_time=dt.time(9, 0), end_time=dt.time(10, 0)),
+            rule("cs-b", start_time=dt.time(10, 0), end_time=dt.time(11, 0)),
+        ),
+        exceptions=(),
+    )
+    await AvailabilityLoader(conn).load(users=users, rules=first.rules, exceptions=())
+    swapped = AvailabilityPlan(
+        rules=(
+            rule("cs-a", start_time=dt.time(10, 0), end_time=dt.time(11, 0)),
+            rule("cs-b", start_time=dt.time(9, 0), end_time=dt.time(10, 0)),
+        ),
+        exceptions=(),
+    )
+
+    result = await load_and_reconcile(conn, users, swapped)
+
+    assert result.ok, result.report()  # type: ignore[attr-defined]
+    stored = await conn.execute(
+        text(
+            "SELECT legacy_bubble_id, start_time, is_active FROM availability_rules "
+            "ORDER BY legacy_bubble_id"
+        )
+    )
+    assert [tuple(row) for row in stored] == [
+        ("cs-a", dt.time(10, 0), True),
+        ("cs-b", dt.time(9, 0), True),
+    ]
+
+
+async def test_a_rerun_keeps_a_switched_off_window_switched_off(
+    mentor: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    conn, users = mentor
+    await AvailabilityLoader(conn).load(users=users, rules=(rule(is_active=False),), exceptions=())
+
+    await AvailabilityLoader(conn).load(users=users, rules=(rule(is_active=False),), exceptions=())
+
+    active = await conn.scalar(text("SELECT is_active FROM availability_rules"))
+    assert active is False
