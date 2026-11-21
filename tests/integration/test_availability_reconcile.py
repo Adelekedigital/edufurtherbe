@@ -158,16 +158,10 @@ async def test_a_timestamp_rewritten_by_the_importer_is_a_failure(
 
 
 #: One anchor per outcome, each accounted for by that outcome **alone**. The
-#: parametrisation is the point: `accounted_for()` is a union of five terms, and
-#: a test exercising only one of them lets the other four be deleted with the
+#: parametrisation is the point: `accounted_for()` is a union of four terms, and
+#: a test exercising only one of them lets the other three be deleted with the
 #: whole suite green.
-ACCOUNTING_OUTCOMES = (
-    "rules",
-    "dropped",
-    "midnight_crossing",
-    "zone_clashes",
-    "merged_overlaps",
-)
+ACCOUNTING_OUTCOMES = ("rules", "dropped", "midnight_crossing", "merged_overlaps")
 
 
 def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPlan:
@@ -189,8 +183,6 @@ def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPl
         extra = {"rules": (rule(anchor),)}
     elif outcome == "dropped":
         extra = {"dropped": (DroppedRow(anchor, "no Creator"),)}
-    elif outcome == "zone_clashes":
-        extra = {"zone_clashes": (DroppedRow(anchor, "overlaps cs-other in another zone"),)}
     elif outcome == "midnight_crossing":
         extra = {"midnight_crossing": (DroppedRow(anchor, "22:00-02:00 does not move forward"),)}
     else:
