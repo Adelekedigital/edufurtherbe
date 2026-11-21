@@ -14,16 +14,11 @@ Reporting asks an admin to look; only they can uphold it.
 from fastapi import APIRouter, Response, status
 
 from app.api.deps import OwnReviewsDep, ReportedReviewDep
+from app.api.errors import UNAUTHORISED
 from app.api.schemas.common import Page
 from app.api.schemas.review_reports import OwnReviewRead, ReviewReportRead
 
 router = APIRouter(prefix="/api/v1/me", tags=["review-moderation"])
-
-UNAUTHORISED: dict[int | str, dict[str, str]] = {
-    status.HTTP_401_UNAUTHORIZED: {
-        "description": "The bearer token is absent, malformed, expired or wrongly signed."
-    }
-}
 
 
 @router.get(

@@ -55,6 +55,7 @@ from app.infra.db.models.messaging import (
     MessageAttachment,
 )
 from app.infra.db.models.missed_reasons import SessionMissedReason
+from app.infra.db.models.notices import UserDismissedNotice
 from app.infra.db.models.platform import (
     FeatureInterest,
     IdempotencyKey,
@@ -170,6 +171,7 @@ __all__ = [
     "User",
     "UserActivityDay",
     "UserAward",
+    "UserDismissedNotice",
     "UserLanguage",
     "UserLegalConsent",
     "UserLink",

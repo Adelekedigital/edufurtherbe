@@ -15,6 +15,7 @@ from fastapi import APIRouter, Response, status
 
 from app.api.deps.core import PRIVATE_NO_STORE
 from app.api.deps.push import PushConfigDep, PushStatusDep, SubscribedDep, UnsubscribedDep
+from app.api.errors import UNAUTHORISED
 from app.api.schemas.push import PushConfigRead, PushSubscriptionStatus
 from app.domain.push import MAX_SUBSCRIPTIONS_PER_USER
 
@@ -24,11 +25,6 @@ router = APIRouter(prefix="/api/v1", tags=["push"])
 #: may subscribe against the old one.
 CONFIG_CACHE = "public, max-age=300"
 
-UNAUTHENTICATED: dict[int | str, dict[str, Any]] = {
-    status.HTTP_401_UNAUTHORIZED: {
-        "description": "The bearer token is absent, malformed, expired or wrongly signed."
-    },
-}
 SUBS = "/api/v1/me/push-subscriptions"
 
 INVALID_SUBSCRIPTION: dict[int | str, dict[str, Any]] = {
@@ -78,7 +74,7 @@ def read_push_config(config: PushConfigDep, response: Response) -> PushConfigRea
         "subscribing another drops the one least recently subscribed. "
         "`Location` is where to ask whether this browser is still subscribed."
     ),
-    responses=UNAUTHENTICATED
+    responses=UNAUTHORISED
     | INVALID_SUBSCRIPTION
     | {
         status.HTTP_200_OK: {
@@ -105,7 +101,7 @@ async def subscribe_browser(done: SubscribedDep, response: Response) -> PushSubs
         "signing out: it needs the token. No host check here, so a browser "
         "subscribed under an older rule can always be removed."
     ),
-    responses=UNAUTHENTICATED | INVALID_ENDPOINT,
+    responses=UNAUTHORISED | INVALID_ENDPOINT,
 )
 async def unsubscribe_browser(_: UnsubscribedDep) -> None:
     return None
@@ -116,7 +112,7 @@ async def unsubscribe_browser(_: UnsubscribedDep) -> None:
     response_model=PushSubscriptionStatus,
     summary="Whether this browser is subscribed",
     description="Whether this endpoint is subscribed as you, for the Settings switch.",
-    responses=UNAUTHENTICATED | INVALID_ENDPOINT,
+    responses=UNAUTHORISED | INVALID_ENDPOINT,
 )
 async def read_push_status(state: PushStatusDep, response: Response) -> PushSubscriptionStatus:
     response.headers["Cache-Control"] = PRIVATE_NO_STORE

@@ -26,6 +26,7 @@ from app.api.deps import (
     SentMessageDep,
     UpdatedMessageSettingsDep,
 )
+from app.api.errors import UNAUTHORISED
 from app.api.schemas.common import Page
 from app.api.schemas.message_settings import MessageSettingsRead
 from app.api.schemas.messages import ChatPage, MessageRead, PersonRead, ThreadRead, UnreadRead
@@ -33,11 +34,6 @@ from app.domain.chats import BODY_MAX_LENGTH, MAX_PAGE, PREVIEW_LENGTH
 
 router = APIRouter(prefix="/api/v1/me/messages", tags=["messages"])
 
-UNAUTHORISED: dict[int | str, dict[str, str]] = {
-    status.HTTP_401_UNAUTHORIZED: {
-        "description": "The bearer token is absent, malformed, expired or wrongly signed."
-    }
-}
 
 NOT_CONNECTED_READ: dict[int | str, dict[str, str]] = {
     status.HTTP_404_NOT_FOUND: {

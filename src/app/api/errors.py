@@ -569,6 +569,15 @@ PREVIEW_NOT_FOUND = (
 )
 
 #: The `403` every write answers in a preview, and a read refused there too.
+#: The `401` every signed-in route documents: one statement of it (rule 8),
+#: read by every route module that declares it.
+UNAUTHORISED: dict[int | str, dict[str, Any]] = {
+    status.HTTP_401_UNAUTHORIZED: {
+        "description": "The bearer token is absent, malformed, expired or wrongly signed."
+    }
+}
+
+
 READ_ONLY_VIEW_AS = (
     "`/problems/read-only-view-as` (`code: read_only_view_as`): sent with "
     "`X-EF-Preview`, an admin's preview of a user is read only."

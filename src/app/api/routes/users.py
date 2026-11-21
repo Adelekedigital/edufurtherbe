@@ -117,6 +117,8 @@ ME_RESPONSES: dict[int | str, dict[str, str]] = {
         "`is_migrated` is true when the account came from the old app.\n\n"
         "`analytics_consent` is the caller's answer to analytics cookies, null "
         "until they give one (`PUT /me/consents/analytics`).\n\n"
+        "`seen_items` is the keys of the one-time notices the caller has seen "
+        "(`PUT /me/seen-items/{key}`), the first seen first; `[]` when none.\n\n"
         "The Supabase identifier and the legacy Bubble id are deliberately not "
         "returned: one is a vendor's identifier and the other a migration anchor."
     ),
@@ -169,6 +171,7 @@ async def read_me(
             if (consent := attributes["analytics_consent"]) is not None
             else None
         ),
+        seen_items=attributes["seen_items"],
     )
 
 

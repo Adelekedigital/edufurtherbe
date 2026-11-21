@@ -229,6 +229,8 @@ EXPECTED_TABLES = [
     "mentor_profile_shares",
     # Each UTC day's random key for profile link visitors (decision 348).
     "visitor_day_keys",
+    # The one-time notices a user dismissed (decision 356).
+    "user_dismissed_notices",
 ]
 
 # **No enum types at head, and that is settled decision #100 completed.**

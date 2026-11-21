@@ -145,6 +145,7 @@ _ACTIVITY = (
     "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) "
     "VALUES (:mentee, 'https://fcm.googleapis.com/x', 'p', 'a')",
     "INSERT INTO analytics_consents (user_id, version, granted) VALUES (:mentee, 'v1', true)",
+    "INSERT INTO user_dismissed_notices (user_id, notice_key) VALUES (:mentee, 'whats-new:x')",
     "INSERT INTO feature_interest (user_id, feature) VALUES (:mentee, 'payments')",
     "INSERT INTO writing_assist_requests (user_id, field) VALUES (:mentee, 'mentee_bio')",
     "INSERT INTO notification_channel_preferences (user_id, notification_type) "
