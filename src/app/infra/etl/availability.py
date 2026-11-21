@@ -50,6 +50,17 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     updated_at     = EXCLUDED.updated_at
 """
 
+# Switched off first, so a re-run can move windows past each other (decision
+# 360's reload): `availability_rules_no_overlap` is partial on `is_active`, and
+# rows are rewritten one at a time, so a window moving onto a sibling that has
+# not moved yet would abort the load. Each upsert below sets the row's final
+# `is_active`, and the plan is merged, so the end state never overlaps. Only the
+# anchors being written are touched; `updated_at` is held by the caller.
+DEACTIVATE_RULES = """
+UPDATE availability_rules SET is_active = false
+WHERE legacy_bubble_id = ANY(:anchors) AND is_active
+"""
+
 # The ETL writes raw SQL, so nothing in Pydantic or the ORM is between a
 # transform bug and the column. **The database is what refuses a value the
 # vocabulary does not contain**, and that is still true after settled decision
@@ -106,6 +117,9 @@ class AvailabilityLoader:
             return resolved
 
         async with timestamps_from_source_across(self._connection, TABLES):
+            await self._connection.execute(
+                text(DEACTIVATE_RULES), {"anchors": [rule.legacy_bubble_id for rule in rules]}
+            )
             for rule in rules:
                 await self._connection.execute(
                     text(UPSERT_RULE),
