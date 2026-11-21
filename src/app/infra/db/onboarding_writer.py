@@ -30,21 +30,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OnboardingIncompleteError
 from app.domain.credits import CreditLadder
-from app.domain.notifications import Notification
 from app.domain.onboarding import (
     finishes_as_mentee,
     may_complete_onboarding,
+    mentee_answers_complete,
     missing_codes,
 )
-from app.infra.db.credit_grants import top_up_levels
+from app.infra.db.credit_grants import top_up_and_tell
 from app.infra.db.models.referrals import Referral
 from app.infra.db.models.user import UserOnboarding
 from app.infra.db.onboarding_store import onboarding_state
-from app.infra.db.outbox import enqueue
 from app.infra.db.referral_writer import qualify_invitee
 from app.infra.db.user_locks import lock_users
 
-__all__ = ["OnboardingResult", "complete_onboarding", "record_last_step"]
+__all__ = [
+    "OnboardingResult",
+    "answers_complete",
+    "complete_onboarding",
+    "pay_if_answers_completed",
+    "record_last_step",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,29 +136,12 @@ async def complete_onboarding(
         )
     ).one()
 
-    # Level 1 now, or higher if an invite of theirs already qualified. App
-    # clock, matching `credit_store`'s read.
-    paid = await top_up_levels(session, [user_id], ladder=ladder, now=dt.datetime.now(dt.UTC))
-    granted = bool(paid)
-
-    if granted:
-        # **In the granting transaction**, so a message about a credit that
-        # rolled back cannot exist — the same rule `write_review` follows for
-        # the mentor's notice.
-        #
-        # Guarded on `granted` rather than sent unconditionally: a retried
-        # completion pays nothing, and telling somebody twice that their first
-        # credit arrived is worse than a slightly late first telling.
-        #
-        # With what was paid, as `credits_renewed` carries it (decision 323).
-        await enqueue(
-            session,
-            Notification.CREDITS_GRANTED,
-            entity_type="user",
-            entity_id=user_id,
-            recipient_ids=(user_id,),
-            variables={"credit_count": paid[user_id]},
-        )
+    # Level 1 now, or higher if an invite of theirs already qualified, and
+    # told so in the granting transaction (`top_up_and_tell`). App clock,
+    # matching `credit_store`'s read.
+    granted = bool(
+        await top_up_and_tell(session, user_id, ladder=ladder, now=dt.datetime.now(dt.UTC))
+    )
 
     # **The referrer's half, in this transaction.** Finishing a profile is what
     # qualifies the invite that named this user — the same signal as their own
@@ -194,3 +182,43 @@ async def record_last_step(session: AsyncSession, user_id: UUID, step: str) -> A
             ).returning(UserOnboarding.completed_at, UserOnboarding.last_step)
         )
     ).one()
+
+
+async def answers_complete(session: AsyncSession, user_id: UUID) -> bool:
+    """Whether the user's mentee answers are all saved now
+    (`mentee_answers_complete` over `onboarding_state`).
+
+    **Locks the user first**, and the lock is held to the commit: a goal save
+    and a profile save made at once then run one after the other, so the
+    second sees the first's answers and the save that completes them pays.
+    Without it each reads the other's half as missing and nobody is paid."""
+    await lock_users(session, {user_id})
+    evidence, _, _ = await onboarding_state(session, user_id)
+    return mentee_answers_complete(evidence)
+
+
+async def pay_if_answers_completed(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    complete_before: bool,
+    ladder: CreditLadder,
+    now: dt.datetime,
+) -> int:
+    """Pay the starter credit at once when **this save completed** an
+    onboarded mentee's answers (decision 358). Does not commit.
+
+    For someone who finished onboarding without them: 171 migrated mentees
+    finished in the legacy app with no goal, so their level was 0 and nothing
+    paid them before the 1st. ``complete_before`` is `answers_complete` read
+    before the save, so a full member editing a goal or a profile, whose answers
+    were already complete, is paid nothing; someone still onboarding is paid by
+    completion instead. Capped at the starter amount, and told in the same
+    transaction (`top_up_and_tell`); their full level follows on the 1st.
+    """
+    if complete_before:
+        return 0
+    evidence, completed, _ = await onboarding_state(session, user_id)
+    if not completed or not mentee_answers_complete(evidence):
+        return 0
+    return await top_up_and_tell(session, user_id, ladder=ladder, now=now, up_to=ladder.starter)

@@ -48,7 +48,7 @@ from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.user_locks import lock_users
 
-__all__ = ["grant_monthly_credits", "owed_count", "top_up_levels"]
+__all__ = ["grant_monthly_credits", "owed_count", "top_up_and_tell", "top_up_levels"]
 
 
 async def _period_grants(
@@ -83,6 +83,7 @@ async def _owed(
     monthly: bool,
     ladder: CreditLadder,
     now: dt.datetime,
+    up_to: int | None = None,
 ) -> dict[CreditSource, dict[UUID, int]]:
     """What each user's level still owes this period, by the source it is
     written under, omitting anybody owed nothing. Reads only.
@@ -97,7 +98,10 @@ async def _owed(
     owed: dict[CreditSource, dict[UUID, int]] = {}
     for user_id in user_ids:
         already, has_monthly = granted.get(user_id, (0, False))
-        amount = level_owed(level_allowance(facts.get(user_id, NO_FACTS), ladder), already)
+        allowance = level_allowance(facts.get(user_id, NO_FACTS), ladder)
+        if up_to is not None:
+            allowance = min(allowance, up_to)
+        amount = level_owed(allowance, already)
         if amount:
             source = (
                 CreditSource.MONTHLY_FREE
@@ -115,6 +119,7 @@ async def _pay_levels(
     monthly: bool,
     ladder: CreditLadder,
     now: dt.datetime,
+    up_to: int | None = None,
 ) -> dict[UUID, int]:
     """Grant each user what their level still owes this period. Returns what
     was paid, by user, omitting anybody owed nothing. Does not commit.
@@ -128,7 +133,7 @@ async def _pay_levels(
     await lock_users(session, user_ids)
     paid: dict[UUID, int] = {}
     for source, quantities in (
-        await _owed(session, user_ids, monthly=monthly, ladder=ladder, now=now)
+        await _owed(session, user_ids, monthly=monthly, ladder=ladder, now=now, up_to=up_to)
     ).items():
         await grant_many(session, quantities, source=source, now=now)
         paid.update(quantities)
@@ -141,14 +146,51 @@ async def top_up_levels(
     *,
     ladder: CreditLadder,
     now: dt.datetime,
+    up_to: int | None = None,
 ) -> dict[UUID, int]:
     """Top this period up to each user's level, after something raised it.
     Returns what was paid, by user. Does not commit.
 
     Safe to call whenever a level *may* have risen: a user whose period already
-    paid their level is owed nothing and gets no lot.
+    paid their level is owed nothing and gets no lot. ``up_to`` caps what this
+    period may reach now (decision 358: a first goal pays the starter amount at
+    once; the full level follows on the 1st).
     """
-    return await _pay_levels(session, user_ids, monthly=False, ladder=ladder, now=now)
+    return await _pay_levels(session, user_ids, monthly=False, ladder=ladder, now=now, up_to=up_to)
+
+
+async def top_up_and_tell(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    ladder: CreditLadder,
+    now: dt.datetime,
+    up_to: int | None = None,
+) -> int:
+    """Top one user up (`top_up_levels`) and, if anything was paid, tell them
+    with `credits_granted` **in the same transaction**, so a message about a
+    credit that rolled back cannot exist. Returns what was paid; does not
+    commit. One statement of "pay and say so", read by onboarding completion
+    and a first goal (decision 358).
+
+    Guarded on what was paid rather than sent unconditionally: a retry pays
+    nothing, and telling somebody twice that their credit arrived is worse than
+    a slightly late first telling.
+    """
+    paid = (await top_up_levels(session, [user_id], ladder=ladder, now=now, up_to=up_to)).get(
+        user_id, 0
+    )
+    if paid:
+        # With what was paid, as `credits_renewed` carries it (decision 323).
+        await enqueue(
+            session,
+            Notification.CREDITS_GRANTED,
+            entity_type="user",
+            entity_id=user_id,
+            recipient_ids=(user_id,),
+            variables={"credit_count": paid},
+        )
+    return paid
 
 
 async def grant_monthly_credits(
