@@ -47,6 +47,7 @@ from app.core.errors import (
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
+from app.domain.meetings import meet_invite_for, meet_link_for
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS, response_window
 from app.infra.clients.meetings import (
@@ -602,6 +603,15 @@ WithdrawnSessionDep = Annotated[None, Depends(transitions("withdraw"))]
 CancelledSessionDep = Annotated[None, Depends(transitions("cancel"))]
 
 
+def _as_the_caller(row: dict[str, Any], link: str | None, user: dict[str, Any]) -> str | None:
+    """A Meet handed over under **the caller's own** invited account (decision
+    357), so a rejoin opens as the invited account rather than whichever one
+    the browser defaults to. The stored link stays bare: each party's copy
+    names their own account, never the other's. Any other venue is unchanged."""
+    invited = meet_invite_for(row["meeting_provider"], user.get("email"))
+    return meet_link_for(link, invited) if link is not None else None
+
+
 async def _door_for(
     request: Request,
     session: AsyncSession,
@@ -634,9 +644,9 @@ async def _door_for(
         # simply left with no way in, as before.
         link = await add_meet_link(session, session_id, calendar=_calendar(request))
         await session.commit()
-        return link
+        return _as_the_caller(row, link, user)
     if row["meeting_provider"] != MeetingProvider.DAILY or not row["external_room_id"]:
-        return str(stored) if stored else None
+        return _as_the_caller(row, str(stored), user)
 
     # **The token's validity is the door's window, read from the one place it is
     # defined.** It was rebuilt here from its parts, which a review caught as the
