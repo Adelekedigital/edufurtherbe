@@ -645,6 +645,8 @@ class ProfilePlan:
     #: Education rows a user claims but with no school name. Skipped and named
     #: (owner, 2026-11-08): the user can add the school again in the app.
     schoolless_education: tuple[str, ...] = ()
+    #: Education no user lists, loaded for its ``Creator`` (decision 364).
+    education_by_creator: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -660,6 +662,11 @@ class ProfilePlan:
         return {slug for goal in self.goals for slug in goal.service_slugs} | {
             slug for mentor in self.mentors for slug in mentor.service_slugs
         }
+
+    def education_read_from_creator(self) -> tuple[EducationRow, ...]:
+        """The rows decision 364 adds, for an insert-only run on a live database."""
+        chosen = set(self.education_by_creator)
+        return tuple(row for row in self.education if row.legacy_bubble_id in chosen)
 
     def degree_slugs(self) -> set[str]:
         slugs = {row.degree_level_slug for row in self.education if row.degree_level_slug}
@@ -734,6 +741,12 @@ def plan_profiles(
     it is* — an admin creating an award on someone's behalf would be attributed
     to the admin. An id makes the join exact; it does not make the assumption
     true, and no amount of care here can.
+
+    **Education falls back to ``Creator`` when no user lists it** (decision
+    364). The legacy sign-up screen saved an entry without adding it to the
+    profile: 163 mentees' only education in the 19 Nov export. The fallback
+    holds only for a ``Creator`` who is a migrated user, and an entry for the
+    same years as one the person already has is left out (``_one_per_period``).
     """
     known = {str(r.get("bubble_id") or r.get("unique id") or "") for r in user_records}
 
@@ -776,12 +789,24 @@ def plan_profiles(
             unattached[thing] = tuple(sorted(orphans))
         return rows
 
-    education = collect(
-        "education",
-        education_records,
-        _links(user_records, EDUCATION_LINK_FIELD),
-        lambda r, u: to_education(r, u, export_timezone=export_timezone),
+    education_owner = _links(user_records, EDUCATION_LINK_FIELD)
+    by_creator = {
+        legacy_anchor(record): creator
+        for record in education_records
+        if legacy_anchor(record) not in education_owner
+        and (creator := str(record.get(CREATOR_FIELD) or "").strip()) in known
+    }
+    education, education_by_creator, repeated = _one_per_period(
+        collect(
+            "education",
+            education_records,
+            education_owner | by_creator,
+            lambda r, u: to_education(r, u, export_timezone=export_timezone),
+        ),
+        set(by_creator),
     )
+    if repeated:
+        unattached["education"] = tuple(sorted((*unattached.get("education", ()), *repeated)))
     goals = collect(
         "mentee_goals",
         goal_records,
@@ -854,4 +879,39 @@ def plan_profiles(
             sorted(f"{a.legacy_bubble_id}: {a.year_rejected}" for a in awards if a.year_rejected)
         ),
         schoolless_education=tuple(sorted(skipped.get("education", ()))),
+        education_by_creator=education_by_creator,
     )
+
+
+def _one_per_period(
+    rows: list[EducationRow], by_creator: set[str]
+) -> tuple[list[EducationRow], tuple[str, ...], tuple[str, ...]]:
+    """Leave out an entry read from ``Creator`` whose years repeat another's.
+
+    Same person, same start and end: the same study entered twice. The entry
+    the profile lists wins, then the newest edit. Returns the rows kept, the
+    ``Creator`` entries kept, and the ones left out.
+    """
+    listed = [row for row in rows if row.legacy_bubble_id not in by_creator]
+    taken = {(row.user_bubble_id, row.date_start, row.date_end) for row in listed}
+    kept: list[EducationRow] = []
+    repeated: list[str] = []
+    newest_first = sorted(
+        (row for row in rows if row.legacy_bubble_id in by_creator),
+        key=lambda row: (
+            row.updated_at is not None,
+            row.updated_at or datetime.min,
+            row.legacy_bubble_id,
+        ),
+        reverse=True,
+    )
+    for row in newest_first:
+        period = (row.user_bubble_id, row.date_start, row.date_end)
+        # No dates says nothing about the period, so it never repeats one.
+        if (row.date_start or row.date_end) and period in taken:
+            repeated.append(row.legacy_bubble_id)
+            continue
+        taken.add(period)
+        kept.append(row)
+    recovered = tuple(sorted(row.legacy_bubble_id for row in kept))
+    return listed + kept, recovered, tuple(repeated)

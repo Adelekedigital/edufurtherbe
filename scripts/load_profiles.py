@@ -6,6 +6,10 @@
     # load, then reconcile
     uv run python scripts/load_profiles.py --from-export script-data-dev
 
+    # on a database people already use: add only the education read from its
+    # Creator, insert-only (decision 364)
+    uv run python scripts/load_profiles.py --from-export <dir> --education-by-creator
+
 **Run this after ``load_identity.py``.** Every row here hangs off a user, and the
 mentor and mentee junctions hang off ``mentor_profiles`` and ``mentee_goals`` in
 turn. Out of order it fails on a foreign key, which is the right failure and a
@@ -25,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -68,6 +73,7 @@ def describe(plan: ProfilePlan) -> None:
     """
     print(f"mentor profiles {len(plan.mentors)}")
     print(f"education       {len(plan.education)}")
+    print(f"education by creator {len(plan.education_by_creator)}")
     print(f"mentee goals    {len(plan.goals)}")
     print(f"awards          {len(plan.awards)}")
 
@@ -96,14 +102,12 @@ async def load(plan: ProfilePlan) -> int:
             countries = resolve_names(plan.country_names(), country_reference, COUNTRY_ALIASES)
             offerings, degrees = await lookup_maps(connection)
 
-            missing = sorted(plan.service_slugs() - set(offerings)) + sorted(
-                plan.degree_slugs() - set(degrees)
+            refuse_missing_slugs(
+                services=plan.service_slugs(),
+                degrees=plan.degree_slugs(),
+                offerings=offerings,
+                degree_ids=degrees,
             )
-            if missing:
-                # A slug the transform emits and the database does not hold means
-                # the seed and the mapping have drifted. Raised before any write,
-                # because the alternative is a foreign-key error partway through.
-                raise RuntimeError(f"lookup slugs missing from the database: {missing}")
 
             # Every table, for the whole load. `trg_set_updated_at` is
             # unconditional, so without this the importer stamps its own clock
@@ -155,6 +159,50 @@ async def load(plan: ProfilePlan) -> int:
     return EXIT_OK
 
 
+def refuse_missing_slugs(
+    *,
+    services: set[str],
+    degrees: set[str],
+    offerings: Mapping[str, object],
+    degree_ids: Mapping[str, object],
+) -> None:
+    """A slug the transform emits and the database does not hold means the seed
+    and the mapping have drifted. Raised before any write: the alternative is a
+    foreign-key error partway through, or a degree silently written as null."""
+    missing = sorted(services - set(offerings)) + sorted(degrees - set(degree_ids))
+    if missing:
+        raise RuntimeError(f"lookup slugs missing from the database: {missing}")
+
+
+async def add_education_by_creator(plan: ProfilePlan) -> int:
+    """Insert-only: no other table, and no row already there, is touched."""
+    engine = create_async_engine(resolve_async_dsn(get_settings()))
+    try:
+        async with engine.begin() as connection:
+            _, degrees = await lookup_maps(connection)
+            chosen = plan.education_read_from_creator()
+            refuse_missing_slugs(
+                services=set(),
+                degrees={row.degree_level_slug for row in chosen if row.degree_level_slug},
+                offerings={},
+                degree_ids=degrees,
+            )
+            async with timestamps_from_source_across(connection, ("education_entries",)):
+                added = await ProfileLoader(connection).add_education(
+                    users=await user_id_map(connection),
+                    education=chosen,
+                    degrees=degrees,
+                )
+    finally:
+        await engine.dispose()
+    print(
+        f"\nadded {added.added} education entries; already there {added.already_there}; "
+        f"skipped, has their own education {added.has_own_education}; "
+        f"skipped, account deleted {added.deleted_account}"
+    )
+    return EXIT_OK
+
+
 async def run(args: argparse.Namespace) -> int:
     source = open_export(args.from_export)
     plan = plan_profiles(
@@ -177,6 +225,8 @@ async def run(args: argparse.Namespace) -> int:
         print("\ndry run — nothing written")
         return EXIT_OK
 
+    if args.education_by_creator:
+        return await add_education_by_creator(plan)
     return await load(plan)
 
 
@@ -190,6 +240,11 @@ def main() -> int:
     parser.add_argument("--mentors", default="mentorsearch")
     parser.add_argument("--awards", default="scholarshipaward")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--education-by-creator",
+        action="store_true",
+        help="insert only the education read from its Creator (decision 364)",
+    )
     args = parser.parse_args()
 
     configure_streams()
