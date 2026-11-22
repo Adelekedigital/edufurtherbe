@@ -83,8 +83,8 @@ async def test_the_refresh_job_runs_on_the_configured_booking_window(
     monkeypatch.setattr(runner, "create_session_factory", lambda _e: lambda: AsyncNull())
     monkeypatch.setattr(runner, "free_busy_reader", lambda *_a, **_k: None)
     monkeypatch.setattr(runner, "refresh_next_available", fake_refresh)
-    settings = Settings(_env_file=None, max_booking_window_days=9, default_booking_window_days=4)
+    settings = Settings(_env_file=None, max_booking_window_days=9, default_booking_window_days=7)
 
     await runner.RuntimeJobs(settings)._refresh_next_available(dry_run=True)
 
-    assert seen["window"] == BookingWindow(max_days=9, default_days=4)
+    assert seen["window"] == BookingWindow(max_days=9, default_days=7)

@@ -50,11 +50,13 @@ def test_a_window_below_the_minimum_is_refused_at_startup(field: str) -> None:
     )
 
 
-def test_the_minimum_window_is_derived_from_the_longest_notice() -> None:
-    """Every allowed notice leaves a slot in every allowed window (#311)."""
+def test_the_minimum_window_is_a_week_and_outlasts_the_longest_notice() -> None:
+    """A week (owner, 2026-11-21), and never shorter than the longest allowed
+    notice plus a day, so every allowed notice leaves a slot in it (#311)."""
     from app.core.config import MIN_BOOKING_WINDOW_DAYS
     from app.domain.availability import MIN_NOTICE_MINUTES
 
-    assert MIN_BOOKING_WINDOW_DAYS == MIN_NOTICE_MINUTES[1] // (24 * 60) + 1 == 4
+    assert MIN_BOOKING_WINDOW_DAYS == 7
+    assert MIN_NOTICE_MINUTES[1] // (24 * 60) < MIN_BOOKING_WINDOW_DAYS
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, max_booking_window_days=3, default_booking_window_days=3)
+        Settings(_env_file=None, max_booking_window_days=6, default_booking_window_days=6)
