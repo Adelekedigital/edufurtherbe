@@ -88,6 +88,8 @@ def describe(plan: ProfilePlan) -> None:
         print(f"   CREATOR MISMATCH {mismatch}")
     for rejected in plan.rejected_award_years:
         print(f"   year out of range, loading null: {rejected}")
+    for rejected in plan.rejected_education_dates:
+        print(f"   dates out of order, loading empty: {rejected}")
     for error in plan.errors:
         print(f"   refused  {error}")
 
