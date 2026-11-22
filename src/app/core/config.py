@@ -116,7 +116,9 @@ NOTICE_FLOOR_MINUTES = 1440
 NOTICE_CEILING_MINUTES = 4320
 
 #: The shortest booking window a mentor may choose: a week (owner, 2026-11-21,
-#: with the platform default moved to 14 days to cut far-ahead no-shows).
+#: decision 361). The platform default is configuration, not this constant:
+#: `DEFAULT_BOOKING_WINDOW_DAYS=14` is set on dev and production, and the code
+#: default below stays 56 for any deployment that sets nothing.
 BOOKING_WINDOW_FLOOR_DAYS = 7
 
 #: The shortest booking window anything may use (#221, #311). Every slot starts
