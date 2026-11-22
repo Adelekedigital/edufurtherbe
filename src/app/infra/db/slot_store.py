@@ -103,10 +103,30 @@ class FreeBusyReader(Protocol):
     ) -> tuple[UtcInterval, ...]: ...
 
 
-#: How far past a full window `next_after_window` looks: as far as the longest
-#: window allowed by default, so a mentor whose next time is further out than
-#: anyone could book is not named at all.
-LOOK_PAST_WINDOW_DAYS = 56
+#: How far past a full window `next_after_window` looks. Weekly hours recur, so
+#: a next time is almost always within a week of the window; four weeks covers
+#: a blocked fortnight and keeps the one calendar read below (the longest
+#: window plus this) under three months.
+LOOK_PAST_WINDOW_DAYS = 28
+
+
+class _OneRead:
+    """A `FreeBusyReader` that reads ``start``..``end`` once and answers every
+    narrower question from it: `next_after_window` asks twice, and an anonymous
+    caller must cost one budgeted Google call for both (decision 242)."""
+
+    def __init__(self, reader: FreeBusyReader, start: dt.datetime, end: dt.datetime) -> None:
+        self.reader, self.start, self.end = reader, start, end
+        self.read: tuple[UtcInterval, ...] | None = None
+
+    async def busy(
+        self, session: AsyncSession, user_id: UUID, start: dt.datetime, end: dt.datetime
+    ) -> tuple[UtcInterval, ...]:
+        if start < self.start or end > self.end:
+            return await self.reader.busy(session, user_id, start, end)
+        if self.read is None:
+            self.read = await self.reader.busy(session, user_id, self.start, self.end)
+        return tuple(i for i in self.read if i.start < end and i.end > start)
 
 
 async def next_after_window(
@@ -142,6 +162,15 @@ async def next_after_window(
     days = int(offering["window_days"])
     today = local_date(offering["timezone"], now)
     own = BookingWindow(max_days=days, default_days=days)
+    cutoff = now + dt.timedelta(days=days)
+    after_day = local_date(offering["timezone"], cutoff)
+    # The span both `list_slots` calls below ask the calendar about, read once.
+    once = _OneRead(
+        external_busy or NullFreeBusy(),
+        dt.datetime.combine(today, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1),
+        dt.datetime.combine(after_day, dt.time.min, tzinfo=dt.UTC)
+        + dt.timedelta(days=LOOK_PAST_WINDOW_DAYS + 2),
+    )
 
     async def free(start: dt.date, span: int, past: int) -> list[UtcInterval]:
         return (
@@ -153,7 +182,7 @@ async def next_after_window(
                 end=start + dt.timedelta(days=span),
                 now=now,
                 window=window,
-                external_busy=external_busy,
+                external_busy=once,
                 holds_for=holds_for,
                 past_window_days=past,
             )
@@ -162,12 +191,7 @@ async def next_after_window(
 
     if await free(today, own.projection_days, 0):
         return None
-    cutoff = now + dt.timedelta(days=days)
-    later = await free(
-        local_date(offering["timezone"], cutoff),
-        LOOK_PAST_WINDOW_DAYS + 1,
-        LOOK_PAST_WINDOW_DAYS,
-    )
+    later = await free(after_day, LOOK_PAST_WINDOW_DAYS + 1, LOOK_PAST_WINDOW_DAYS)
     # The window was just found empty, so every slot here starts past it.
     first = min((slot.start for slot in later), default=None)
     return None if first is None else (first, first - dt.timedelta(days=days))

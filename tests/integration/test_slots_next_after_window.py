@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from tests.integration.factories import add_block, make_public_mentor
 from tests.integration.test_booking_window_break import NOW, at, mentor_with_hours, offering
 
+from app.core.errors import UpstreamError
 from app.infra.db.slot_store import next_after_window
 from conftest import PLATFORM_WINDOW
 
@@ -127,3 +128,67 @@ async def test_slots_names_the_next_time_when_the_window_is_full(
         today + dt.timedelta(days=WEEK + 2), dt.time(9), tzinfo=dt.UTC
     )
     assert after - opens == dt.timedelta(days=WEEK)
+
+
+class CountingCalendar:
+    """A connected mentor's calendar with nothing busy, counting its reads."""
+
+    def __init__(self, fail_past: dt.datetime | None = None) -> None:
+        self.calls: list[tuple[dt.datetime, dt.datetime]] = []
+        self.fail_past = fail_past
+
+    async def busy(
+        self, _session: object, _user_id: object, start: dt.datetime, end: dt.datetime
+    ) -> tuple[()]:
+        self.calls.append((start, end))
+        if self.fail_past is not None and end > self.fail_past:
+            raise UpstreamError("free/busy budget spent")
+        return ()
+
+
+async def test_both_lookups_share_one_calendar_read(db_engine: AsyncEngine) -> None:
+    """Review of #719: an empty anonymous page drew three budgeted Google calls
+    (decision 242). The window check and the look past it now share one."""
+    mentor = await mentor_with_hours(db_engine, "one-read")
+    session_type = await offering(db_engine, mentor, "Week", window=WEEK)
+    for day in range(WEEK + 1):
+        await add_block(db_engine, mentor, NOW.date() + dt.timedelta(days=day))
+    calendar = CountingCalendar()
+
+    async with AsyncSession(db_engine) as session:
+        found = await next_after_window(
+            session,
+            mentor,
+            session_type,
+            now=NOW,
+            window=PLATFORM_WINDOW,
+            external_busy=calendar,
+        )
+
+    assert found == (at(8, 9), at(1, 9))
+    assert len(calendar.calls) == 1
+
+
+async def test_a_calendar_that_cannot_be_read_names_nothing(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A spent budget or a Google error must not name a time the calendar may
+    have busy: the page still answers, with both fields null."""
+    mentor = await mentor_with_hours(db_engine, "no-read")
+    session_type = await offering(db_engine, mentor, "Week", window=WEEK)
+    today = dt.datetime.now(dt.UTC).date()
+    for day in range(WEEK + 2):
+        await add_block(db_engine, mentor, today + dt.timedelta(days=day))
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.free_busy = CountingCalendar(
+        fail_past=dt.datetime.now(dt.UTC) + dt.timedelta(days=WEEK + 3)
+    )
+
+    response = await api_client.get(
+        f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["data"] == []
+    assert body["next_after_window_at"] is None and body["bookable_from"] is None

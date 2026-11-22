@@ -76,7 +76,7 @@ def _calendar_oauth(request: Request) -> tuple[str, str, str, str]:
     )
 
 
-def _free_busy(request: Request, *, budgeted: bool = False) -> Any:
+def _free_busy(request: Request, *, budgeted: bool = False, fail_open: bool = True) -> Any:
     """The mentor's external calendar, or a reader that subtracts nothing.
 
     **Null unless all three settings are present**, which is the same shape
@@ -101,6 +101,7 @@ def _free_busy(request: Request, *, budgeted: bool = False) -> Any:
         # always see the mentor's calendar: an anonymous flood draining a shared
         # budget would otherwise let a real booking skip it.
         budget=getattr(request.app.state, "free_busy_budget", None) if budgeted else None,
+        fail_open=fail_open,
     )
 
 

@@ -24,6 +24,7 @@ from app.api.schemas.availability import (
 )
 from app.core.errors import (
     NotFoundError,
+    UpstreamError,
 )
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.infra.db.application_guards import refuse_while_declined
@@ -199,20 +200,39 @@ async def mentor_slots(
     )
     if slots is None:
         raise NotFoundError("no such bookable session type")
-    after = (
-        None
+    return SlotsAnswer(
+        slots=slots,
+        next_after=None
         if slots
-        else await next_after_window(
+        else await _next_after(request, session, user_id, session_type_id, now, window, viewer),
+    )
+
+
+async def _next_after(
+    request: Request,
+    session: Any,
+    user_id: UUID,
+    session_type_id: UUID,
+    now: dt.datetime,
+    window: Any,
+    viewer: UUID | None,
+) -> tuple[dt.datetime, dt.datetime] | None:
+    """`next_after_window` on one budgeted calendar read that **does not fail
+    open**: a time named past the window must not be one the mentor's calendar
+    has busy, so a spent budget or a Google error leaves both fields null rather
+    than answering from declared hours alone (decision 242)."""
+    try:
+        return await next_after_window(
             session,
             user_id,
             session_type_id,
             now=now,
             window=window,
-            external_busy=reader,
+            external_busy=_free_busy(request, budgeted=True, fail_open=False),
             holds_for=viewer,
         )
-    )
-    return SlotsAnswer(slots=slots, next_after=after)
+    except UpstreamError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)

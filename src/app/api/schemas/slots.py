@@ -62,9 +62,11 @@ class SlotsPage(Page[SlotRead]):
         description=(
             "UTC instant of this offering's first free start after its booking "
             "window closes. Set only when nothing is free anywhere inside the "
-            "window; null when the window has a free time, or when nothing is "
-            "free within 56 days after it. The same notice, breaks, sessions, "
-            "holds, blocks and calendar apply as to `data`."
+            "window; null when the window has a free time, when nothing is "
+            "free within 28 days after it, or when the mentor's calendar cannot be "
+            "read just then (a time is never named that it might have busy). The "
+            "same notice, breaks, sessions, holds, blocks and calendar apply as to "
+            "`data`."
         ),
     )
     bookable_from: dt.datetime | None = Field(
