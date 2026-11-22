@@ -7,12 +7,11 @@ that Bubble's timestamps survive was asserted by an integration test and by
 nothing at run time.
 
 **Row counts do not reconcile one-to-one here, and that is correct.** Every
-prior phase compared source rows to loaded rows; availability breaks that three
-ways at once — exceptions fan out 1:N, Gen A rules are quarantined on purpose,
-and overlapping windows merge so one anchor never reaches the table. Asserting
-`source == loaded` would fail every run. What is asserted instead is that every
-source row was *accounted for*: loaded, quarantined, dropped, refused, or
-absorbed. A row in none of those vanished without anybody deciding it should.
+prior phase compared source rows to loaded rows; availability breaks that:
+exceptions fan out 1:N, and overlapping windows merge so one anchor never
+reaches the table. Asserting `source == loaded` would fail every run. What is
+asserted instead is that every source row was *accounted for*: loaded,
+dropped, refused, or absorbed. A row in none of those vanished without anybody deciding it should.
 """
 
 from __future__ import annotations
@@ -33,7 +32,6 @@ from app.domain.transform.availability import (
     AvailabilityRuleRow,
     DroppedRow,
     MergedWindow,
-    QuarantinedRule,
 )
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.reconcile import reconcile_availability
@@ -160,10 +158,10 @@ async def test_a_timestamp_rewritten_by_the_importer_is_a_failure(
 
 
 #: One anchor per outcome, each accounted for by that outcome **alone**. The
-#: parametrisation is the point: `accounted_for()` is a union of five terms, and
-#: a test exercising only one of them lets the other four be deleted with the
+#: parametrisation is the point: `accounted_for()` is a union of four terms, and
+#: a test exercising only one of them lets the other three be deleted with the
 #: whole suite green.
-ACCOUNTING_OUTCOMES = ("rules", "quarantined", "dropped", "midnight_crossing", "merged_overlaps")
+ACCOUNTING_OUTCOMES = ("rules", "dropped", "midnight_crossing", "merged_overlaps")
 
 
 def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPlan:
@@ -183,20 +181,6 @@ def plan_accounting_for(outcome: str, anchor: str = "cs-only") -> AvailabilityPl
 
     if outcome == "rules":
         extra = {"rules": (rule(anchor),)}
-    elif outcome == "quarantined":
-        extra = {
-            "quarantined": (
-                QuarantinedRule(
-                    legacy_bubble_id=anchor,
-                    mentor_bubble_id=MENTOR_BUBBLE_ID,
-                    day_of_week=1,
-                    as_printed=dt.time(2, 0),
-                    as_displayed=dt.time(7, 0),
-                    end_as_printed=dt.time(2, 15),
-                    end_as_displayed=dt.time(7, 15),
-                ),
-            )
-        }
     elif outcome == "dropped":
         extra = {"dropped": (DroppedRow(anchor, "no Creator"),)}
     elif outcome == "midnight_crossing":
@@ -249,7 +233,7 @@ async def test_a_source_row_the_transform_decided_nothing_about_is_a_failure(
     """Silent data loss, and the one failure no row count can show.
 
     The loaded total is *meant* to be smaller than the source total here —
-    quarantine and merging both shrink it — so a row that simply disappeared
+    dropping and merging both shrink it — so a row that simply disappeared
     looks exactly like a row that was correctly withheld. Only the accounting
     identity separates them.
 
@@ -301,3 +285,54 @@ async def test_a_fan_out_date_that_fails_to_land_is_caught(
 
     assert not result.ok
     assert "ce-1:2025-01-19" in result.report()
+
+
+async def test_a_rerun_that_moves_windows_past_each_other_loads(
+    mentor: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """Production, decision 360's reload: re-reading the legacy slots moved one
+    of a mentor's windows onto a sibling that had not moved yet, and the
+    overlap constraint aborted the whole load. The final state never overlaps;
+    only the order of the row updates did."""
+    conn, users = mentor
+    first = AvailabilityPlan(
+        rules=(
+            rule("cs-a", start_time=dt.time(9, 0), end_time=dt.time(10, 0)),
+            rule("cs-b", start_time=dt.time(10, 0), end_time=dt.time(11, 0)),
+        ),
+        exceptions=(),
+    )
+    await AvailabilityLoader(conn).load(users=users, rules=first.rules, exceptions=())
+    swapped = AvailabilityPlan(
+        rules=(
+            rule("cs-a", start_time=dt.time(10, 0), end_time=dt.time(11, 0)),
+            rule("cs-b", start_time=dt.time(9, 0), end_time=dt.time(10, 0)),
+        ),
+        exceptions=(),
+    )
+
+    result = await load_and_reconcile(conn, users, swapped)
+
+    assert result.ok, result.report()  # type: ignore[attr-defined]
+    stored = await conn.execute(
+        text(
+            "SELECT legacy_bubble_id, start_time, is_active FROM availability_rules "
+            "ORDER BY legacy_bubble_id"
+        )
+    )
+    assert [tuple(row) for row in stored] == [
+        ("cs-a", dt.time(10, 0), True),
+        ("cs-b", dt.time(9, 0), True),
+    ]
+
+
+async def test_a_rerun_keeps_a_switched_off_window_switched_off(
+    mentor: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    conn, users = mentor
+    await AvailabilityLoader(conn).load(users=users, rules=(rule(is_active=False),), exceptions=())
+
+    await AvailabilityLoader(conn).load(users=users, rules=(rule(is_active=False),), exceptions=())
+
+    active = await conn.scalar(text("SELECT is_active FROM availability_rules"))
+    assert active is False

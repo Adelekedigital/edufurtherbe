@@ -18,6 +18,7 @@ import datetime as dt
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.common import Page
 from app.domain.availability import UtcInterval
 
 
@@ -45,3 +46,35 @@ class SlotRead(BaseModel):
     @classmethod
     def from_interval(cls, interval: UtcInterval) -> SlotRead:
         return cls(start=interval.start, end=interval.end)
+
+
+class SlotsPage(Page[SlotRead]):
+    """A page of slots, and the next time after a full window (owner, 2026-11-21).
+
+    Both extra fields are set only when nothing is free anywhere inside the
+    offering's booking window, whatever range was asked for, and both are null
+    together. They are named, never offered: the window is a hard limit, so the
+    time never appears in `data` and cannot be booked until `bookable_from`.
+    """
+
+    next_after_window_at: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "UTC instant of this offering's first free start after its booking "
+            "window closes. Set only when nothing is free anywhere inside the "
+            "window; null when the window has a free time, when nothing is "
+            "free within 28 days after it, or when the mentor's calendar cannot be "
+            "read just then (a time is never named that it might have busy). The "
+            "same notice, breaks, sessions, holds, blocks and calendar apply as to "
+            "`data`."
+        ),
+    )
+    bookable_from: dt.datetime | None = Field(
+        default=None,
+        description=(
+            "UTC instant `next_after_window_at` becomes bookable: that start "
+            "minus the offering's booking window. Render it in the viewer's zone "
+            '("you can book it from Sun, Nov 22"). Null exactly when '
+            "`next_after_window_at` is."
+        ),
+    )

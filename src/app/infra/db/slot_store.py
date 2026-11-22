@@ -103,6 +103,100 @@ class FreeBusyReader(Protocol):
     ) -> tuple[UtcInterval, ...]: ...
 
 
+#: How far past a full window `next_after_window` looks. Weekly hours recur, so
+#: a next time is almost always within a week of the window; four weeks covers
+#: a blocked fortnight and keeps the one calendar read below (the longest
+#: window plus this) under three months.
+LOOK_PAST_WINDOW_DAYS = 28
+
+
+class _OneRead:
+    """A `FreeBusyReader` that reads ``start``..``end`` once and answers every
+    narrower question from it: `next_after_window` asks twice, and an anonymous
+    caller must cost one budgeted Google call for both (decision 242)."""
+
+    def __init__(self, reader: FreeBusyReader, start: dt.datetime, end: dt.datetime) -> None:
+        self.reader, self.start, self.end = reader, start, end
+        self.read: tuple[UtcInterval, ...] | None = None
+
+    async def busy(
+        self, session: AsyncSession, user_id: UUID, start: dt.datetime, end: dt.datetime
+    ) -> tuple[UtcInterval, ...]:
+        if start < self.start or end > self.end:
+            return await self.reader.busy(session, user_id, start, end)
+        if self.read is None:
+            self.read = await self.reader.busy(session, user_id, self.start, self.end)
+        return tuple(i for i in self.read if i.start < end and i.end > start)
+
+
+async def next_after_window(
+    session: AsyncSession,
+    user_id: UUID,
+    session_type_id: UUID,
+    *,
+    now: dt.datetime,
+    window: BookingWindow,
+    external_busy: FreeBusyReader | None = None,
+    holds_for: UUID | None = None,
+) -> tuple[dt.datetime, dt.datetime] | None:
+    """When nothing is free inside the offering's window: its first free start
+    after the window, and the instant that start becomes bookable (that start
+    minus the window). ``None`` when the window has a free time, when nothing
+    is free within `LOOK_PAST_WINDOW_DAYS` after it, or when the offering is
+    not publicly bookable.
+
+    Owner, 2026-11-21: the booking step says "next time is Sun, Dec 6; you can
+    book it from Sun, Nov 22" instead of an empty calendar. **Named, never
+    offered**: the window stays a hard limit, and `list_slots` only looks past
+    it here. Everything else that makes a time free (notice, breaks, sessions,
+    holds, blocks, the mentor's calendar) applies unchanged, because both
+    questions are asked of `list_slots` itself.
+    """
+    offering = (
+        (await session.execute(_publicly_bookable(user_id, session_type_id, window)))
+        .mappings()
+        .first()
+    )
+    if offering is None:
+        return None
+    days = int(offering["window_days"])
+    today = local_date(offering["timezone"], now)
+    own = BookingWindow(max_days=days, default_days=days)
+    cutoff = now + dt.timedelta(days=days)
+    after_day = local_date(offering["timezone"], cutoff)
+    # The span both `list_slots` calls below ask the calendar about, read once.
+    once = _OneRead(
+        external_busy or NullFreeBusy(),
+        dt.datetime.combine(today, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1),
+        dt.datetime.combine(after_day, dt.time.min, tzinfo=dt.UTC)
+        + dt.timedelta(days=LOOK_PAST_WINDOW_DAYS + 2),
+    )
+
+    async def free(start: dt.date, span: int, past: int) -> list[UtcInterval]:
+        return (
+            await list_slots(
+                session,
+                user_id,
+                session_type_id,
+                start=start,
+                end=start + dt.timedelta(days=span),
+                now=now,
+                window=window,
+                external_busy=once,
+                holds_for=holds_for,
+                past_window_days=past,
+            )
+            or []
+        )
+
+    if await free(today, own.projection_days, 0):
+        return None
+    later = await free(after_day, LOOK_PAST_WINDOW_DAYS + 1, LOOK_PAST_WINDOW_DAYS)
+    # The window was just found empty, so every slot here starts past it.
+    first = min((slot.start for slot in later), default=None)
+    return None if first is None else (first, first - dt.timedelta(days=days))
+
+
 def _publicly_bookable(user_id: UUID, session_type_id: UUID, window: BookingWindow) -> Select[Any]:
     """The offering, if the public may see it at all.
 
@@ -213,6 +307,7 @@ async def list_slots(
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
     length_minutes: int | None = None,
+    past_window_days: int = 0,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -252,6 +347,11 @@ async def list_slots(
     else: a time held for a mentee (#339) stays bookable through its hold even
     once the notice floor has passed it, so the floor is measured from when it
     was offered. Nothing earlier than ``now`` is ever offered either way.
+
+    ``past_window_days`` lets the cutoff run that many days past the window, and
+    only `next_after_window` passes it: it looks for the first time *after* a
+    full window to name, never to offer. Every booking path leaves it at 0, so
+    the window stays a hard limit.
 
     ``length_minutes`` draws the grid at that length instead of the offering's
     current one, and nothing else changes. For a time already offered (#347): it
@@ -398,7 +498,7 @@ async def list_slots(
         for row in busy
     ]
     # **The window**: nothing starts later than this offering allows ahead of now.
-    cutoff = now + dt.timedelta(days=int(offering["window_days"]))
+    cutoff = now + dt.timedelta(days=int(offering["window_days"]) + past_window_days)
 
     return [
         slot

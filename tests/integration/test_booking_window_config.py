@@ -28,7 +28,7 @@ from tests.integration.test_booking_window_break import (
 )
 from tests.integration.test_mentor_next_available import FakeCalendar, card
 
-from app.core.config import Settings
+from app.core.config import MIN_BOOKING_WINDOW_DAYS, Settings
 from app.core.errors import ValidationError
 from app.domain.availability import BookingWindow
 from app.infra.db.next_available_store import refresh_next_available
@@ -68,21 +68,23 @@ async def starts(
     return [slot.start for slot in slots]
 
 
-#: The smallest window every allowed notice leaves a slot in (#221).
-FOUR_DAYS = BookingWindow(max_days=4, default_days=4)
+#: The smallest window anything may use: a week (owner, 2026-11-21), which
+#: every allowed notice leaves a slot in (#221).
+SMALLEST = BookingWindow(max_days=MIN_BOOKING_WINDOW_DAYS, default_days=MIN_BOOKING_WINDOW_DAYS)
 
-#: Friday, as `availability_rules.day_of_week` counts (0 = Sunday).
-FRIDAY = 5
+#: Monday, as `availability_rules.day_of_week` counts (0 = Sunday).
+MONDAY = 1
 
 
-async def friday_only_mentor(engine: AsyncEngine, tag: str) -> tuple[object, object]:
-    """Open only on Fridays, so the first slot of a four-day window starting
-    Monday afternoon lies in the window's final, partial day."""
+async def last_day_only_mentor(engine: AsyncEngine, tag: str) -> tuple[object, object]:
+    """Open only on Mondays, so the first slot of a seven-day window starting
+    Monday afternoon lies in the window's final, partial day (the next Monday;
+    today's hours are inside the notice)."""
     mentor = await make_public_mentor(engine, tag, timezone="UTC")
     await add_availability(
-        engine, mentor, day_of_week=FRIDAY, start="09:00", end="17:00", timezone="UTC"
+        engine, mentor, day_of_week=MONDAY, start="09:00", end="17:00", timezone="UTC"
     )
-    return mentor, await offering(engine, mentor, "Friday")
+    return mentor, await offering(engine, mentor, "Monday")
 
 
 def fortnight_client(db_engine: AsyncEngine, storage: SupabaseStorage | None) -> httpx.AsyncClient:
@@ -301,7 +303,7 @@ async def test_booking_inside_the_smallest_window_is_legal(db_engine: AsyncEngin
             {"session_type_id": session_type, "starts_at": at(1, 9)},
             now=NOW,
             require_answers=False,
-            window=FOUR_DAYS,
+            window=SMALLEST,
             response_window=PLATFORM_RESPONSE_WINDOW,
         )
         assert booked is not None
@@ -309,10 +311,10 @@ async def test_booking_inside_the_smallest_window_is_legal(db_engine: AsyncEngin
             await book_session(
                 session,
                 mentee,
-                {"session_type_id": session_type, "starts_at": at(5, 9)},
+                {"session_type_id": session_type, "starts_at": at(8, 9)},
                 now=NOW,
                 require_answers=False,
-                window=FOUR_DAYS,
+                window=SMALLEST,
                 response_window=PLATFORM_RESPONSE_WINDOW,
             )
 
@@ -323,7 +325,7 @@ async def test_slots_without_an_end_fit_a_small_maximum(
     """The implicit range is the default week, cut to the window (plus its last day)."""
     mentor = await mentor_with_hours(db_engine, "tiny-slots")
     session_type = await offering(db_engine, mentor, "Tiny")
-    settings = Settings(_env_file=None, max_booking_window_days=4, default_booking_window_days=4)
+    settings = Settings(_env_file=None, max_booking_window_days=7, default_booking_window_days=7)
 
     async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
         response = await client.get(
@@ -475,9 +477,9 @@ async def stored_next(engine: AsyncEngine, mentor: object) -> dt.datetime | None
 async def test_the_refresh_projects_through_the_windows_last_partial_day(
     db_engine: AsyncEngine,
 ) -> None:
-    """A four-day window from Monday 15:00 ends Friday 15:00, so Friday 09:00 is
-    bookable — the projection must reach into Friday to find it."""
-    mentor, session_type = await friday_only_mentor(db_engine, "partial-day")
+    """A seven-day window from Monday 15:00 ends the next Monday 15:00, so that
+    Monday's 09:00 is bookable — the projection must reach into it."""
+    mentor, session_type = await last_day_only_mentor(db_engine, "partial-day")
     now = NOW + dt.timedelta(hours=15)
 
     async with AsyncSession(db_engine) as session:
@@ -486,21 +488,21 @@ async def test_the_refresh_projects_through_the_windows_last_partial_day(
             now=now,
             max_age=dt.timedelta(minutes=5),
             reader=FakeCalendar(),
-            window=FOUR_DAYS,
+            window=SMALLEST,
         )
         slots = await list_slots(
             session,
             mentor,
             session_type,
             start=now.date(),
-            end=now.date() + dt.timedelta(days=6),
+            end=now.date() + dt.timedelta(days=9),
             now=now,
-            window=FOUR_DAYS,
+            window=SMALLEST,
         )
 
-    assert await stored_next(db_engine, mentor) == at(4, 9)
+    assert await stored_next(db_engine, mentor) == at(7, 9)
     assert slots is not None
-    assert all(slot.start < now + dt.timedelta(days=4) for slot in slots)
+    assert all(slot.start < now + dt.timedelta(days=7) for slot in slots)
 
 
 async def test_a_cached_slot_beyond_a_lowered_window_is_not_advertised(
@@ -582,37 +584,39 @@ async def test_a_lowered_default_hides_a_cached_slot_the_inheriting_type_refuses
 # --------------------------------------------------------------------------
 
 
-async def test_slots_with_no_end_reach_the_windows_last_partial_day(
+async def test_slots_with_no_end_stay_inside_the_smallest_window(
     db_engine: AsyncEngine,
 ) -> None:
-    """Monday 15:00 plus four days is Friday 15:00: Friday 09:00 is bookable, so
-    the implicit range must include Friday, and the instant cutoff drops 15:00."""
-    mentor, session_type = await friday_only_mentor(db_engine, "slots-partial")
+    """With no end, /slots answers its default week. The smallest window is a
+    week too, so the page holds only slots inside it, up to the last whole day;
+    the window's final, partial day is reached with an explicit range (below)."""
+    mentor = await mentor_with_hours(db_engine, "slots-partial")
+    session_type = await offering(db_engine, mentor, "Week")
     now = NOW + dt.timedelta(hours=15)
 
     async with AsyncSession(db_engine) as session:
         slots = await list_slots(
-            session, mentor, session_type, start=None, end=None, now=now, window=FOUR_DAYS
+            session, mentor, session_type, start=None, end=None, now=now, window=SMALLEST
         )
 
     assert slots is not None
     found = [slot.start for slot in slots]
-    assert at(4, 9) in found
-    assert all(start < now + dt.timedelta(days=4) for start in found)
+    assert at(6, 9) in found
+    assert all(start < now + dt.timedelta(days=7) for start in found)
 
 
 async def test_an_explicit_range_through_the_last_partial_day_is_allowed(
     db_engine: AsyncEngine, api_storage: SupabaseStorage | None
 ) -> None:
     """A client asking for the window plus its partial final day is not refused."""
-    mentor, session_type = await friday_only_mentor(db_engine, "slots-explicit")
-    settings = Settings(_env_file=None, max_booking_window_days=4, default_booking_window_days=4)
+    mentor, session_type = await last_day_only_mentor(db_engine, "slots-explicit")
+    settings = Settings(_env_file=None, max_booking_window_days=7, default_booking_window_days=7)
     start = dt.date.today()
     base = f"/api/v1/users/{mentor}/availability/slots?session_type_id={session_type}"
 
     async with client_for(build_api_app(db_engine, api_storage, settings)) as client:
-        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=9)}")
-        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=10)}")
+        fits = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=12)}")
+        wide = await client.get(f"{base}&start={start}&end={start + dt.timedelta(days=13)}")
 
     assert fits.status_code == 200, fits.text
     assert wide.status_code == 422, wide.text
@@ -626,16 +630,16 @@ async def test_an_explicit_range_through_the_last_partial_day_is_allowed(
 async def test_a_window_shorter_than_the_longest_notice_is_refused_on_write(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine
 ) -> None:
-    """Three days cannot hold a slot at 72 hours' notice; four always can."""
+    """Below a week is refused (owner, 2026-11-21); a week always holds a slot."""
     mentor, auth = await as_mentor(db_engine, "min-window")
     headers = bearer(api_token(auth))
 
-    short = await api_client.post(URL, json=body(booking_window_days=3), headers=headers)
+    short = await api_client.post(URL, json=body(booking_window_days=6), headers=headers)
     fits = await api_client.post(
-        URL, json=body(name="Fits", booking_window_days=4), headers=headers
+        URL, json=body(name="Fits", booking_window_days=7), headers=headers
     )
     profile = await api_client.patch(
-        f"/api/v1/users/{mentor}/mentor-profile", json={"booking_window_days": 3}, headers=headers
+        f"/api/v1/users/{mentor}/mentor-profile", json={"booking_window_days": 6}, headers=headers
     )
 
     assert short.status_code == 422, short.text
@@ -650,10 +654,10 @@ async def test_a_stored_window_below_the_minimum_reads_and_books_as_the_minimum(
     mentor = await mentor_with_hours(db_engine, "min-stored")
     session_type = await offering(db_engine, mentor, "Legacy", window=1)
 
-    found = await starts(db_engine, mentor, session_type, PLATFORM_WINDOW, days=7)
+    found = await starts(db_engine, mentor, session_type, PLATFORM_WINDOW, days=10)
 
-    assert at(3, 9) in found
-    assert max(found) < NOW + dt.timedelta(days=4)
+    assert at(6, 9) in found
+    assert max(found) < NOW + dt.timedelta(days=7)
 
 
 async def test_the_longest_notice_still_leaves_slots_in_the_smallest_window(
@@ -670,7 +674,7 @@ async def test_the_longest_notice_still_leaves_slots_in_the_smallest_window(
             {"t": session_type},
         )
 
-    found = await starts(db_engine, mentor, session_type, FOUR_DAYS, days=5)
+    found = await starts(db_engine, mentor, session_type, SMALLEST, days=8)
 
     assert found
     assert at(3, 9) in found
@@ -697,7 +701,7 @@ async def test_a_stored_window_below_the_minimum_may_be_resent_unchanged(
     kept = await api_client.patch(
         url, json={"name": "Renamed", "booking_window_days": 2}, headers=headers
     )
-    lowered = await api_client.patch(url, json={"booking_window_days": 3}, headers=headers)
+    lowered = await api_client.patch(url, json={"booking_window_days": 6}, headers=headers)
 
     assert kept.status_code == 200, kept.text
     assert lowered.status_code == 422, lowered.text

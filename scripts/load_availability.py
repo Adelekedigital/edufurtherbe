@@ -9,10 +9,10 @@
 **Run this after ``load_identity.py`` and ``load_profiles.py``.** Every rule
 hangs off ``mentor_profiles``, so out of order it fails on a foreign key.
 
-**The dry run is the point of this script, not a rehearsal of the write.** The
-Gen A quarantine, the merged overlaps, the dropped rows and the mentors who must
-re-declare their availability are all decided by the transform, which touches
-nothing — so ``--dry-run`` produces the entire report without a database.
+**The dry run is the point of this script, not a rehearsal of the write.** How
+each row is read, the merged overlaps and the dropped rows are all decided by
+the transform, which touches nothing — so ``--dry-run`` produces the entire
+report without a database.
 
 Wiring only. No SQL and no business rule lives here: ``scripts/`` is checked by
 ruff alone — not mypy, not bandit, and not by coverage — so anything it contains
@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import get_settings
 from app.domain.bubble import EXPORT_TIMEZONE
 from app.domain.transform.availability import AvailabilityPlan, plan_availability
+from app.domain.transform.sessions import durations_by_mentor
 from app.infra.db.engine import resolve_async_dsn
 from app.infra.etl.availability import AvailabilityLoader
 from app.infra.etl.cli import (
@@ -54,8 +55,13 @@ def build_plan(directory: Path) -> AvailabilityPlan:
     # Raw records in. Deciding what a user's timezone is, and who counts as a
     # mentor, are mapping decisions — and this directory is checked by ruff
     # alone, so a rule written here is a rule nothing verifies (#44).
+    session_minutes, _ = durations_by_mentor(settings_records)
     return plan_availability(
-        users, settings_records, extra_records, export_timezone=EXPORT_TIMEZONE
+        users,
+        settings_records,
+        extra_records,
+        export_timezone=EXPORT_TIMEZONE,
+        session_minutes=session_minutes,
     )
 
 
@@ -103,8 +109,14 @@ def main() -> int:
         return EXIT_REFUSED
     # A run that loaded cleanly but left something for a human is not a clean
     # run, and `EXIT_UNRESOLVED` exists for exactly that. Returning 0 here
-    # would let a freeze-window runbook read "quarantined 11" as success.
-    unresolved = bool(plan.quarantined or plan.zone_defaults or plan.merged_overlaps)
+    # would let a freeze-window runbook read "midnight-crossing 5" as success.
+    unresolved = bool(
+        plan.zone_defaults
+        or plan.merged_overlaps
+        or plan.midnight_crossing
+        or plan.fitted_to_session
+        or plan.zone_differs
+    )
 
     if args.dry_run:
         return EXIT_UNRESOLVED if unresolved else EXIT_OK

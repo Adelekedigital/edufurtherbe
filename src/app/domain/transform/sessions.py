@@ -725,9 +725,10 @@ def durations_by_mentor(
     re-derived — that is settled decision #60's second exception and it should
     have exactly one definition.
 
-    **Generation A rows count here.** They are quarantined for their *times*
-    (settled decision #81); ``meetingDuration-TxT`` is a different field and is
-    populated on all 12 rows of each generation.
+    **Generation A rows count here.** Their *times* are read differently
+    (decisions #81, #360); ``meetingDuration-TxT`` is a different field and is
+    populated on all 12 rows of each generation. The availability transform
+    uses these lengths too, to end a slot whose window does not move forward.
     """
     seen: dict[str, list[int]] = {}
     for record in calendar_settings:

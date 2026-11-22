@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from app.api.schemas.availability import (
 )
 from app.core.errors import (
     NotFoundError,
+    UpstreamError,
 )
 from app.domain.availability import DEFAULT_PROJECTION_DAYS, UtcInterval
 from app.infra.db.application_guards import refuse_while_declined
@@ -40,7 +42,7 @@ from app.infra.db.availability_writer import (
 # collision a reader resolves by scrolling, and the wrong one is a plausible
 # mistake rather than an obvious error — `bubble_id` shadowed a local the same
 # way in the M4 transform and raised `UnboundLocalError` far from the edit.
-from app.infra.db.slot_store import list_slots
+from app.infra.db.slot_store import list_slots, next_after_window
 
 # --------------------------------------------------------------------------
 # Availability
@@ -156,8 +158,12 @@ async def mentor_slots(
             )
         ),
     ] = None,
-) -> list[UtcInterval]:
+) -> SlotsAnswer:
     """Slots someone could book, or a 404 that says nothing about why.
+
+    **And the next time after a full window** (owner, 2026-11-21), asked only
+    when this page is empty: a page with a slot proves the window has one, so
+    the common case costs nothing more.
 
     **`now` is read here and passed down**, rather than inside the store. The
     notice window makes this answer depend on the clock, and a function reading
@@ -176,15 +182,17 @@ async def mentor_slots(
     it on the day a mentor adds a second — someone else's edit breaking an
     integration that did not change.
     """
+    now = dt.datetime.now(dt.UTC)
+    reader = _free_busy(request, budgeted=True)
     slots = await list_slots(
         session,
         user_id,
         session_type_id,
         start=start,
         end=end,
-        now=dt.datetime.now(dt.UTC),
+        now=now,
         window=window,
-        external_busy=_free_busy(request, budgeted=True),
+        external_busy=reader,
         range_cap=window.range_cap_days,
         # **A signed-in mentee sees the time held for them open** (#339); to
         # everyone else, and to anybody without a token, it is busy.
@@ -192,7 +200,48 @@ async def mentor_slots(
     )
     if slots is None:
         raise NotFoundError("no such bookable session type")
-    return slots
+    return SlotsAnswer(
+        slots=slots,
+        next_after=None
+        if slots
+        else await _next_after(request, session, user_id, session_type_id, now, window, viewer),
+    )
 
 
-SlotsDep = Annotated[list[UtcInterval], Depends(mentor_slots)]
+async def _next_after(
+    request: Request,
+    session: Any,
+    user_id: UUID,
+    session_type_id: UUID,
+    now: dt.datetime,
+    window: Any,
+    viewer: UUID | None,
+) -> tuple[dt.datetime, dt.datetime] | None:
+    """`next_after_window` on one budgeted calendar read that **does not fail
+    open**: a time named past the window must not be one the mentor's calendar
+    has busy, so a spent budget or a Google error leaves both fields null rather
+    than answering from declared hours alone (decision 242)."""
+    try:
+        return await next_after_window(
+            session,
+            user_id,
+            session_type_id,
+            now=now,
+            window=window,
+            external_busy=_free_busy(request, budgeted=True, fail_open=False),
+            holds_for=viewer,
+        )
+    except UpstreamError:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class SlotsAnswer:
+    """The page's slots, and the next time after a full window with when it
+    opens (`next_after_window`), or ``None``."""
+
+    slots: list[UtcInterval]
+    next_after: tuple[dt.datetime, dt.datetime] | None
+
+
+SlotsDep = Annotated[SlotsAnswer, Depends(mentor_slots)]
