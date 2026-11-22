@@ -23,8 +23,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.api.deps import SlotsDep
-from app.api.schemas.common import Page
-from app.api.schemas.slots import SlotRead
+from app.api.schemas.slots import SlotRead, SlotsPage
 from app.core.config import Settings
 from app.domain.availability import BookingWindow
 
@@ -60,7 +59,7 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
 
 @router.get(
     "/slots",
-    response_model=Page[SlotRead],
+    response_model=SlotsPage,
     summary="Bookable slots for one session type",
     description=(
         "When this mentor could actually take a session of this type — their "
@@ -104,5 +103,11 @@ PUBLIC_RESPONSES: dict[int | str, dict[str, str]] = {
     ),
     responses=PUBLIC_RESPONSES,
 )
-async def list_bookable_slots(slots: SlotsDep) -> Page[SlotRead]:
-    return Page(data=[SlotRead.from_interval(slot) for slot in slots], next_cursor=None)
+async def list_bookable_slots(answer: SlotsDep) -> SlotsPage:
+    after, opens = answer.next_after or (None, None)
+    return SlotsPage(
+        data=[SlotRead.from_interval(slot) for slot in answer.slots],
+        next_cursor=None,
+        next_after_window_at=after,
+        bookable_from=opens,
+    )
