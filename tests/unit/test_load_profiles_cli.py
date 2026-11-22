@@ -86,3 +86,22 @@ def test_a_clean_plan_says_nothing_alarming(capsys: pytest.CaptureFixture[str]) 
 
     for noise in ("unattached", "CREATOR MISMATCH", "year out of range", "refused"):
         assert noise not in out
+
+
+def test_the_education_read_from_creator_is_counted_on_screen(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Decision 364: the operator sees how many rows the fallback attributed."""
+    describe(plan(education_by_creator=("1721956147264x1", "1722169663996x2")))
+
+    assert "education by creator 2" in capsys.readouterr().out
+
+
+def test_a_lookup_slug_the_database_lacks_refuses_before_any_write() -> None:
+    """Both load paths share the check, so seed drift never writes a null degree."""
+    from scripts.load_profiles import refuse_missing_slugs
+
+    with pytest.raises(RuntimeError, match="masters"):
+        refuse_missing_slugs(services=set(), degrees={"masters"}, offerings={}, degree_ids={})
+    known = {"masters": 1}
+    refuse_missing_slugs(services=set(), degrees={"masters"}, offerings={}, degree_ids=known)

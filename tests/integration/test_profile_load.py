@@ -514,3 +514,138 @@ async def test_education_dates_land_as_written(db_engine: AsyncEngine) -> None:
         )
 
     assert stored.one() == ("2020-01-01", "2022-12-31")
+
+
+# --------------------------------------------------------------------------
+# Education read from its Creator, added to a live database (decision 364)
+# --------------------------------------------------------------------------
+
+UNLISTED_THING = "1700000000000x000000000000000021"
+
+
+async def add_by_creator(
+    conn: AsyncConnection, users: list[dict[str, Any]], education: list[dict[str, Any]]
+) -> Any:
+    """The ``--education-by-creator`` run: only the recovered rows, insert-only."""
+    plan = plan_profiles(
+        users,
+        education_records=education,
+        goal_records=[],
+        service_records=[],
+        mentor_records=[],
+        award_records=[],
+        export_timezone=NY,
+        this_year=THIS_YEAR,
+    )
+    assert plan.ok, plan.errors
+    _, degrees = await lookup_maps(conn)
+    async with timestamps_from_source_across(conn, ("education_entries",)):
+        return await ProfileLoader(conn).add_education(
+            users=await user_id_map(conn),
+            education=plan.education_read_from_creator(),
+            degrees=degrees,
+        )
+
+
+async def test_only_the_entries_read_from_creator_are_added(db_engine: AsyncEngine) -> None:
+    listed = education_record()
+    unlisted = thing(
+        UNLISTED_THING,
+        schoolName="University of Ibadan",
+        dateStart="Jan 1, 2016 12:00 am",
+        dateEnd="Dec 31, 2019 12:00 am",
+    )
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [linked_user()])
+        added = await add_by_creator(conn, [linked_user()], [listed, unlisted])
+        stored = await conn.execute(
+            text("SELECT legacy_bubble_id, updated_at::text FROM education_entries")
+        )
+
+    assert added.added == 1
+    assert stored.all() == [(UNLISTED_THING, "2024-06-02 10:30:00+00")]
+
+
+async def test_adding_never_overwrites_an_entry_already_there(db_engine: AsyncEngine) -> None:
+    """A re-run, or a row someone has since edited, is left exactly as it is."""
+    unlisted = thing(UNLISTED_THING, schoolName="University of Ibadan")
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [linked_user(**{"📚Education": None})])
+        await add_by_creator(conn, [linked_user(**{"📚Education": None})], [unlisted])
+        await conn.execute(text("UPDATE education_entries SET school_name_raw = 'Edited'"))
+        again = await add_by_creator(conn, [linked_user(**{"📚Education": None})], [unlisted])
+        stored = await conn.execute(text("SELECT school_name_raw FROM education_entries"))
+
+    assert (again.added, again.already_there) == (0, 1)
+    assert stored.scalars().all() == ["Edited"]
+
+
+async def test_a_person_who_added_education_in_the_new_app_is_skipped(
+    db_engine: AsyncEngine,
+) -> None:
+    """Their own answer stands; a 2024 entry beside it could repeat it."""
+    unlisted = thing(UNLISTED_THING, schoolName="University of Ibadan")
+    users = [linked_user(**{"📚Education": None})]
+    async with db_engine.begin() as conn:
+        await load_everything(conn, users)
+        await conn.execute(
+            text(
+                "INSERT INTO education_entries (user_id, school_name_raw) "
+                "SELECT id, 'Their own' FROM users"
+            )
+        )
+        added = await add_by_creator(conn, users, [unlisted])
+        stored = await conn.execute(text("SELECT school_name_raw FROM education_entries"))
+
+    assert (added.added, added.has_own_education) == (0, 1)
+    assert stored.scalars().all() == ["Their own"]
+
+
+async def test_a_deleted_account_is_never_given_education_back(db_engine: AsyncEngine) -> None:
+    """The purge deletes their rows and keeps ``legacy_bubble_id``: adding
+    here would restore data they asked us to delete, and nothing would purge it again."""
+    unlisted = thing(UNLISTED_THING, schoolName="University of Ibadan")
+    users = [linked_user(**{"📚Education": None})]
+    async with db_engine.begin() as conn:
+        await load_everything(conn, users)
+        await conn.execute(text("UPDATE users SET deleted_at = now()"))
+        added = await add_by_creator(conn, users, [unlisted])
+        stored = await conn.execute(text("SELECT count(*) FROM education_entries"))
+
+    assert (added.added, added.deleted_account) == (0, 1)
+    assert stored.scalar_one() == 0
+
+
+async def test_a_person_who_removed_a_migrated_entry_is_skipped(db_engine: AsyncEngine) -> None:
+    """Removing education in the new app is managing it there too."""
+    unlisted = thing(UNLISTED_THING, schoolName="University of Ibadan")
+    async with db_engine.begin() as conn:
+        await load_everything(conn, [linked_user()], education=[education_record()])
+        await conn.execute(text("UPDATE education_entries SET deleted_at = now()"))
+        added = await add_by_creator(conn, [linked_user()], [education_record(), unlisted])
+
+    assert (added.added, added.has_own_education) == (0, 1)
+
+
+async def test_an_entry_flagged_most_recent_beside_a_flagged_one_loads_unflagged(
+    db_engine: AsyncEngine,
+) -> None:
+    """One most-recent entry per person is a unique index; a clash would roll
+    the whole run back."""
+    unlisted = thing(
+        UNLISTED_THING,
+        schoolName="University of Ibadan",
+        mostRecentDegree="yes",
+        dateStart="Jan 1, 2014 12:00 am",
+        dateEnd="Dec 31, 2016 12:00 am",
+    )
+    users = [linked_user()]
+    async with db_engine.begin() as conn:
+        await load_everything(conn, users, education=[education_record(mostRecentDegree="yes")])
+        added = await add_by_creator(conn, users, [education_record(), unlisted])
+        stored = await conn.execute(
+            text("SELECT legacy_bubble_id, is_most_recent FROM education_entries ORDER BY 1")
+        )
+
+    assert added.added == 1
+    assert stored.all() == [(EDUCATION_THING, True), (UNLISTED_THING, False)]

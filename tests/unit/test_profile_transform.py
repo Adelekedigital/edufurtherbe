@@ -329,13 +329,16 @@ def test_a_mappable_degree_goal_resolves_and_keeps_no_raw() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_row_no_user_points_at_is_reported_not_attributed() -> None:
+@pytest.mark.parametrize("creator", [None, "", "(App admin)", "1700000000000x000000000000000002"])
+def test_a_row_no_user_points_at_is_reported_not_attributed(creator: str | None) -> None:
     """``plan_identity`` established this and the reasoning carries: the link
     exists in one direction, and a row nobody claims cannot be attributed by
-    inference."""
+    inference. Education falls back to a ``Creator`` who is a migrated user
+    (decision 364); a blank, non-user or unknown ``Creator`` still leaves it
+    unattached."""
     plan = plan_profiles(
         [user()],
-        education_records=[record(schoolName="University of Lagos")],
+        education_records=[record(Creator=creator, schoolName="University of Lagos")],
         goal_records=[],
         service_records=[],
         mentor_records=[],
@@ -348,7 +351,118 @@ def test_a_row_no_user_points_at_is_reported_not_attributed() -> None:
     # fixture missing a required field would pass this for the wrong reason.
     assert plan.errors == ()
     assert plan.education == ()
+    assert plan.education_by_creator == ()
     assert plan.unattached["education"] == (THING_ID,)
+
+
+# --------------------------------------------------------------------------
+# Education no user lists, read from its Creator (decision 364)
+# --------------------------------------------------------------------------
+
+ATTACHED = "1700000000000x000000000000000031"
+UNLISTED = "1700000000000x000000000000000032"
+UNLISTED_2 = "1700000000000x000000000000000033"
+
+
+def years(start: int, end: int) -> dict[str, str]:
+    return {"dateStart": f"Dec 31, {start} 12:00 am", "dateEnd": f"Dec 31, {end} 12:00 am"}
+
+
+def plan_education(users: list[dict[str, Any]], education: list[dict[str, Any]]) -> Any:
+    return plan_profiles(
+        users,
+        education_records=education,
+        goal_records=[],
+        service_records=[],
+        mentor_records=[],
+        award_records=[],
+        export_timezone=NY,
+        this_year=THIS_YEAR,
+    )
+
+
+def test_an_unlisted_entry_is_given_to_its_creator_who_is_a_user() -> None:
+    """163 mentees typed their education at sign-up in 2024 and the legacy app
+    never added it to their profile; ``Creator`` still names them."""
+    plan = plan_education(
+        [user()],
+        [record(bubble_id=UNLISTED, schoolName="University of Lagos", **years(2014, 2018))],
+    )
+    assert plan.errors == ()
+    assert [(r.legacy_bubble_id, r.user_bubble_id) for r in plan.education] == [(UNLISTED, USER_ID)]
+    assert plan.education_by_creator == (UNLISTED,)
+    assert "education" not in plan.unattached
+
+
+def test_an_unlisted_entry_for_other_years_is_added_beside_the_attached_one() -> None:
+    """A second degree the legacy app saved but never listed."""
+    plan = plan_education(
+        [user(**{EDUCATION_LINK_FIELD: ATTACHED})],
+        [
+            record(bubble_id=ATTACHED, schoolName="University of Lagos", **years(2012, 2014)),
+            record(bubble_id=UNLISTED, schoolName="University of Ibadan", **years(2014, 2017)),
+        ],
+    )
+    assert sorted(r.legacy_bubble_id for r in plan.education) == [ATTACHED, UNLISTED]
+    assert plan.education_by_creator == (UNLISTED,)
+
+
+def test_an_unlisted_entry_for_the_same_years_as_the_attached_one_is_left_out() -> None:
+    """The same study entered twice: the one the profile lists wins."""
+    plan = plan_education(
+        [user(**{EDUCATION_LINK_FIELD: ATTACHED})],
+        [
+            record(bubble_id=ATTACHED, schoolName="University of Lagos", **years(2017, 2022)),
+            record(bubble_id=UNLISTED, schoolName="Unilag", **years(2017, 2022)),
+        ],
+    )
+    assert [r.legacy_bubble_id for r in plan.education] == [ATTACHED]
+    assert plan.education_by_creator == ()
+    assert plan.unattached["education"] == (UNLISTED,)
+
+
+def test_two_unlisted_entries_for_the_same_years_keep_the_newest_edit() -> None:
+    older = record(
+        bubble_id=UNLISTED,
+        schoolName="Unilag",
+        modified_at="Jul 25, 2024 1:42 am",
+        **years(2016, 2020),
+    )
+    newer = record(
+        bubble_id=UNLISTED_2,
+        schoolName="University of Lagos",
+        modified_at="Jul 25, 2024 1:50 am",
+        **years(2016, 2020),
+    )
+    for order in ([older, newer], [newer, older]):
+        plan = plan_education([user()], order)
+        assert [r.legacy_bubble_id for r in plan.education] == [UNLISTED_2]
+        assert plan.education_by_creator == (UNLISTED_2,)
+        assert plan.unattached["education"] == (UNLISTED,)
+
+
+def test_an_unlisted_entry_without_a_school_is_skipped_not_recovered() -> None:
+    """The sign-up screen's drafts: decision 316's rule still applies."""
+    plan = plan_education([user()], [record(bubble_id=UNLISTED, schoolName=" ")])
+    assert plan.education == ()
+    assert plan.education_by_creator == ()
+    assert plan.schoolless_education == (UNLISTED,)
+
+
+def test_an_unlisted_goal_is_not_read_from_its_creator() -> None:
+    """Decision 364 is about education only; a goal nobody lists stays reported."""
+    plan = plan_profiles(
+        [user()],
+        education_records=[],
+        goal_records=[record(**{"degreeGoal(text)": "Masters"})],
+        service_records=[],
+        mentor_records=[],
+        award_records=[],
+        export_timezone=NY,
+        this_year=THIS_YEAR,
+    )
+    assert plan.goals == ()
+    assert plan.unattached["mentee_goals"] == (THING_ID,)
 
 
 def test_a_creator_that_disagrees_with_the_link_is_reported_and_the_link_wins() -> None:
@@ -517,3 +631,52 @@ def test_an_education_row_without_a_school_is_skipped_and_named() -> None:
     assert plan.errors == ()
     assert [row.legacy_bubble_id for row in plan.education] == [kept]
     assert plan.schoolless_education == (empty,)
+
+
+def test_undated_entries_are_never_taken_for_the_same_years() -> None:
+    """No dates says nothing about the period, so both are kept."""
+    plan = plan_education(
+        [user(**{EDUCATION_LINK_FIELD: ATTACHED})],
+        [
+            record(bubble_id=ATTACHED, schoolName="University of Lagos"),
+            record(bubble_id=UNLISTED, schoolName="University of Ibadan"),
+        ],
+    )
+    assert sorted(r.legacy_bubble_id for r in plan.education) == [ATTACHED, UNLISTED]
+    assert plan.education_by_creator == (UNLISTED,)
+
+
+@pytest.mark.parametrize("listed_flag", ["yes", "no"])
+def test_a_person_keeps_one_most_recent_entry_across_listed_and_recovered(
+    listed_flag: str,
+) -> None:
+    """One live most-recent entry per person is a unique index; a second flag
+    would roll the whole load back. The listed entry keeps it, then the newest."""
+    plan = plan_education(
+        [user(**{EDUCATION_LINK_FIELD: ATTACHED})],
+        [
+            record(
+                bubble_id=ATTACHED,
+                schoolName="University of Lagos",
+                mostRecentDegree=listed_flag,
+                **years(2012, 2014),
+            ),
+            record(
+                bubble_id=UNLISTED,
+                schoolName="University of Ibadan",
+                mostRecentDegree="yes",
+                modified_at="Jul 25, 2024 1:50 am",
+                **years(2014, 2017),
+            ),
+            record(
+                bubble_id=UNLISTED_2,
+                schoolName="University of Benin",
+                mostRecentDegree="yes",
+                modified_at="Jul 25, 2024 1:42 am",
+                **years(2017, 2019),
+            ),
+        ],
+    )
+    flagged = sorted(r.legacy_bubble_id for r in plan.education if r.is_most_recent)
+    assert flagged == ([ATTACHED] if listed_flag == "yes" else [UNLISTED])
+    assert len(plan.education) == 3
