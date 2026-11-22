@@ -103,6 +103,76 @@ class FreeBusyReader(Protocol):
     ) -> tuple[UtcInterval, ...]: ...
 
 
+#: How far past a full window `next_after_window` looks: as far as the longest
+#: window allowed by default, so a mentor whose next time is further out than
+#: anyone could book is not named at all.
+LOOK_PAST_WINDOW_DAYS = 56
+
+
+async def next_after_window(
+    session: AsyncSession,
+    user_id: UUID,
+    session_type_id: UUID,
+    *,
+    now: dt.datetime,
+    window: BookingWindow,
+    external_busy: FreeBusyReader | None = None,
+    holds_for: UUID | None = None,
+) -> tuple[dt.datetime, dt.datetime] | None:
+    """When nothing is free inside the offering's window: its first free start
+    after the window, and the instant that start becomes bookable (that start
+    minus the window). ``None`` when the window has a free time, when nothing
+    is free within `LOOK_PAST_WINDOW_DAYS` after it, or when the offering is
+    not publicly bookable.
+
+    Owner, 2026-11-21: the booking step says "next time is Sun, Dec 6; you can
+    book it from Sun, Nov 22" instead of an empty calendar. **Named, never
+    offered**: the window stays a hard limit, and `list_slots` only looks past
+    it here. Everything else that makes a time free (notice, breaks, sessions,
+    holds, blocks, the mentor's calendar) applies unchanged, because both
+    questions are asked of `list_slots` itself.
+    """
+    offering = (
+        (await session.execute(_publicly_bookable(user_id, session_type_id, window)))
+        .mappings()
+        .first()
+    )
+    if offering is None:
+        return None
+    days = int(offering["window_days"])
+    today = local_date(offering["timezone"], now)
+    own = BookingWindow(max_days=days, default_days=days)
+
+    async def free(start: dt.date, span: int, past: int) -> list[UtcInterval]:
+        return (
+            await list_slots(
+                session,
+                user_id,
+                session_type_id,
+                start=start,
+                end=start + dt.timedelta(days=span),
+                now=now,
+                window=window,
+                external_busy=external_busy,
+                holds_for=holds_for,
+                past_window_days=past,
+            )
+            or []
+        )
+
+    if await free(today, own.projection_days, 0):
+        return None
+    cutoff = now + dt.timedelta(days=days)
+    later = await free(
+        local_date(offering["timezone"], cutoff),
+        LOOK_PAST_WINDOW_DAYS + 1,
+        LOOK_PAST_WINDOW_DAYS,
+    )
+    # The window was just found empty, so every slot here starts past it.
+    first = min((slot.start for slot in later), default=None)
+    return None if first is None else (first, first - dt.timedelta(days=days))
+
+
 def _publicly_bookable(user_id: UUID, session_type_id: UUID, window: BookingWindow) -> Select[Any]:
     """The offering, if the public may see it at all.
 
@@ -213,6 +283,7 @@ async def list_slots(
     holds_for: UUID | None = None,
     notice_from: dt.datetime | None = None,
     length_minutes: int | None = None,
+    past_window_days: int = 0,
 ) -> list[UtcInterval] | None:
     """Slots someone could book with this mentor, or ``None`` if they may not look.
 
@@ -252,6 +323,11 @@ async def list_slots(
     else: a time held for a mentee (#339) stays bookable through its hold even
     once the notice floor has passed it, so the floor is measured from when it
     was offered. Nothing earlier than ``now`` is ever offered either way.
+
+    ``past_window_days`` lets the cutoff run that many days past the window, and
+    only `next_after_window` passes it: it looks for the first time *after* a
+    full window to name, never to offer. Every booking path leaves it at 0, so
+    the window stays a hard limit.
 
     ``length_minutes`` draws the grid at that length instead of the offering's
     current one, and nothing else changes. For a time already offered (#347): it
@@ -398,7 +474,7 @@ async def list_slots(
         for row in busy
     ]
     # **The window**: nothing starts later than this offering allows ahead of now.
-    cutoff = now + dt.timedelta(days=int(offering["window_days"]))
+    cutoff = now + dt.timedelta(days=int(offering["window_days"]) + past_window_days)
 
     return [
         slot
