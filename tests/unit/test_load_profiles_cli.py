@@ -105,3 +105,11 @@ def test_a_lookup_slug_the_database_lacks_refuses_before_any_write() -> None:
         refuse_missing_slugs(services=set(), degrees={"masters"}, offerings={}, degree_ids={})
     known = {"masters": 1}
     refuse_missing_slugs(services=set(), degrees={"masters"}, offerings={}, degree_ids=known)
+
+
+def test_education_dates_out_of_order_reach_the_operator(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    describe(plan(rejected_education_dates=("1760000000000x1",)))
+
+    assert "dates out of order, loading empty: 1760000000000x1" in capsys.readouterr().out

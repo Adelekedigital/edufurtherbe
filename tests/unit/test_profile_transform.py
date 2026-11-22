@@ -680,3 +680,27 @@ def test_a_person_keeps_one_most_recent_entry_across_listed_and_recovered(
     flagged = sorted(r.legacy_bubble_id for r in plan.education if r.is_most_recent)
     assert flagged == ([ATTACHED] if listed_flag == "yes" else [UNLISTED])
     assert len(plan.education) == 3
+
+
+def test_dates_out_of_order_load_empty_and_are_named() -> None:
+    """The database refuses an end before the start. Which date is wrong cannot
+    be told, so both load empty and the row is named, as award years are."""
+    plan = plan_education(
+        [user()],
+        [record(bubble_id=UNLISTED, schoolName="University of Lagos", **years(2025, 2022))],
+    )
+    (row,) = plan.education
+    assert (row.date_start, row.date_end) == (None, None)
+    assert row.school_name_raw == "University of Lagos"
+    assert plan.rejected_education_dates == (UNLISTED,)
+
+
+def test_an_entry_that_starts_and_ends_on_one_date_keeps_it() -> None:
+    """The CHECK is end >= start, so an equal pair is valid and kept."""
+    plan = plan_education(
+        [user()],
+        [record(bubble_id=UNLISTED, schoolName="University of Lagos", **years(2022, 2022))],
+    )
+    (row,) = plan.education
+    assert row.date_start == row.date_end is not None
+    assert plan.rejected_education_dates == ()
