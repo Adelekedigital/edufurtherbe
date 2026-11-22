@@ -240,7 +240,58 @@ so the front end must already be sending it.
 | Railway logs | JSON lines with `request_id` (ADR 0030) |
 | Sentry (optional) | a test event arrives. **Owner to confirm:** how to raise one; the repo has no test route |
 
-## 10. Open launch items
+## 10. Cutover record, Sunday 22 Nov 2026
+
+Owner gave **go** on 22 Nov 2026. Times are UTC.
+
+| Time | Step | Result |
+|---|---|---|
+| 21:16 | Final export of bookings and session trackers | 1,235 bookings, 1,059 trackers (same counts as the 15:24 export) |
+| ~22:10 | `load_sessions.py --as-of 2026-11-22T21:16:04+00:00` | Reconciled: sessions 1,235, types 31, booking configs 31, participants 2,394, events 2,255, 0 missing, 0 quarantined. Exit 2 = the usual human-review lists. Decision 365's two trusted sessions load `completed` |
+| ~22:20 | Owner moved `app` DNS (Namecheap) to Vercel, switched the Supabase Site URL | CNAME to Vercel at 1.1.1.1 and 8.8.8.8 by 22:25 |
+| 22:26 | Step 5: reconcile run 45077672105, `apply=true` | 9 changes applied, all nine jobs enabled |
+| 22:30 | PostHog history: `backfill_analytics.py --until 2026-11-22T22:25:00+00:00 --send` | 4,834 events. The cutoff was safe because `outbox_events` was still empty |
+| 22:35 | `sync_person_properties.py --send` | 924 of 1,292 accounts. The other 368 have no PostHog events yet, and the daily job covers them |
+| 22:50 | Frontend PostHog key fixed (below) | Live bundle carries project 726629's key |
+| 23:07 | First live `$pageview` on production | Arrived |
+
+**Lessons, so the next cutover does not relearn them:**
+
+- **A Bubble export link expires about 5 minutes after it is made.** Download it
+  the moment it is shared. A 403 means it has expired: ask for a fresh link to
+  the same export, so `--as-of` does not move.
+- **The old DNS answer lingers for its TTL** (1,800 s for `app`). A browser that
+  cached it shows Bubble's "OwnerError: no application associated with this
+  domain". An incognito window, or clearing Chrome's host cache
+  (`chrome://net-internals/#dns`), shows the new app.
+- **Check that the frontend's PostHog key is the production project's.**
+  Vercel Production's `NEXT_PUBLIC_POSTHOG_KEY` held the staging project's key
+  (`phc_pxAjgy…`, project 726650). Compare the key in the live bundle with
+  `api_token` from `GET /api/projects/726629/`.
+- **The frontend's analytics flags must be on in the production build.**
+  `NEXT_PUBLIC_ANALYTICS_ENABLED` was false, so the SDK never loaded. The
+  frontend turned on analytics, the consent banner, PostHog errors, Sentry,
+  admin emails and "What's new" (owner), and rebuilt production from `main`.
+  These are build-time values: a redeploy of an old build does not pick up a
+  change.
+- **PostHog's cookieless server hash mode must be on.** Visitors who have not
+  answered the banner, or who declined, are sent cookieless (posthog-js
+  `on_reject` with opt-out by default). With the project setting Disabled,
+  PostHog drops every one of them. Production is set to **Stateful**, the same
+  as staging (build principles: the same privacy, more accurate daily uniques,
+  and one setting across environments).
+- PostHog's "Complete the installation" banner for `$pageview` needs no
+  snippet: the app already loads `posthog-js` through `/ingest`. The banner
+  clears once the first page view arrives.
+
+**Still open after go:** the frontend half of the smoke checks (sign in,
+Explore, profile, test booking, message, with internal accounts); the `429`
+check on `app.edufurther.org` (step 7.4); the live presence check (step 6.3);
+the frontend's session replay on every screen (frontend PR 703), which also
+asks everyone for consent again; the announcement, scheduled for Mon 23 Nov
+11:59 PM New York; and stopping the legacy app's outgoing messages by 24 Nov.
+
+## 11. Open launch items
 
 | Issue | One line |
 |---|---|
