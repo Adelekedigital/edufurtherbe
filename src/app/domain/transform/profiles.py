@@ -26,7 +26,7 @@ only person who could catch it is the one who already suspects.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, tzinfo
 from typing import Any
 
@@ -891,9 +891,13 @@ def _one_per_period(
     Same person, same start and end: the same study entered twice. The entry
     the profile lists wins, then the newest edit. Returns the rows kept, the
     ``Creator`` entries kept, and the ones left out.
+
+    The same order keeps one most-recent flag per person (a unique index): a
+    ``Creator`` entry loses its flag when a listed or newer entry holds one.
     """
     listed = [row for row in rows if row.legacy_bubble_id not in by_creator]
     taken = {(row.user_bubble_id, row.date_start, row.date_end) for row in listed}
+    flagged = {row.user_bubble_id for row in listed if row.is_most_recent}
     kept: list[EducationRow] = []
     repeated: list[str] = []
     newest_first = sorted(
@@ -912,6 +916,10 @@ def _one_per_period(
             repeated.append(row.legacy_bubble_id)
             continue
         taken.add(period)
+        if row.is_most_recent and row.user_bubble_id in flagged:
+            row = replace(row, is_most_recent=False)
+        elif row.is_most_recent:
+            flagged.add(row.user_bubble_id)
         kept.append(row)
     recovered = tuple(sorted(row.legacy_bubble_id for row in kept))
     return listed + kept, recovered, tuple(repeated)

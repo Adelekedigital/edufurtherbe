@@ -644,3 +644,39 @@ def test_undated_entries_are_never_taken_for_the_same_years() -> None:
     )
     assert sorted(r.legacy_bubble_id for r in plan.education) == [ATTACHED, UNLISTED]
     assert plan.education_by_creator == (UNLISTED,)
+
+
+@pytest.mark.parametrize("listed_flag", ["yes", "no"])
+def test_a_person_keeps_one_most_recent_entry_across_listed_and_recovered(
+    listed_flag: str,
+) -> None:
+    """One live most-recent entry per person is a unique index; a second flag
+    would roll the whole load back. The listed entry keeps it, then the newest."""
+    plan = plan_education(
+        [user(**{EDUCATION_LINK_FIELD: ATTACHED})],
+        [
+            record(
+                bubble_id=ATTACHED,
+                schoolName="University of Lagos",
+                mostRecentDegree=listed_flag,
+                **years(2012, 2014),
+            ),
+            record(
+                bubble_id=UNLISTED,
+                schoolName="University of Ibadan",
+                mostRecentDegree="yes",
+                modified_at="Jul 25, 2024 1:50 am",
+                **years(2014, 2017),
+            ),
+            record(
+                bubble_id=UNLISTED_2,
+                schoolName="University of Benin",
+                mostRecentDegree="yes",
+                modified_at="Jul 25, 2024 1:42 am",
+                **years(2017, 2019),
+            ),
+        ],
+    )
+    flagged = sorted(r.legacy_bubble_id for r in plan.education if r.is_most_recent)
+    assert flagged == ([ATTACHED] if listed_flag == "yes" else [UNLISTED])
+    assert len(plan.education) == 3
