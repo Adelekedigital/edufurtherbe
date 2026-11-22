@@ -91,6 +91,33 @@ async def on_confirmed(
     )
 
 
+async def migrated_to_confirm(
+    session: AsyncSession, *, now: dt.datetime
+) -> list[tuple[UUID, dt.datetime]]:
+    """Upcoming confirmed sessions the legacy load brought in that the new app
+    has never confirmed: ``(id, starts_at)``, soonest first (decision 366).
+
+    A load writes the row but runs none of `on_confirmed`, so such a session has
+    no room of its own, no invite and no reminders. **No calendar event marks
+    it**: the load never writes one and `provision_meeting` stores the event it
+    makes, so a session confirmed here drops out of the next run. One whose
+    calendar call failed stays listed, and a rerun gives it a fresh room and
+    invite; its reminders are published again, and the outbox's reminder index
+    still sends each one once (decision 162).
+    """
+    rows = await session.execute(
+        select(Session.id, Session.starts_at)
+        .where(
+            Session.status == SessionStatus.CONFIRMED,
+            Session.legacy_bubble_id.is_not(None),
+            Session.external_calendar_event_id.is_(None),
+            Session.starts_at > now,
+        )
+        .order_by(Session.starts_at, Session.id)
+    )
+    return [(row.id, row.starts_at) for row in rows]
+
+
 async def on_ended(
     session: AsyncSession, session_id: UUID, *, calendar: CalendarPort
 ) -> ReleaseOutcome:
