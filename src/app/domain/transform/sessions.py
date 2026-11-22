@@ -86,7 +86,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from operator import attrgetter
 from typing import Any
 from urllib.parse import urlparse
@@ -228,6 +228,14 @@ STATUS_MAP: dict[str, SessionStatus] = {
 #: Statuses judged by a tracker's attendance (`attendance.outcome`). A legacy
 #: `Missed` is judged too since decision 315: 70 production rows have a tracker
 #: where both attended, and the tracker is the attendance fact.
+#: Sessions whose tracker is read as both attended (decision 365). Owner, 22 Nov
+#: 2026: one mentor's 19 Nov 15:30 and 20 Nov 17:00 UTC sessions. Her sessions
+#: used one static meeting link, so joins made outside the legacy app were never
+#: recorded; 81% of her sessions show recorded joins.
+TRUSTED_ATTENDANCE = frozenset(
+    {"1794652739037x347061153932835200", "1794607744645x451431224989420350"}
+)
+
 JUDGED_BY_ATTENDANCE = frozenset({SessionStatus.COMPLETED, SessionStatus.NO_SHOW})
 
 #: Where a confirmed session can end up. Only these terminal events start from
@@ -908,6 +916,7 @@ def plan_sessions(
     *,
     export_timezone: dt.tzinfo,
     as_of: dt.datetime,
+    trusted_attendance: frozenset[str] = TRUSTED_ATTENDANCE,
 ) -> SessionPlan:
     """Every session Thing, merged and classified, before anything is written.
 
@@ -1090,6 +1099,11 @@ def plan_sessions(
                     )
                 )
             rows = _participants(tracker, anchor, mentor, mentee, assume=export_timezone)
+            if anchor in trusted_attendance:
+                rows = [replace(row, attendance_status=AttendanceStatus.ATTENDED) for row in rows]
+                attendance_overrode.append(
+                    Disagreement(anchor, "both read as attended by the owner (decision 365)")
+                )
             # A confirmed session that had started by the export is finished as
             # far as Bubble will ever record, so it is judged; one still ahead is
             # left confirmed (decision 315).

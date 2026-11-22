@@ -316,6 +316,8 @@ class EducationRow:
     date_start: date | None
     date_end: date | None
     is_most_recent: bool
+    #: The end preceded the start, so both load empty (the table's CHECK).
+    dates_rejected: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,6 +449,10 @@ def to_education(
         raise SkippedRowError(bubble_id, f"{SCHOOL_FIELD}: required, and always kept")
 
     category = _text(record, DEGREE_CATEGORY_FIELD)
+    start = export_date(record, DATE_START_FIELD, zone=export_timezone, bubble_id=bubble_id)
+    end = export_date(record, DATE_END_FIELD, zone=export_timezone, bubble_id=bubble_id)
+    # Which date is wrong cannot be told, so neither is kept; the row is named.
+    reversed_dates = start is not None and end is not None and end < start
     return EducationRow(
         legacy_bubble_id=bubble_id,
         user_bubble_id=user_bubble_id,
@@ -462,8 +468,9 @@ def to_education(
         degree_abbreviation=_short_form(record),
         study_course=_text(record, STUDY_COURSE_FIELD),
         study_program=_text(record, STUDY_PROGRAM_FIELD),
-        date_start=export_date(record, DATE_START_FIELD, zone=export_timezone, bubble_id=bubble_id),
-        date_end=export_date(record, DATE_END_FIELD, zone=export_timezone, bubble_id=bubble_id),
+        date_start=None if reversed_dates else start,
+        date_end=None if reversed_dates else end,
+        dates_rejected=reversed_dates,
         is_most_recent=_lookup(
             BOOLEANS, record.get(MOST_RECENT_FIELD), field=MOST_RECENT_FIELD, bubble_id=bubble_id
         ),
@@ -647,6 +654,8 @@ class ProfilePlan:
     schoolless_education: tuple[str, ...] = ()
     #: Education no user lists, loaded for its ``Creator`` (decision 364).
     education_by_creator: tuple[str, ...] = ()
+    #: Education whose end preceded its start; it loads with both dates empty.
+    rejected_education_dates: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -880,6 +889,9 @@ def plan_profiles(
         ),
         schoolless_education=tuple(sorted(skipped.get("education", ()))),
         education_by_creator=education_by_creator,
+        rejected_education_dates=tuple(
+            sorted(row.legacy_bubble_id for row in education if row.dates_rejected)
+        ),
     )
 
 
