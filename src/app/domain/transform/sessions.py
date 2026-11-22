@@ -60,7 +60,11 @@ legacy defect and is not carried forward.
 ATTRIBUTION
 ===========
 Bookings attribute from their own links — ``Session Initiator`` and ``🕵Mentor``,
-both populated on every row. Orphan trackers have no booking to inherit from and
+populated on every dev row. **Production differs** (decision 363): 186 bookings
+from 2024 leave ``Session Initiator`` blank while ``Creator`` names a user, not
+``(App admin)``; where a tracker also names the mentee they agree 82 of 82, so a
+blank initiator is read from a ``Creator`` who is a migrated user other than the
+mentor. Orphan trackers have no booking to inherit from and
 ``Mentee(userdatatype)`` on only 31 of 164, so ``Creator`` is the fallback; where
 both are present they agree on 27 of 27. An orphan with neither is quarantined
 rather than attributed to a guess.
@@ -884,6 +888,17 @@ def _overlaps_for(sessions: list[SessionRow], side: str) -> list[Disagreement]:
     return found
 
 
+def _creator_as_booker(
+    record: dict[str, Any], *, mentor: str | None, known_users: set[str]
+) -> str | None:
+    """`Creator` as the booker of a booking whose `Session Initiator` is blank
+    (decision 363): only a migrated user, and never the session's own mentor."""
+    creator = _text(record, CREATOR_FIELD)
+    if creator and creator in known_users and creator != mentor:
+        return creator
+    return None
+
+
 def plan_sessions(
     user_records: list[dict[str, Any]],
     bookings: list[dict[str, Any]],
@@ -932,6 +947,9 @@ def plan_sessions(
         booking_by_mentor[user_anchor] = booking_defaults(record, bubble_id=anchor)
     durations, duration_disagreements = durations_by_mentor(calendar_settings)
     trackers_by_anchor = {legacy_anchor(record): record for record in trackers}
+    #: Bookings a tracker names by its `SessionID`: left to that tracker when
+    #: their initiator is blank (decision 363), as the orphan pass rebuilds them.
+    named_by_a_tracker = {_text(record, TRACKER_SESSION_FIELD) for record in trackers} - {None}
     # Trackers some booking links directly: never another booking's duplicate.
     linked_trackers = {_text(record, BOOKING_TRACKER_FIELD) for record in bookings}
 
@@ -974,10 +992,23 @@ def plan_sessions(
             continue
 
         mentor = _text(record, BOOKING_MENTOR_FIELD)
-        mentee = _text(record, BOOKING_MENTEE_FIELD)
 
         # Decision 315. Looked up once; a tracker is an attendance fact.
         tracker = trackers_by_anchor.get(_text(record, BOOKING_TRACKER_FIELD) or "")
+
+        # decision 363: a blank `Session Initiator` is read from `Creator` when
+        # that names a migrated user other than the mentor, **and only when the
+        # booking has no tracker, linked or naming it by `SessionID`**. 67
+        # production bookings from 2024 are exactly that; on the 82 that do have
+        # one, `Creator` matched its mentee 82 of 82, but those sessions are
+        # already rebuilt from the tracker under the tracker's anchor, and
+        # reading them here would load each one twice.
+        # `(App admin)`, nobody, a stranger or the mentor stay dropped.
+        mentee = _text(record, BOOKING_MENTEE_FIELD) or (
+            _creator_as_booker(record, mentor=mentor, known_users=known_users)
+            if tracker is None and anchor not in named_by_a_tracker
+            else None
+        )
         accepted = is_true(record.get(BOOKING_ACCEPTED_FIELD))
         # A legacy `Upcoming` was confirmed in Bubble whatever the flag says, and
         # stays so when the cancel flag has overridden it. Only `Upcoming`: the

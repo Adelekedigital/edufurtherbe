@@ -104,7 +104,7 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     degree_goal_raw = EXCLUDED.degree_goal_raw
 """
 
-UPSERT_EDUCATION = """
+INSERT_EDUCATION = """
 INSERT INTO education_entries (
     user_id, legacy_bubble_id, created_at, updated_at, school_name_raw,
     degree_category, degree_level_id, degree_abbreviation, study_course, study_program,
@@ -114,7 +114,32 @@ INSERT INTO education_entries (
     :degree_category, :degree_level_id, :degree_abbreviation, :study_course, :study_program,
     :date_start, :date_end, :is_most_recent
 )
-ON CONFLICT (legacy_bubble_id) DO UPDATE SET
+"""
+
+#: Insert-only, for adding rows to a database people already use (decision
+#: 364): a row already there, edited or not, is left exactly as it is.
+ADD_EDUCATION = INSERT_EDUCATION + "ON CONFLICT (legacy_bubble_id) DO NOTHING RETURNING id"
+
+#: People who have managed education in the new app: written an entry, or
+#: removed one. Their own answer stands; a legacy entry could repeat it or bring
+#: back what they removed.
+OWN_EDUCATION = """
+SELECT DISTINCT user_id FROM education_entries
+WHERE legacy_bubble_id IS NULL OR deleted_at IS NOT NULL
+"""
+
+#: Accounts deleted in the new app. The purge removes their education and keeps
+#: ``legacy_bubble_id``, so an insert would restore data they asked us to delete.
+DELETED_ACCOUNTS = "SELECT id FROM users WHERE deleted_at IS NOT NULL"
+
+#: People who already hold their one live most-recent entry (a unique index).
+MOST_RECENT_HELD = """
+SELECT user_id FROM education_entries WHERE is_most_recent AND deleted_at IS NULL
+"""
+
+UPSERT_EDUCATION = (
+    INSERT_EDUCATION
+    + """ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     user_id         = EXCLUDED.user_id,
     created_at      = EXCLUDED.created_at,
     updated_at      = EXCLUDED.updated_at,
@@ -127,7 +152,8 @@ ON CONFLICT (legacy_bubble_id) DO UPDATE SET
     date_start      = EXCLUDED.date_start,
     date_end        = EXCLUDED.date_end,
     is_most_recent  = EXCLUDED.is_most_recent
-"""
+"""  # nosec B608 - two module constants joined; every value is bound
+)
 
 # `institution_id` is deliberately not written. Institutions are matched in a
 # separate, re-runnable pass (ADR 0008) — the link is an UPDATE against these
@@ -167,6 +193,46 @@ INSERT INTO mentee_goal_countries (user_id, country_id, priority)
 VALUES (:user_id, :country_id, :priority)
 ON CONFLICT (user_id, country_id) DO UPDATE SET priority = EXCLUDED.priority
 """
+
+
+def _known_user(users: dict[str, UUID], bubble_id: str, what: str) -> UUID:
+    resolved = users.get(bubble_id)
+    if resolved is None:
+        # Cannot happen if the identity load ran first and reconciled, and
+        # a foreign key would catch it anyway. Skipping silently is what
+        # must not happen, so this raises.
+        raise LookupError(f"{what} references unknown user {bubble_id}")
+    return resolved
+
+
+@dataclass(frozen=True, slots=True)
+class EducationAdded:
+    """What an insert-only education run did, row by row."""
+
+    added: int = 0
+    already_there: int = 0
+    has_own_education: int = 0
+    deleted_account: int = 0
+
+
+def _education_params(
+    entry: EducationRow, owner: UUID, degrees: dict[str, UUID]
+) -> dict[str, object]:
+    return {
+        "user_id": owner,
+        "legacy_bubble_id": entry.legacy_bubble_id,
+        "created_at": entry.created_at,
+        "updated_at": entry.updated_at,
+        "school_name_raw": entry.school_name_raw,
+        "degree_category": entry.degree_category,
+        "degree_level_id": degrees.get(entry.degree_level_slug or ""),
+        "degree_abbreviation": entry.degree_abbreviation,
+        "study_course": entry.study_course,
+        "study_program": entry.study_program,
+        "date_start": entry.date_start,
+        "date_end": entry.date_end,
+        "is_most_recent": entry.is_most_recent,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,13 +292,7 @@ class ProfileLoader:
         countries: Resolution,
     ) -> ProfileCounts:
         def user_id(bubble_id: str, what: str) -> UUID:
-            resolved = users.get(bubble_id)
-            if resolved is None:
-                # Cannot happen if the identity load ran first and reconciled, and
-                # a foreign key would catch it anyway. Skipping silently is what
-                # must not happen, so this raises.
-                raise LookupError(f"{what} references unknown user {bubble_id}")
-            return resolved
+            return _known_user(users, bubble_id, what)
 
         skipped_countries: set[str] = set()
 
@@ -366,21 +426,7 @@ class ProfileLoader:
         for entry in education:
             await self._connection.execute(
                 text(UPSERT_EDUCATION),
-                {
-                    "user_id": user_id(entry.user_bubble_id, "education entry"),
-                    "legacy_bubble_id": entry.legacy_bubble_id,
-                    "created_at": entry.created_at,
-                    "updated_at": entry.updated_at,
-                    "school_name_raw": entry.school_name_raw,
-                    "degree_category": entry.degree_category,
-                    "degree_level_id": degrees.get(entry.degree_level_slug or ""),
-                    "degree_abbreviation": entry.degree_abbreviation,
-                    "study_course": entry.study_course,
-                    "study_program": entry.study_program,
-                    "date_start": entry.date_start,
-                    "date_end": entry.date_end,
-                    "is_most_recent": entry.is_most_recent,
-                },
+                _education_params(entry, user_id(entry.user_bubble_id, "education entry"), degrees),
             )
             education_count += 1
 
@@ -422,4 +468,51 @@ class ProfileLoader:
             # legitimately writes no goal countries — `Country Goal` is blank on
             # every row — and a report that does not say so reads as coverage.
             empty_tables=tuple(name for name, n in counted.items() if n == 0),
+        )
+
+    async def add_education(
+        self,
+        *,
+        users: dict[str, UUID],
+        education: Sequence[EducationRow],
+        degrees: dict[str, UUID],
+    ) -> EducationAdded:
+        """Insert-only, into a database people already use (decision 364).
+
+        Never updates a row and never writes for someone who has entered
+        education in the new app; each is counted rather than skipped silently.
+        """
+
+        async def ids(query: str) -> set[UUID]:
+            return set((await self._connection.execute(text(query))).scalars())
+
+        deleted, own, held = (
+            await ids(DELETED_ACCOUNTS),
+            await ids(OWN_EDUCATION),
+            await ids(MOST_RECENT_HELD),
+        )
+        added = already_there = has_own = gone = 0
+        for entry in education:
+            owner = _known_user(users, entry.user_bubble_id, "education entry")
+            if owner in deleted:
+                gone += 1
+                continue
+            if owner in own:
+                has_own += 1
+                continue
+            params = _education_params(entry, owner, degrees)
+            # The entry already marked most recent keeps the mark.
+            params["is_most_recent"] = entry.is_most_recent and owner not in held
+            inserted = await self._connection.execute(text(ADD_EDUCATION), params)
+            if inserted.first() is None:
+                already_there += 1
+                continue
+            added += 1
+            if params["is_most_recent"]:
+                held.add(owner)
+        return EducationAdded(
+            added=added,
+            already_there=already_there,
+            has_own_education=has_own,
+            deleted_account=gone,
         )
