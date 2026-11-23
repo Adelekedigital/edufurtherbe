@@ -27,8 +27,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import BOOKING_WINDOW_CEILING
-from app.domain.enums import AdminRole, ApplicationStage, PrimaryRole
+from app.domain.enums import AdminRole, ApplicationStage, PrimaryRole, QuestionType
 from app.domain.sessions import first_stage
+from app.infra.db.intake_store import insert_question
 from app.infra.db.offerings import set_session_type_offerings
 from app.infra.db.provisioning_store import GRANT
 from app.infra.db.slugs import give_slug
@@ -488,18 +489,15 @@ async def apply_demo_session_types(
         )
         if not has_questions:
             for order, question in enumerate(template.questions):
-                await session.execute(
-                    text(
-                        "INSERT INTO session_type_questions (session_type_id, question_text, "
-                        " question_type, is_required, display_order, created_by) "
-                        "VALUES (:t, :q, 'free_text', :r, :o, :u)"
-                    ),
-                    {
-                        "t": type_id,
-                        "q": question.text,
-                        "r": question.required,
-                        "o": order,
-                        "u": user,
+                await insert_question(
+                    session,
+                    type_id,
+                    created_by=user,
+                    payload={
+                        "question_text": question.text,
+                        "question_type": QuestionType.FREE_TEXT,
+                        "is_required": question.required,
+                        "display_order": order,
                     },
                 )
         first_id = first_id if first_id is not None else type_id

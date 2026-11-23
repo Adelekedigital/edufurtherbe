@@ -16,6 +16,7 @@ The ETL's recovery plan is a re-run, so every write here has to survive one.
 ``session_type_booking_…``   ``ON CONFLICT (session_type_id)``
 ``session_participants``     ``ON CONFLICT (session_id, user_id)``
 ``session_events``           **deleted and rewritten** — it has no key
+``session_type_questions``   written only on a type that never had one
 ===========================  ===============================================
 
 ``session_events`` carries no ``legacy_bubble_id``: it is derived from columns
@@ -53,7 +54,8 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain.enums import MeetingProvider
-from app.domain.transform.sessions import SessionPlan
+from app.domain.transform.sessions import GENERAL_MENTORSHIP, SessionPlan
+from app.infra.db.default_form import give_default_form
 from app.infra.db.triggers import timestamps_from_source_across
 
 __all__ = ["SessionLoader"]
@@ -65,6 +67,17 @@ UserResolver = Callable[[str, str], UUID]
 
 #: Only this one carries Bubble's timestamps. See the module docstring.
 STAMPED_TABLES = ("sessions",)
+
+# The type an earlier load made, under its name then or now. Decision 367
+# renamed the default, so a reload matching on the new name alone would make
+# a second offering and move every migrated session onto it. The current name
+# wins when both exist.
+FIND_LOADED_TYPE = """
+SELECT id, name FROM session_types
+WHERE mentor_user_id = :mentor_user_id AND deleted_at IS NULL AND name = ANY(:names)
+ORDER BY name = :name DESC
+LIMIT 1
+"""
 
 # `DO UPDATE` rather than `DO NOTHING`, because `RETURNING id` yields no row on a
 # conflict that did nothing — and the id is what the next table needs.
@@ -247,15 +260,26 @@ class SessionLoader:
     ) -> dict[str, UUID]:
         type_ids: dict[str, UUID] = {}
         for row in plan.session_types:
-            result = await self._connection.execute(
-                text(UPSERT_SESSION_TYPE),
-                {
-                    "mentor_user_id": user_id(row.mentor_bubble_id, "session type"),
-                    "name": row.name,
-                },
-            )
-            type_id = result.scalar_one()
+            names = {
+                "mentor_user_id": user_id(row.mentor_bubble_id, "session type"),
+                "name": row.name,
+            }
+            found = (
+                await self._connection.execute(
+                    text(FIND_LOADED_TYPE), {**names, "names": [row.name, GENERAL_MENTORSHIP]}
+                )
+            ).one_or_none()
+            if found is None:
+                result = await self._connection.execute(text(UPSERT_SESSION_TYPE), names)
+                type_id, name = result.scalar_one(), row.name
+            else:
+                type_id, name = found.id, found.name
             type_ids[row.mentor_bubble_id] = type_id
+            # The default form (decision 367), on a type under the current name
+            # that never had one: a re-run, or a form the mentor changed, gets
+            # nothing. One still under the old name is `adopt_default_form`'s.
+            if name == row.name:
+                await give_default_form(self._connection, type_id)
             await self._connection.execute(
                 text(UPSERT_BOOKING_CONFIG),
                 {

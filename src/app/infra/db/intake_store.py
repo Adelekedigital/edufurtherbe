@@ -28,7 +28,7 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
 from app.domain.enums import IntakeStatus, QuestionOptionsSource, QuestionType
@@ -49,6 +49,7 @@ __all__ = [
     "as_asked",
     "create_question",
     "delete_question",
+    "insert_question",
     "list_questions",
     "live_question",
     "live_question_count",
@@ -223,6 +224,34 @@ async def _insert_options(
         )
 
 
+async def insert_question(
+    executor: AsyncSession | AsyncConnection,
+    session_type_id: UUID,
+    *,
+    created_by: UUID | None,
+    payload: dict[str, Any],
+) -> UUID:
+    """The one insert of a question row, its options aside: a mentor's own
+    (`create_question`) and the default form (`default_form`). ``created_by``
+    is null for a question no person wrote."""
+    result = await executor.execute(
+        insert(SessionTypeQuestion)
+        .values(
+            session_type_id=session_type_id,
+            created_by=created_by,
+            question_text=payload["question_text"],
+            question_type=payload["question_type"],
+            is_required=payload["is_required"],
+            display_order=payload["display_order"],
+            allows_multiple=payload.get("allows_multiple", False),
+            options_source=payload.get("options_source"),
+        )
+        .returning(SessionTypeQuestion.id)
+    )
+    question_id: UUID = result.scalar_one()
+    return question_id
+
+
 async def create_question(
     session: AsyncSession, mentor_user_id: UUID, session_type_id: UUID, payload: dict[str, Any]
 ) -> UUID | None:
@@ -250,22 +279,9 @@ async def create_question(
             "delete one before adding another"
         )
 
-    question_id: UUID = (
-        await session.execute(
-            insert(SessionTypeQuestion)
-            .values(
-                session_type_id=session_type_id,
-                created_by=mentor_user_id,
-                question_text=payload["question_text"],
-                question_type=payload["question_type"],
-                is_required=payload["is_required"],
-                display_order=payload["display_order"],
-                allows_multiple=payload.get("allows_multiple", False),
-                options_source=payload.get("options_source"),
-            )
-            .returning(SessionTypeQuestion.id)
-        )
-    ).scalar_one()
+    question_id = await insert_question(
+        session, session_type_id, created_by=mentor_user_id, payload=payload
+    )
     # The boundary has already refused options on anything but `multi_choice`.
     await _insert_options(session, question_id, [o["text"] for o in payload.get("options") or []])
     return question_id

@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.domain.enums import QuestionType
+from app.domain.enums import QuestionOptionsSource, QuestionType
 
 #: At most five questions on one offering's form.
 #:
@@ -43,6 +43,33 @@ MAX_OPTION_LENGTH = 200
 
 #: One text answer, the same bound a booking message has.
 MAX_ANSWER_LENGTH = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class DefaultQuestion:
+    """One question of the form every mentor's default offering starts with."""
+
+    question_text: str
+    question_type: QuestionType
+    options_source: QuestionOptionsSource | None = None
+
+
+#: **The offering every mentor starts with, and what it asks** (owner,
+#: 2026-11-23; decision 367). The legacy app asked each booking for a topic and
+#: a message; this is that pair as an intake form. Both questions are required,
+#: in this order, and the first is single choice from the mentor's live help
+#: areas, so a mentor with none is never blocking (`is_required_now`).
+#: Onboarding creates it from the frontend with the same name and questions;
+#: the legacy load and `scripts/adopt_default_form.py` write it here.
+DEFAULT_SESSION_TYPE_NAME = "1:1 mentorship session"
+DEFAULT_FORM: tuple[DefaultQuestion, ...] = (
+    DefaultQuestion(
+        "Which area do you need help with most?",
+        QuestionType.MULTI_CHOICE,
+        QuestionOptionsSource.HELP_AREAS,
+    ),
+    DefaultQuestion("What would you like to talk about?", QuestionType.FREE_TEXT),
+)
 
 
 @dataclass(frozen=True, slots=True)
