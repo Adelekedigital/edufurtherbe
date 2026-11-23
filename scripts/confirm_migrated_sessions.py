@@ -28,10 +28,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime as dt
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
+from app.domain.notifications import session_reminders_for
 from app.infra.clients.meetings import NullCalendar, NullRooms, calendar_for, rooms_for
 from app.infra.clients.scheduler import NullScheduler, callback_destination, scheduler_for
 from app.infra.db.engine import create_database_engine, create_session_factory
@@ -84,13 +86,17 @@ async def run(*, apply: bool, engine: AsyncEngine, follow_ups: FollowUps) -> int
     if not apply:
         print("dry run: nothing changed")
         return EXIT_OK
-    for session_id, _ in due:
+    short: list[tuple[UUID, str]] = []
+    for session_id, starts_at in due:
         async with sessions() as session:
             await clear_legacy_venue(session, session_id, now=now)
-            await on_confirmed(session, session_id, follow_ups, now=now)
+            published = await on_confirmed(session, session_id, follow_ups, now=now)
             await session.commit()
+        owed = len(session_reminders_for(starts_at, now=now))
+        if published < owed:
+            short.append((session_id, f"{published} of {owed} reminders scheduled"))
     async with sessions() as session:
-        gaps = await confirmation_gaps(session, [session_id for session_id, _ in due])
+        gaps = await confirmation_gaps(session, [session_id for session_id, _ in due]) + short
     print(f"confirmed: {len(due)}, incomplete: {len({session_id for session_id, _ in gaps})}")
     for session_id, gap in gaps:
         print(f"  {session_id}: {gap}")

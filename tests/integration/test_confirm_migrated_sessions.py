@@ -239,3 +239,18 @@ async def test_clearing_never_touches_a_venue_the_new_app_gave(
 
     assert await venue_of(engine, native) == before
     assert before["meeting_url"] is not None
+
+
+async def test_reminders_qstash_refused_are_reported(
+    api_client: httpx.AsyncClient, engine: AsyncEngine, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The invite and room succeed, so the session is not listed again: a
+    reminder that failed to publish must be named, not counted complete."""
+    session_id = await booked(api_client, engine, "cm-noremind")
+    await as_loaded(engine, session_id)
+    wired, *_ = follow_ups()
+    wired = replace(wired, scheduler=FakeScheduler(fails=True))
+
+    assert await run(apply=True, engine=engine, follow_ups=wired) == 1
+
+    assert f"{session_id}: 0 of 4 reminders scheduled" in capsys.readouterr().out

@@ -62,8 +62,9 @@ class FollowUps:
 
 async def on_confirmed(
     session: AsyncSession, session_id: UUID, follow_ups: FollowUps, *, now: dt.datetime
-) -> None:
+) -> int:
     """Give a confirmed session its venue and invite, then its reminders.
+    Returns how many reminders were published (0 for a session not confirmed).
 
     **A no-op unless the session is confirmed**, so a booking that waits for
     the mentor can call it too: that request gets both at `/accept`. Telling
@@ -76,7 +77,7 @@ async def on_confirmed(
         )
     )
     if starts_at is None:
-        return
+        return 0
     # The venue first: if it fails in a way nothing catches, the booking rolls
     # back before any reminder reaches QStash for a session that never was.
     await provision_meeting(
@@ -87,7 +88,7 @@ async def on_confirmed(
         app_base_url=follow_ups.app_base_url,
     )
     # Off the event loop (#370): four QStash round trips.
-    await asyncio.to_thread(
+    return await asyncio.to_thread(
         schedule_session_reminders,
         session_id,
         starts_at,
