@@ -284,12 +284,40 @@ Owner gave **go** on 22 Nov 2026. Times are UTC.
   snippet: the app already loads `posthog-js` through `/ingest`. The banner
   clears once the first page view arrives.
 
-**Still open after go:** the frontend half of the smoke checks (sign in,
-Explore, profile, test booking, message, with internal accounts); the `429`
-check on `app.edufurther.org` (step 7.4); the live presence check (step 6.3);
-the frontend's session replay on every screen (frontend PR 703), which also
-asks everyone for consent again; the announcement, scheduled for Mon 23 Nov
-11:59 PM New York; and stopping the legacy app's outgoing messages by 24 Nov.
+**After go, 22–23 Nov (UTC):**
+
+| Time | What | Result |
+|---|---|---|
+| 22:30–23:30 | Every QStash callback answered `401` | Production's `QSTASH_CURRENT_SIGNING_KEY` had one extra character on the end; the owner re-pasted it from Upstash (US-East region). `settle-sessions` answered `200` at 23:32 |
+| 00:40 | `scripts/confirm_migrated_sessions.py --apply` (#727, decision 366) | The 3 upcoming migrated sessions got their own EduFurther video room, an invite to both parties and 4 reminders; the mentors' reused personal Meet links were removed |
+| 00:33 | #728 in production | Leaving a Daily call sends the mentor to `/dashboard`, the mentee to the session page `?from=call`; screen sharing on |
+| 02:05 | #730 in production, `CALL_GRACE_AFTER_END_MINUTES=45` | Rejoin allowed until 45 min after the scheduled end. The 3 production and 2 staging rooms made earlier were extended to end + 60 **before** the setting went on |
+| 02:30 | Smoke checks | Pass (cutover page). Owner: no test booking or message on production, which is real data; both are proven on staging. 429 checked by reading the firewall rule |
+| 03:10 | Legacy outgoing messages | The owner **paused** the legacy app's Live scheduler (Logs → Scheduler → Pause tasks). Pause, not cancel, so the legacy app stays a rollback |
+
+**More lessons:**
+
+- **Compare every copied secret with its source, not by eye.** The QStash key
+  looked right in both dashboards. A length and equality check against
+  `GET /v2/keys` (printing only "matches") found the extra character.
+- **A loaded upcoming session gets no room, invite or reminders.** Run
+  `confirm_migrated_sessions.py` (dry run first) after the final load. It drops the
+  legacy venue, which was a mentor's personal room reused across sessions.
+- **Change a room's lifetime before the setting that relies on it.** A room
+  made before #730 closed at the end, so the grace would have handed out
+  tokens for a closed room. Extend the rooms through Daily's room update, then
+  set the grace.
+
+**Confidence period: ends Tue 22 Dec 2026** (owner). Until then the legacy
+app stays frozen, paid for and paused (never resume except as a real
+rollback: stale items would run). After it: cancel the legacy scheduler
+queue, remove `BUBBLE_API_TOKEN` and `BUBBLE_API_URL` from Railway dev and the
+operator's `.env`, and delete the local `data/bubble-prod-*` exports.
+
+**Still open:** the live presence check (step 6.3), on the staging test call
+Mon 23 Nov 14:00 UTC; the announcement, Mon 23 Nov 11:59 PM New York; the
+first-impressions survey, two PostHog drafts, launch ~1 Dec after the
+frontend's survey PR.
 
 ## 11. Open launch items
 
