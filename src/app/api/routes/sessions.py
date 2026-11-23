@@ -32,6 +32,7 @@ from fastapi import APIRouter, Response, status
 from app.api.deps import (
     AcceptedSessionDep,
     BookedSessionDep,
+    CallGraceDep,
     CancelledSessionDep,
     DeclinedSessionDep,
     JoinedSessionDep,
@@ -150,11 +151,14 @@ LIST_RESPONSES: dict[int | str, dict[str, str]] = {
     responses=LIST_RESPONSES,
 )
 async def list_user_sessions(
-    page: SessionsPageDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+    page: SessionsPageDep, lead: JoinLeadDep, grace: CallGraceDep, refunds: RefundPolicyDep
 ) -> Page[SessionRead]:
     rows, next_cursor = page
     return Page(
-        data=[SessionRead.from_row(row, opens_before=lead, refunds=refunds) for row in rows],
+        data=[
+            SessionRead.from_row(row, opens_before=lead, closes_after=grace, refunds=refunds)
+            for row in rows
+        ],
         next_cursor=next_cursor,
     )
 
@@ -173,9 +177,9 @@ async def list_user_sessions(
     responses=READ_RESPONSES,
 )
 async def read_session(
-    session: SessionDetailDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+    session: SessionDetailDep, lead: JoinLeadDep, grace: CallGraceDep, refunds: RefundPolicyDep
 ) -> SessionRead:
-    return SessionRead.from_row(session, opens_before=lead, refunds=refunds)
+    return SessionRead.from_row(session, opens_before=lead, closes_after=grace, refunds=refunds)
 
 
 @router.get(
@@ -823,6 +827,6 @@ REMINDER_RESPONSES: dict[int | str, dict[str, str]] = {
     responses=REMINDER_RESPONSES,
 )
 async def remind_mentor(
-    session: RemindedSessionDep, lead: JoinLeadDep, refunds: RefundPolicyDep
+    session: RemindedSessionDep, lead: JoinLeadDep, grace: CallGraceDep, refunds: RefundPolicyDep
 ) -> SessionRead:
-    return SessionRead.from_row(session, opens_before=lead, refunds=refunds)
+    return SessionRead.from_row(session, opens_before=lead, closes_after=grace, refunds=refunds)

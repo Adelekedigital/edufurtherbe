@@ -20,7 +20,7 @@ from app.core.config import (
     env_key,
     get_settings,
 )
-from app.domain.attendance import JOIN_LEAD_CEILING
+from app.domain.attendance import CALL_GRACE_CEILING, JOIN_LEAD_CEILING
 from app.domain.sessions import CANCELLATION_CUTOFF
 from app.domain.suggestions import SUGGESTION_HOLD
 
@@ -328,6 +328,26 @@ def test_a_join_lead_past_the_cancellation_cutoff_is_refused(value: int) -> None
     and release the session."""
     with pytest.raises(PydanticValidationError):
         Settings(_env_file=None, join_window_opens_minutes=value)
+
+
+def test_the_call_grace_is_the_scheduled_end_unless_configured() -> None:
+    """Unset is 0: the door closes at the scheduled end, as before (owner,
+    2026-11-22; production sets 45)."""
+    assert Settings(_env_file=None).call_grace_after_end_minutes == 0
+
+
+GRACE_CEILING_MINUTES = int(CALL_GRACE_CEILING.total_seconds() // 60)
+
+
+def test_the_call_grace_is_capped_at_the_rooms_ceiling() -> None:
+    """Rooms are made open for `CALL_GRACE_CEILING` after the end, so a grace
+    past it would hand out tokens for a room Daily has closed. The bound is a
+    literal in config; this pins the two."""
+    assert Settings(_env_file=None, call_grace_after_end_minutes=GRACE_CEILING_MINUTES)
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, call_grace_after_end_minutes=GRACE_CEILING_MINUTES + 1)
+    with pytest.raises(PydanticValidationError):
+        Settings(_env_file=None, call_grace_after_end_minutes=-1)
 
 
 def test_the_join_lead_ceiling_is_the_cancellation_cutoff() -> None:

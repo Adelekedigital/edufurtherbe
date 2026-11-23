@@ -341,6 +341,16 @@ class Settings(BaseSettings):
         default=10, ge=0, le=10, validation_alias=env_key("join_window_opens_minutes")
     )
 
+    #: Minutes after a session's scheduled end during which a party may still
+    #: (re)enter the call, for an overrun with a dropped connection (owner,
+    #: 2026-11-22: 45 in production). Unset is 0: the scheduled end. Read only
+    #: through `domain.attendance.call_grace`. **Capped at 60**, the ceiling
+    #: rooms are made with (`CALL_GRACE_CEILING`, repeated here as a literal
+    #: because config may not import the domain; a test pins the two).
+    call_grace_after_end_minutes: int = Field(
+        default=0, ge=0, le=60, validation_alias=env_key("call_grace_after_end_minutes")
+    )
+
     #: How many hours' notice a mentee's cancellation needs for the credit to
     #: come back (decision 229; a deploy setting since the owner's call of
     #: 2026-10-10). Read through `domain.refunds.refund_policy`, the one reader.

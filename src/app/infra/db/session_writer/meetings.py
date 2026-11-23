@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.attendance import (
+    CALL_GRACE_CEILING,
     DOOR_STATUSES,
     JOIN_LEAD_CEILING,
     door_window,
@@ -143,7 +144,10 @@ async def provision_meeting(
     # the configured lead, so the token decides and a changed setting applies
     # to every session at once.
     opens, closes = door_window(
-        row["starts_at"], int(row["duration_minutes"]), opens_before=JOIN_LEAD_CEILING
+        row["starts_at"],
+        int(row["duration_minutes"]),
+        opens_before=JOIN_LEAD_CEILING,
+        closes_after=CALL_GRACE_CEILING,
     )
     # **Every provider call off the event loop** (#370): these are blocking
     # HTTP round trips inside a booking or an accept, and on the loop each one

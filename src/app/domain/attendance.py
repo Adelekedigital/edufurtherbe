@@ -49,6 +49,7 @@ from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
 from app.domain.sessions import CANCELLATION_CUTOFF
 
 __all__ = [
+    "CALL_GRACE_CEILING",
     "DOOR_STATUSES",
     "JOIN_CLOSES",
     "JOIN_LEAD_CEILING",
@@ -57,6 +58,7 @@ __all__ = [
     "PRESENCE_REPORTING",
     "AttendanceEvidence",
     "absent_party",
+    "call_grace",
     "door_window",
     "join_closes_at",
     "join_opens",
@@ -119,6 +121,14 @@ class AttendanceEvidence(StrEnum):
 #: import the domain, and a test pins the two together.
 JOIN_LEAD_CEILING = CANCELLATION_CUTOFF
 
+#: The longest a room stays open after a session's scheduled end, so a party
+#: whose connection drops during an overrun can get back in (owner,
+#: 2026-11-22). A room is made with this ceiling and each token carries the
+#: configured `call_grace`, so a changed setting applies to every room at once,
+#: the same shape as `JOIN_LEAD_CEILING`. `core/config.py` repeats it as a
+#: literal bound; a test pins the two.
+CALL_GRACE_CEILING = dt.timedelta(minutes=60)
+
 
 def join_opens(settings: Settings) -> dt.timedelta:
     """How long before the start a party may press Join: the one reader of
@@ -130,6 +140,14 @@ def join_opens(settings: Settings) -> dt.timedelta:
     same instant, because they are built from the same window.
     """
     return dt.timedelta(minutes=settings.join_window_opens_minutes)
+
+
+def call_grace(settings: Settings) -> dt.timedelta:
+    """How long after the scheduled end a party may still get back into the
+    call: the one reader of `call_grace_after_end_minutes` (0, the end itself,
+    unless set; 45 in production, owner 2026-11-22). Nobody is ever removed
+    from a call; this only decides who may (re)enter."""
+    return dt.timedelta(minutes=settings.call_grace_after_end_minutes)
 
 
 #: How late. **Also when the session's outcome becomes decidable**, which is the
@@ -182,10 +200,15 @@ DOOR_STATUSES = frozenset({SessionStatus.CONFIRMED, SessionStatus.COMPLETED, Ses
 
 
 def door_window(
-    starts_at: dt.datetime, duration_minutes: int, *, opens_before: dt.timedelta
+    starts_at: dt.datetime,
+    duration_minutes: int,
+    *,
+    opens_before: dt.timedelta,
+    closes_after: dt.timedelta,
 ) -> tuple[dt.datetime, dt.datetime]:
     """When a party may be handed a way into the room: from the join window
-    opening until the session's end (#379).
+    opening until the session's end plus ``closes_after`` (#379; the grace is
+    `call_grace`, owner 2026-11-22).
 
     **Not the join window, and the difference is the point.** That window
     closes fifteen minutes in (or at a shorter session's end) because it is also
@@ -199,15 +222,22 @@ def door_window(
     valid before it, so a door issued sooner would open onto nothing.
     """
     opens, _ = join_window(starts_at, duration_minutes, opens_before=opens_before)
-    return opens, session_ends_at(starts_at, duration_minutes)
+    return opens, session_ends_at(starts_at, duration_minutes) + closes_after
 
 
 def within_door_window(
-    starts_at: dt.datetime, duration_minutes: int, now: dt.datetime, *, opens_before: dt.timedelta
+    starts_at: dt.datetime,
+    duration_minutes: int,
+    now: dt.datetime,
+    *,
+    opens_before: dt.timedelta,
+    closes_after: dt.timedelta,
 ) -> bool:
     """Whether a door may be issued at ``now``. Half-open, like the join window:
-    the session's last instant is already over."""
-    opens, closes = door_window(starts_at, duration_minutes, opens_before=opens_before)
+    the window's last instant is already over."""
+    opens, closes = door_window(
+        starts_at, duration_minutes, opens_before=opens_before, closes_after=closes_after
+    )
     return opens <= now < closes
 
 
