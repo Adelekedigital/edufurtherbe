@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from app.domain.enums import ConferencingProvider
-from app.domain.meetings import plan_for
+from app.domain.meetings import call_exit_url, plan_for
 
 
 def test_meet_asks_the_calendar_and_creates_no_room() -> None:
@@ -60,3 +60,17 @@ def test_exactly_one_source_of_a_url_per_provider(provider: ConferencingProvider
 
     sources = [plan.needs_room, plan.wants_conference, plan.reuses_a_static_room]
     assert sum(sources) == 1, f"{provider} has {sum(sources)} sources of a meeting URL"
+
+
+def test_the_mentor_leaves_for_the_dashboard_and_the_mentee_for_the_session() -> None:
+    base = "https://app.example.test/"
+    assert call_exit_url(base, "s-1", is_mentor=True) == "https://app.example.test/dashboard"
+    assert (
+        call_exit_url(base, "s-1", is_mentor=False)
+        == "https://app.example.test/sessions/s-1?from=call"
+    )
+
+
+def test_no_app_origin_means_no_exit_url() -> None:
+    assert call_exit_url("", "s-1", is_mentor=True) is None
+    assert call_exit_url("", "s-1", is_mentor=False) is None

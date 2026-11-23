@@ -47,7 +47,7 @@ from app.core.errors import (
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
-from app.domain.meetings import meet_invite_for, meet_link_for
+from app.domain.meetings import call_exit_url, meet_invite_for, meet_link_for
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS, response_window
 from app.infra.clients.meetings import (
@@ -672,6 +672,11 @@ async def _door_for(
             is_owner=bool(row["is_mentor"]),
             opens_at=opens,
             closes_at=closes,
+            exit_url=call_exit_url(
+                _configured(request).app_base_url or "",
+                str(session_id),
+                is_mentor=bool(row["is_mentor"]),
+            ),
         )
     except (VenueUnavailableError, NotImplementedError) as exc:
         # **Not a failure of the request.** What is missing is a way in, and

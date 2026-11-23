@@ -28,6 +28,7 @@ from tests.integration.test_api_meeting_provisioning import (
     venue_of,
 )
 
+from app.core.config import Settings
 from app.infra.clients.meetings import MeetingRoom, VenueUnavailableError
 from conftest import A_REASON
 
@@ -236,6 +237,25 @@ async def test_only_the_mentor_door_carries_owner_rights(
 
     (mentee_token,) = door.tokens
     assert mentee_token["is_owner"] is False
+
+
+async def test_each_party_leaves_the_call_for_their_own_page(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """Owner, 2026-11-22: the mentor goes back to their dashboard, the mentee to
+    the session page marked `?from=call`, where the review prompt opens. Built
+    from the configured app origin, never from the request."""
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = Settings(_env_file=None, app_base_url="https://app.example.test")
+    setup = await a_mentor_on(db_engine, "door-exit", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=1)
+
+    await api_client.post(door_url(session), headers=setup["mentor_headers"])
+    await api_client.post(door_url(session), headers=setup["mentee_headers"])
+
+    mentor, mentee = door.tokens
+    assert mentor["exit_url"] == "https://app.example.test/dashboard"
+    assert mentee["exit_url"] == f"https://app.example.test/sessions/{session['id']}?from=call"
 
 
 async def test_a_custom_venue_door_is_the_stored_address(
