@@ -159,6 +159,7 @@ class RoomsPort(Protocol):
         is_owner: bool,
         opens_at: dt.datetime,
         closes_at: dt.datetime,
+        exit_url: str | None = None,
     ) -> str: ...
 
     def sightings(self, room: str) -> list[Sighting]: ...
@@ -213,10 +214,11 @@ class NullRooms:
         is_owner: bool,
         opens_at: dt.datetime,
         closes_at: dt.datetime,
+        exit_url: str | None = None,
     ) -> str:
         """A Daily room made while a key was set, asked for after it was removed:
         no door, which `/door` answers as such rather than as a 500."""
-        del user_id, user_name, is_owner, opens_at, closes_at
+        del user_id, user_name, is_owner, opens_at, closes_at, exit_url
         raise VenueUnavailableError(f"no room provider configured — no token for {room!r}")
 
 
@@ -297,6 +299,9 @@ class DailyRooms:
                     # So a refused join is visibly refused rather than a blank
                     # page the participant has to interpret.
                     "enable_prejoin_ui": True,
+                    # Stated rather than left to the domain default (owner,
+                    # 2026-11-22): sharing a document is half of mentoring.
+                    "enable_screenshare": True,
                 },
             },
         )
@@ -311,6 +316,7 @@ class DailyRooms:
         is_owner: bool,
         opens_at: dt.datetime,
         closes_at: dt.datetime,
+        exit_url: str | None = None,
     ) -> str:
         """A short-lived credential for one person, minted when they ask.
 
@@ -336,6 +342,12 @@ class DailyRooms:
                     "is_owner": is_owner,
                     "nbf": int(opens_at.timestamp()),
                     "exp": int(closes_at.timestamp()),
+                    # On the token too, so a room made before the room-level
+                    # setting still lets this person share.
+                    "enable_screenshare": True,
+                    # Where Daily sends this person when they leave the call
+                    # (`domain.meetings.call_exit_url`); unset, Daily's own page.
+                    **({"redirect_on_meeting_exit": exit_url} if exit_url else {}),
                 }
             },
         )

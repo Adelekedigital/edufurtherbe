@@ -47,7 +47,7 @@ from app.core.errors import (
 from app.domain.attendance import door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
-from app.domain.meetings import meet_invite_for, meet_link_for
+from app.domain.meetings import call_exit_url, meet_invite_for, meet_link_for
 from app.domain.refunds import RefundPolicy, refund_policy
 from app.domain.sessions import TRANSITIONS, response_window
 from app.infra.clients.meetings import (
@@ -57,7 +57,7 @@ from app.infra.clients.meetings import (
     calendar_for,
     rooms_for,
 )
-from app.infra.clients.scheduler import SchedulerPort, scheduler_for
+from app.infra.clients.scheduler import SchedulerPort, callback_destination, scheduler_for
 from app.infra.db.idempotency import Replayed, record_response
 from app.infra.db.missed_reasons import send_missed_reason
 from app.infra.db.onboarding_store import require_finished_onboarding
@@ -76,6 +76,7 @@ from app.infra.db.session_store import (
     list_sessions,
 )
 from app.infra.db.session_writer import (
+    REMINDER_CALLBACK_PATH,
     FollowUps,
     add_meet_link,
     book_session,
@@ -277,13 +278,6 @@ def _calendar(request: Request) -> CalendarPort:
     return calendar_for(_configured(request))
 
 
-#: Where QStash is told to call back. One constant, because the value is
-#: signed into the token QStash mints — so the path the scheduler publishes
-#: and the path the verifier expects must be the same string, not two that
-#: happen to agree.
-REMINDER_CALLBACK_PATH = "/api/v1/callbacks/reminders"
-
-
 async def booked_session(
     payload: SessionBookingWrite,
     user: CurrentUserDep,
@@ -475,10 +469,8 @@ def _reminder_callback_url(request: Request) -> str | None:
 
 def callback_url(request: Request, path: str) -> str | None:
     """``path`` on this service's configured public origin, or ``None`` when
-    there is none. The one builder of a QStash destination: the scheduler
-    publishes to it and the verifier expects it as the token's `sub`."""
-    base = _configured(request).public_base_url
-    return f"{base.rstrip('/')}{path}" if base else None
+    there is none (`callback_destination`, shared with operator scripts)."""
+    return callback_destination(_configured(request).public_base_url, path)
 
 
 def transitions(action: str) -> Callable[..., Awaitable[None]]:
@@ -672,6 +664,11 @@ async def _door_for(
             is_owner=bool(row["is_mentor"]),
             opens_at=opens,
             closes_at=closes,
+            exit_url=call_exit_url(
+                _configured(request).app_base_url or "",
+                str(session_id),
+                is_mentor=bool(row["is_mentor"]),
+            ),
         )
     except (VenueUnavailableError, NotImplementedError) as exc:
         # **Not a failure of the request.** What is missing is a way in, and

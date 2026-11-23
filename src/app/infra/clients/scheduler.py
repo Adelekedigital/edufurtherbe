@@ -183,6 +183,15 @@ def verify_callback(*, token: str, body: bytes, url: str, signing_keys: tuple[st
     raise UntrustedCallbackError("no configured signing key verifies this callback")
 
 
+def callback_destination(public_base_url: str | None, path: str) -> str | None:
+    """``path`` on this service's public origin, or ``None`` when there is none.
+
+    The one builder of a QStash destination: the scheduler publishes to it and
+    the verifier expects it as the token's `sub`, so both must build the same
+    string. Used by the API and by operator scripts alike."""
+    return f"{public_base_url.rstrip('/')}{path}" if public_base_url else None
+
+
 def scheduler_for(settings: Settings) -> SchedulerPort:
     """QStash when a token is set, otherwise `NullScheduler`. The one place
     either is chosen."""

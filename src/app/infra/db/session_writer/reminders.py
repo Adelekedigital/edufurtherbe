@@ -33,6 +33,12 @@ from app.infra.db.review_eligibility import already_reviewed
 
 logger = logging.getLogger(__name__)
 
+#: Where QStash is told to call back. One constant, because the value is
+#: signed into the token QStash mints, so the path the scheduler publishes
+#: and the path the verifier expects must be the same string. Here rather than
+#: in the API so an operator script schedules to the same path (decision 366).
+REMINDER_CALLBACK_PATH = "/api/v1/callbacks/reminders"
+
 
 def schedule_session_reminders(
     session_id: UUID,

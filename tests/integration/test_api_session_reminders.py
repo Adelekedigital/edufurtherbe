@@ -23,40 +23,16 @@ import httpx
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from tests.integration.scheduler_fakes import FakeScheduler
 from tests.integration.test_api_notifications import a_booking, queued
 from tests.integration.test_api_reminder_callback import PATH, believing_client, signed_headers
 
 from app.core.config import Settings
 from app.domain.notifications import SESSION_REMINDERS, Notification
-from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.session_writer import remind_before_session
 from app.infra.db.session_writer.reminders import schedule_session_reminders
 
 pytestmark = pytest.mark.db
-
-
-class Publisher:
-    """A scheduler that says yes and remembers what it was asked to publish."""
-
-    def __init__(self) -> None:
-        self.published: list[dict[str, Any]] = []
-
-    def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None:
-        self.published.append({"url": url, "body": body, "at": at})
-
-
-class Refusing:
-    """A scheduler that is down.
-
-    Raises `SchedulerError` specifically, because that is what the adapters
-    raise and what the caller catches. A bare `RuntimeError` would propagate and
-    take the confirmation with it — which is the existing contract for booking
-    too, and matching it deliberately rather than widening the catch here.
-    """
-
-    def schedule(self, **kwargs: Any) -> None:
-        del kwargs
-        raise SchedulerError("scheduler unavailable")
 
 
 async def fire(engine: AsyncEngine, session_id: str, kind: str) -> bool:
@@ -84,7 +60,7 @@ def kinds_of(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def test_both_nudges_are_published_for_a_session_far_enough_out() -> None:
-    publisher = Publisher()
+    publisher = FakeScheduler()
     starts_at = dt.datetime(2026, 9, 10, 12, 0, tzinfo=dt.UTC)
 
     count = schedule_session_reminders(
@@ -110,7 +86,7 @@ def test_a_nudge_whose_moment_has_passed_is_dropped_rather_than_fired() -> None:
     notice has its 24-hour reminder already behind it. Firing it on confirmation
     would be the confirmation message again, saying the session is tomorrow when
     the mentee just booked it for tomorrow."""
-    publisher = Publisher()
+    publisher = FakeScheduler()
     starts_at = dt.datetime(2026, 9, 10, 12, 0, tzinfo=dt.UTC)
 
     schedule_session_reminders(
@@ -132,7 +108,7 @@ def test_a_scheduler_that_is_down_does_not_take_the_confirmation_with_it() -> No
         schedule_session_reminders(
             uuid4(),
             dt.datetime(2026, 9, 10, 12, 0, tzinfo=dt.UTC),
-            scheduler=Refusing(),
+            scheduler=FakeScheduler(fails=True),
             callback_url="https://api.example.test/callbacks/reminders",
             now=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
         )
@@ -158,9 +134,9 @@ def test_an_unconfigured_scheduler_publishes_nothing_quietly() -> None:
 # --------------------------------------------------------------------------
 
 
-def wire(client: httpx.AsyncClient) -> Publisher:
+def wire(client: httpx.AsyncClient) -> FakeScheduler:
     """A scheduler on `app.state`, the way a composition root would put one."""
-    publisher = Publisher()
+    publisher = FakeScheduler()
     app = client._transport.app  # type: ignore[attr-defined]
     app.state.scheduler = publisher
     app.state.settings = Settings(_env_file=None, public_base_url="https://api.example.test")

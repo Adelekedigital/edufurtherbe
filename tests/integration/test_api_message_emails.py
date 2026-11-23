@@ -36,11 +36,11 @@ from tests.integration.message_helpers import (
     send,
     thread,
 )
+from tests.integration.scheduler_fakes import FakeScheduler
 
 from app.domain.message_emails import UNREAD_EMAIL_DELAY, held_until
 from app.domain.messages import MessageContext, build_variables
 from app.domain.notifications import Channel, Notification
-from app.infra.clients.scheduler import SchedulerError
 from app.infra.db.message_emails import queue_unread_email
 from app.infra.db.outbox import drain, enqueue
 
@@ -52,17 +52,6 @@ APP = "https://app.example.test"
 SIGNING_KEY = "not-a-real-signing-key-for-local-tests"
 SETTINGS = f"{ROOT}/settings"
 LONG = "word " * 60
-
-
-@dataclass
-class FakeScheduler:
-    published: list[dict[str, Any]] = field(default_factory=list)
-    fails: bool = False
-
-    def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None:
-        if self.fails:
-            raise SchedulerError("qstash said no")
-        self.published.append({"url": url, "body": body, "at": at})
 
 
 @dataclass
