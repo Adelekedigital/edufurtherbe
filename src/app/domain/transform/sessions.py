@@ -101,6 +101,7 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
 )
+from app.domain.intake import DEFAULT_SESSION_TYPE_NAME
 from app.domain.sessions import LIVE_SESSION_STATUSES, request_deadline
 from app.domain.transform.availability import CREATOR_FIELD, DroppedRow
 from app.domain.transform.identity import TransformError
@@ -190,9 +191,8 @@ DROPPED_FIELDS = (
     "sessionTrackedPosthog",
 )
 
-#: The auto-created session type every migrated mentor receives, so their
-#: sessions can carry a `session_type_id` and the column can become NOT NULL
-#: afterwards (package D21).
+#: The name the auto-created session type carried until decision 367 renamed
+#: it to `DEFAULT_SESSION_TYPE_NAME`: what `adopt_default_form` looks for.
 GENERAL_MENTORSHIP = "General Mentorship"
 
 #: Where a mentor has no `CalendarSettings` at all. 45 is the legacy mode on
@@ -1406,7 +1406,9 @@ def plan_sessions(
         session_types.append(
             SessionTypeRow(
                 mentor_bubble_id=mentor,
-                name=GENERAL_MENTORSHIP,
+                # Every migrated mentor gets one, so their sessions carry a
+                # `session_type_id` (package D21); decision 367 named it.
+                name=DEFAULT_SESSION_TYPE_NAME,
                 duration_minutes=minutes,
                 meeting_venue=venue,
             )

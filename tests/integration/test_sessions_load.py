@@ -42,6 +42,7 @@ from app.domain.enums import (
     SessionRole,
     SessionStatus,
 )
+from app.domain.intake import DEFAULT_SESSION_TYPE_NAME
 from app.domain.transform.sessions import (
     ParticipantRow,
     SessionEventRow,
@@ -49,6 +50,7 @@ from app.domain.transform.sessions import (
     SessionRow,
     SessionTypeRow,
 )
+from app.infra.db.default_form import give_default_form
 from app.infra.etl.sessions import UPSERT_CONFERENCING_OPTION, SessionLoader
 from conftest import add_user
 
@@ -221,6 +223,61 @@ async def test_a_second_load_changes_nothing(
     await loader.load(users=users, plan=plan_of())
 
     assert await counts(conn) == first
+
+
+async def test_the_load_gives_each_type_the_default_form_once(
+    seeded: tuple[AsyncConnection, dict[str, UUID]],
+) -> None:
+    """Decision 367: a loaded type asks the topic and the message, and a re-run
+    neither duplicates them nor restores ones the mentor removed."""
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())
+    asked = "SELECT question_text FROM session_type_questions ORDER BY display_order"
+    assert list((await conn.execute(text(asked))).scalars()) == [
+        "Which area do you need help with most?",
+        "What would you like to talk about?",
+    ]
+
+    await conn.execute(text("UPDATE session_type_questions SET deleted_at = now()"))
+    await loader.load(users=users, plan=plan_of())
+
+    live = "SELECT count(*) FROM session_type_questions WHERE deleted_at IS NULL"
+    assert (await conn.execute(text(live))).scalar_one() == 0
+    assert (
+        await conn.execute(text("SELECT count(*) FROM session_type_questions"))
+    ).scalar_one() == 2
+
+
+@pytest.mark.parametrize("adopted", [False, True])
+async def test_a_reload_after_the_rename_keeps_the_one_offering(
+    seeded: tuple[AsyncConnection, dict[str, UUID]], adopted: bool
+) -> None:
+    """Decision 367 renamed the default. A reload under the new name finds the
+    type an earlier load made under the old one, adopted or not, rather than
+    making a second and moving the sessions onto it."""
+    conn, users = seeded
+    loader = SessionLoader(conn)
+    await loader.load(users=users, plan=plan_of())  # the old name, as loaded before
+    await conn.execute(text("DELETE FROM session_type_questions"))
+    if adopted:
+        await conn.execute(
+            text("UPDATE session_types SET name = :n"), {"n": DEFAULT_SESSION_TYPE_NAME}
+        )
+        await give_default_form(
+            conn, (await conn.execute(text("SELECT id FROM session_types"))).scalar_one()
+        )
+    (before,) = (await conn.execute(text("SELECT id FROM session_types"))).scalars()
+
+    renamed = SessionTypeRow(MENTOR, DEFAULT_SESSION_TYPE_NAME, 45, MeetingProvider.DAILY)
+    await loader.load(users=users, plan=plan_of(session_types=(renamed,)))
+
+    assert list((await conn.execute(text("SELECT id FROM session_types"))).scalars()) == [before]
+    held = "SELECT DISTINCT session_type_id FROM sessions"
+    assert list((await conn.execute(text(held))).scalars()) == [before]
+    # One not yet adopted is left for `adopt_default_form`, which also renames it.
+    count = "SELECT count(*) FROM session_type_questions"
+    assert (await conn.execute(text(count))).scalar_one() == (2 if adopted else 0)
 
 
 async def test_bubble_timestamps_survive_the_second_load(

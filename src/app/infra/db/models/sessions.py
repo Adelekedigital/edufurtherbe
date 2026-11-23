@@ -121,9 +121,10 @@ FREES_THE_HOUR = ("declined", "withdrawn", "expired", "cancelled")
 class SessionType(TimestampMixin, Base):
     """What a mentor offers. Availability says *when*; this says *what*.
 
-    **Every migrated mentor receives an auto-created "General Mentorship" row**
-    during the M4 load, so all legacy sessions can carry a ``session_type_id``
-    and the column can become ``NOT NULL`` afterwards — one code path rather than
+    **Every migrated mentor receives an auto-created default row**
+    (`DEFAULT_SESSION_TYPE_NAME`, decision 367) during the M4 load, so all
+    legacy sessions can carry a ``session_type_id`` and the column can become
+    ``NOT NULL`` afterwards — one code path rather than
     a platform-default fallback forever (package D21).
 
     That auto-created row is where legacy ``CalendarSettings.meetingDuration-TxT``
