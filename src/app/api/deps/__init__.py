@@ -199,6 +199,7 @@ from app.api.deps.session_types import (
 from app.api.deps.sessions import (
     AcceptedSessionDep,
     BookedSessionDep,
+    CallGraceDep,
     CancelledSessionDep,
     DeclinedSessionDep,
     JoinedSessionDep,
@@ -245,6 +246,7 @@ __all__ = [
     "BulkDecidedDep",
     "CalendarConnectedDep",
     "CalendarConsentDep",
+    "CallGraceDep",
     "CanPreviewDep",
     "CancelledSessionDep",
     "ClaimedReferralDep",

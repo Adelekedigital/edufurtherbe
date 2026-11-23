@@ -158,6 +158,40 @@ async def test_the_door_closes_when_the_session_ends(
     assert door.tokens == []
 
 
+async def test_the_door_stays_open_for_the_configured_grace_after_the_end(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
+) -> None:
+    """Owner, 2026-11-22: a party whose connection dropped during an overrun
+    can get back in for the grace after the end, and the token they are handed
+    lasts exactly that long. Seventy minutes into an hour, with 45 minutes of
+    grace, the door opens; past it, it does not."""
+    app = api_client._transport.app  # type: ignore[attr-defined]
+    app.state.settings = app.state.settings.model_copy(update={"call_grace_after_end_minutes": 45})
+    setup = await a_mentor_on(db_engine, "door-grace", "daily")
+    session = await started(db_engine, api_client, setup, minutes_ago=70)
+    await pressed_in_time(db_engine, session["id"])
+
+    entered = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+
+    assert entered.status_code == 200, entered.text
+    (token,) = door.tokens
+    shown = (
+        await api_client.get(f"/api/v1/sessions/{session['id']}", headers=setup["mentee_headers"])
+    ).json()
+    starts_at = dt.datetime.fromisoformat(shown["starts_at"])
+    assert token["closes_at"] == starts_at + dt.timedelta(minutes=60 + 45)
+    assert dt.datetime.fromisoformat(shown["door_closes_at"]) == token["closes_at"]
+
+    # One minute past the grace: the same session, started 106 minutes ago.
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE sessions SET starts_at = now() - interval '106 minutes' WHERE id = :i"),
+            {"i": session["id"]},
+        )
+    late = await api_client.post(door_url(session), headers=setup["mentee_headers"])
+    assert late.status_code == 409, late.text
+
+
 async def test_the_door_does_not_open_before_the_join_window(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, door: FakeDoor
 ) -> None:

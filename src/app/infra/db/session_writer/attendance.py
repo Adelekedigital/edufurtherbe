@@ -151,6 +151,7 @@ async def door_row(
     *,
     now: dt.datetime,
     opens_before: dt.timedelta,
+    closes_after: dt.timedelta,
 ) -> dict[str, Any]:
     """The caller's way into a running session, **recording nothing** (#379).
 
@@ -164,10 +165,17 @@ async def door_row(
     row = await _venue_row(session, session_id, actor_id)
     _require_status(row, DOOR_STATUSES, to="entered")
     if not within_door_window(
-        row["starts_at"], row["duration_minutes"], now, opens_before=opens_before
+        row["starts_at"],
+        row["duration_minutes"],
+        now,
+        opens_before=opens_before,
+        closes_after=closes_after,
     ):
         opens, closes = door_window(
-            row["starts_at"], row["duration_minutes"], opens_before=opens_before
+            row["starts_at"],
+            row["duration_minutes"],
+            opens_before=opens_before,
+            closes_after=closes_after,
         )
         raise ConflictError(
             f"this session's room is open between {opens.isoformat()} and {closes.isoformat()}"
