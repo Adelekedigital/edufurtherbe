@@ -629,6 +629,8 @@ def test_every_mentor_holding_a_session_gets_one_type() -> None:
 
     assert len(result.session_types) == 1
     assert result.session_types[0].duration_minutes == 45
+    # Decision 367: the default offering's name, which the load gives its form.
+    assert result.session_types[0].name == "1:1 mentorship session"
 
 
 def test_the_offering_carries_its_mentors_venue() -> None:
