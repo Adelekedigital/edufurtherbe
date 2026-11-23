@@ -153,6 +153,38 @@ def test_a_token_is_gated_like_its_room() -> None:
     assert sent["exp"] == int(CLOSES.timestamp())
 
 
+def test_screen_sharing_is_on_for_the_room_and_every_token() -> None:
+    """Stated rather than left to the domain default (owner, 2026-11-22), and on
+    the token too, so rooms made before this still let people share."""
+    api, seen = rooms(ok({"name": "r", "url": "https://ef.daily.co/r", "token": FAKE_TOKEN}))
+
+    api.create(name="r", opens_at=OPENS, closes_at=CLOSES)
+    api.token_for(
+        room="r", user_id="u", user_name="n", is_owner=False, opens_at=OPENS, closes_at=CLOSES
+    )
+
+    assert [body_of(r)["properties"]["enable_screenshare"] for r in seen] == [True, True]
+
+
+def test_a_token_sends_its_holder_to_the_exit_url_and_omits_it_when_unset() -> None:
+    api, seen = rooms(ok({"token": FAKE_TOKEN}))
+
+    for exit_url in ("https://app.example.test/dashboard", None):
+        api.token_for(
+            room="r",
+            user_id="u",
+            user_name="n",
+            is_owner=True,
+            opens_at=OPENS,
+            closes_at=CLOSES,
+            exit_url=exit_url,
+        )
+
+    with_url, without = (body_of(r)["properties"] for r in seen)
+    assert with_url["redirect_on_meeting_exit"] == "https://app.example.test/dashboard"
+    assert "redirect_on_meeting_exit" not in without
+
+
 # --------------------------------------------------------------------------
 # When Daily says no
 # --------------------------------------------------------------------------

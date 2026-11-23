@@ -26,12 +26,14 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.domain.emails import calendar_invite_address, is_gmail
 from app.domain.enums import ConferencingProvider
+from app.domain.messages import session_page_url
 
 __all__ = [
     "MAX_MEETING_LINK_LENGTH",
     "OFFERING_VENUES",
     "PLATFORM_DEFAULT_PROVIDER",
     "MeetingPlan",
+    "call_exit_url",
     "meet_invite_for",
     "meet_link_for",
     "meeting_link",
@@ -156,3 +158,24 @@ def meet_link_for(url: str, invited: str | None) -> str:
     ]
     query.append(("authuser", invited))
     return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+#: Where a mentor lands after leaving a call: their dashboard. A mentee lands on
+#: the session page with `?from=call`, which opens the review prompt when the
+#: session can be reviewed (owner, 2026-11-22; frontend reads the marker).
+MENTOR_CALL_EXIT_PATH = "/dashboard"
+MENTEE_CALL_EXIT_QUERY = "from=call"
+
+
+def call_exit_url(app_base_url: str, session_id: str, *, is_mentor: bool) -> str | None:
+    """Where Daily sends one participant when they leave the call, or ``None``
+    with no application origin configured (then Daily shows its own page).
+
+    Built from the configured origin, never the request, so staging and
+    production each send people to their own app."""
+    if not app_base_url:
+        return None
+    if is_mentor:
+        return f"{app_base_url.rstrip('/')}{MENTOR_CALL_EXIT_PATH}"
+    page = session_page_url(app_base_url, session_id)
+    return f"{page}?{MENTEE_CALL_EXIT_QUERY}" if page else None
