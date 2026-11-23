@@ -24,6 +24,7 @@ from tests.integration.factories import (
 )
 from tests.integration.meeting_fakes import FakeCalendar, FakeDoor, FakeRooms
 
+from app.domain.attendance import CALL_GRACE_CEILING
 from app.domain.messages import MessageContext, build_variables
 from conftest import A_REASON, add_user, api_token, bearer, fund_by_auth
 
@@ -384,7 +385,9 @@ async def test_the_room_outlives_the_join_window(
     # The room opens with the join window: ten minutes early by default (owner,
     # 2026-10-08), so nobody is handed a Join button onto a shut room.
     assert call["opens_at"] == starts_at - dt.timedelta(minutes=10)
-    assert call["closes_at"] == starts_at + dt.timedelta(minutes=60)
+    # It closes at the grace ceiling after the end (sixty minutes for this
+    # hour-long session), so the configured grace on each token decides.
+    assert call["closes_at"] == starts_at + dt.timedelta(minutes=60) + CALL_GRACE_CEILING
 
 
 async def test_a_custom_venue_creates_nothing_and_keeps_the_mentors_url(

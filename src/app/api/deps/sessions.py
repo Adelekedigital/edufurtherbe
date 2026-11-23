@@ -44,7 +44,7 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
-from app.domain.attendance import door_window, join_opens
+from app.domain.attendance import call_grace, door_window, join_opens
 from app.domain.availability import booking_window, local_day_start
 from app.domain.enums import MeetingProvider, SessionRole, SessionStatus
 from app.domain.meetings import call_exit_url, meet_invite_for, meet_link_for
@@ -248,6 +248,17 @@ def _join_lead(request: Request) -> dt.timedelta:
 JoinLeadDep = Annotated[dt.timedelta, Depends(_join_lead)]
 
 
+def _call_grace(request: Request) -> dt.timedelta:
+    """How long after the end a party may still (re)enter, from this app's
+    settings: the one place the request layer reads it, for `/door`, the token
+    and the published door close alike."""
+    return call_grace(_configured(request))
+
+
+#: The configured grace, for a route that publishes when the door closes.
+CallGraceDep = Annotated[dt.timedelta, Depends(_call_grace)]
+
+
 def _refund_policy(request: Request) -> RefundPolicy:
     """The refund window this app runs on (`MENTEE_CANCEL_REFUND_HOURS`). The
     one place the request layer reads it, so the refund a cancellation pays and
@@ -349,7 +360,10 @@ async def booked_session(
         raise NotFoundError("no such session")
 
     body = SessionRead.from_row(
-        row, opens_before=_join_lead(request), refunds=_refund_policy(request)
+        row,
+        opens_before=_join_lead(request),
+        closes_after=_call_grace(request),
+        refunds=_refund_policy(request),
     ).model_dump(mode="json")
     await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
@@ -426,7 +440,10 @@ async def moved_session(
     if row is None:  # pragma: no cover - the row was just written in this transaction
         raise NotFoundError("no such session")
     body = SessionRead.from_row(
-        row, opens_before=_join_lead(request), refunds=_refund_policy(request)
+        row,
+        opens_before=_join_lead(request),
+        closes_after=_call_grace(request),
+        refunds=_refund_policy(request),
     ).model_dump(mode="json")
     await record_response(session, reservation, status_code=CREATED, body=body)
     await session.commit()
@@ -645,7 +662,10 @@ async def _door_for(
     # same rule kept twice: change `door_window` and `/door` would accept a
     # request while this minted a token Daily had already stopped honouring.
     opens, closes = door_window(
-        row["starts_at"], int(row["duration_minutes"]), opens_before=_join_lead(request)
+        row["starts_at"],
+        int(row["duration_minutes"]),
+        opens_before=_join_lead(request),
+        closes_after=_call_grace(request),
     )
     try:
         # **Off the event loop.** `token_for` is a blocking HTTP call with a
@@ -723,6 +743,7 @@ async def session_door(
         user["id"],
         now=dt.datetime.now(dt.UTC),
         opens_before=_join_lead(request),
+        closes_after=_call_grace(request),
     )
     # **Released before Daily is called**, as `joined_session` commits before
     # it. The read left a transaction open on a pooled connection, and the
