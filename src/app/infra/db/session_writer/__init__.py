@@ -22,6 +22,8 @@ from app.infra.db.session_writer.booking import (
 )
 from app.infra.db.session_writer.follow_ups import (
     FollowUps,
+    clear_legacy_venue,
+    confirmation_gaps,
     migrated_to_confirm,
     on_confirmed,
     on_ended,
@@ -51,7 +53,9 @@ __all__ = [
     "FollowUps",
     "add_meet_link",
     "book_session",
+    "clear_legacy_venue",
     "confirm_presence",
+    "confirmation_gaps",
     "door_row",
     "end_for_move",
     "expire_requests",

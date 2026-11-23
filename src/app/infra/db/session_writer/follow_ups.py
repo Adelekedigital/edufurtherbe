@@ -21,12 +21,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import SESSION_DURATION_MINUTES
-from app.domain.enums import SessionStatus
-from app.infra.clients.meetings import TIMEOUT, CalendarPort, NullCalendar, RoomsPort
+from app.domain.enums import ConferencingProvider, MeetingProvider, SessionStatus
+from app.infra.clients.meetings import (
+    TIMEOUT,
+    CalendarPort,
+    NullCalendar,
+    RoomsPort,
+    room_name,
+)
 from app.infra.clients.scheduler import SchedulerPort
 from app.infra.db.models.sessions import FREES_THE_HOUR, Session
 from app.infra.db.predicates import session_ends
@@ -91,6 +97,24 @@ async def on_confirmed(
     )
 
 
+def _migrated_unconfirmed(now: dt.datetime) -> tuple[ColumnElement[bool], ...]:
+    """A loaded session the new app has not confirmed: confirmed, from the
+    legacy load, with an offering, still ahead, and no calendar event."""
+    return (
+        Session.status == SessionStatus.CONFIRMED,
+        Session.legacy_bubble_id.is_not(None),
+        Session.session_type_id.is_not(None),
+        Session.external_calendar_event_id.is_(None),
+        Session.starts_at > now,
+    )
+
+
+def _no_room_of_ours(session_id: UUID, room: str | None) -> bool:
+    """The room column holds nothing, or the legacy app's token, rather than
+    the room `provision_meeting` names for this session."""
+    return room != room_name(str(session_id), ConferencingProvider.DAILY)
+
+
 async def migrated_to_confirm(
     session: AsyncSession, *, now: dt.datetime
 ) -> list[tuple[UUID, dt.datetime]]:
@@ -98,24 +122,65 @@ async def migrated_to_confirm(
     has never confirmed: ``(id, starts_at)``, soonest first (decision 366).
 
     A load writes the row but runs none of `on_confirmed`, so such a session has
-    no room of its own, no invite and no reminders. **No calendar event marks
-    it**: the load never writes one and `provision_meeting` stores the event it
-    makes, so a session confirmed here drops out of the next run. One whose
-    calendar call failed stays listed, and a rerun gives it a fresh room and
-    invite; its reminders are published again, and the outbox's reminder index
-    still sends each one once (decision 162).
+    no room of its own, no invite and no reminders. **Listed while it has no
+    calendar event and no room of ours.** A session whose room was made but
+    whose invite failed is not listed again, because a second room under the
+    same name is refused; `confirmation_gaps` reports it instead. One where both
+    failed is listed again and a rerun is safe (decision 162's reminder index
+    sends each reminder once).
     """
     rows = await session.execute(
-        select(Session.id, Session.starts_at)
-        .where(
-            Session.status == SessionStatus.CONFIRMED,
-            Session.legacy_bubble_id.is_not(None),
-            Session.external_calendar_event_id.is_(None),
-            Session.starts_at > now,
-        )
+        select(Session.id, Session.starts_at, Session.external_room_id)
+        .where(*_migrated_unconfirmed(now))
         .order_by(Session.starts_at, Session.id)
     )
-    return [(row.id, row.starts_at) for row in rows]
+    return [
+        (row.id, row.starts_at) for row in rows if _no_room_of_ours(row.id, row.external_room_id)
+    ]
+
+
+async def clear_legacy_venue(session: AsyncSession, session_id: UUID, *, now: dt.datetime) -> None:
+    """Drop the venue the load carried, before `on_confirmed` gives one.
+
+    The legacy value is a mentor's personal room reused across sessions, and
+    `provision_meeting` keeps a stored link for a venue that makes no room
+    (Meet) or when the room call fails, so left in place it would be handed out
+    for good. Scoped to a session still unconfirmed here. Does not commit."""
+    row = await session.execute(
+        select(Session.external_room_id).where(
+            Session.id == session_id, *_migrated_unconfirmed(now)
+        )
+    )
+    found = row.one_or_none()
+    if found is None or not _no_room_of_ours(session_id, found.external_room_id):
+        return
+    await session.execute(
+        update(Session)
+        .where(Session.id == session_id)
+        .values(meeting_provider=None, meeting_url=None, external_room_id=None)
+    )
+
+
+async def confirmation_gaps(
+    session: AsyncSession, session_ids: list[UUID]
+) -> list[tuple[UUID, str]]:
+    """What a confirmation left undone, per session: no calendar invite, or an
+    EduFurther video session with no room. Empty when every one is complete."""
+    rows = await session.execute(
+        select(
+            Session.id,
+            Session.meeting_provider,
+            Session.external_room_id,
+            Session.external_calendar_event_id,
+        ).where(Session.id.in_(session_ids))
+    )
+    gaps = []
+    for row in rows:
+        if row.external_calendar_event_id is None:
+            gaps.append((row.id, "no calendar invite"))
+        if row.meeting_provider == MeetingProvider.DAILY and row.external_room_id is None:
+            gaps.append((row.id, "no video room"))
+    return sorted(gaps, key=lambda gap: (str(gap[0]), gap[1]))
 
 
 async def on_ended(

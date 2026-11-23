@@ -15,8 +15,12 @@ A dry run (the default) lists the sessions by start time and id, nothing else.
 ``--apply`` refuses unless rooms, the calendar, QStash and both public
 addresses are configured, because any missing one would confirm a session with
 no room, no invite or no reminders and drop it from every later run. Each
-session commits on its own. A rerun lists only sessions still without a
-calendar event, and is safe: see `migrated_to_confirm`.
+session commits on its own, after its legacy venue (a mentor's personal room,
+reused across sessions) is cleared. The run then names any session left
+without an invite or a room and exits 1; fix those by hand rather than rerun,
+because a room made under the session's name cannot be made twice. Google and
+QStash are called before the commit, so a commit that fails leaves an invite
+behind: delete that event before any rerun. Run it once, from one terminal.
 """
 
 from __future__ import annotations
@@ -34,6 +38,8 @@ from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.db.session_writer import (
     REMINDER_CALLBACK_PATH,
     FollowUps,
+    clear_legacy_venue,
+    confirmation_gaps,
     migrated_to_confirm,
     on_confirmed,
 )
@@ -80,12 +86,15 @@ async def run(*, apply: bool, engine: AsyncEngine, follow_ups: FollowUps) -> int
         return EXIT_OK
     for session_id, _ in due:
         async with sessions() as session:
+            await clear_legacy_venue(session, session_id, now=now)
             await on_confirmed(session, session_id, follow_ups, now=now)
             await session.commit()
     async with sessions() as session:
-        left = await migrated_to_confirm(session, now=dt.datetime.now(dt.UTC))
-    print(f"confirmed: {len(due) - len(left)}, still without a calendar event: {len(left)}")
-    return EXIT_OK if not left else EXIT_REFUSED
+        gaps = await confirmation_gaps(session, [session_id for session_id, _ in due])
+    print(f"confirmed: {len(due)}, incomplete: {len({session_id for session_id, _ in gaps})}")
+    for session_id, gap in gaps:
+        print(f"  {session_id}: {gap}")
+    return EXIT_REFUSED if gaps else EXIT_OK
 
 
 async def _main(*, apply: bool, settings: Settings, follow_ups: FollowUps) -> int:
