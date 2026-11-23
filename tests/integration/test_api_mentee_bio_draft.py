@@ -27,6 +27,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.scheduler_fakes import FakeScheduler
 
 from app.domain.enums import WritingAssistMode
 from app.domain.writing_assist import (
@@ -36,7 +37,6 @@ from app.domain.writing_assist import (
     AssistResult,
     Task,
 )
-from app.infra.clients.scheduler import SchedulerError
 from conftest import add_user, api_token, bearer, give_mentee_answers
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -46,17 +46,6 @@ PATH = "/api/v1/callbacks/bio-drafts"
 BASE = "https://api.example.test"
 SIGNING_KEY = "not-a-real-signing-key-for-local-tests"
 DRAFT = "A curious student from Nigeria, aiming for Canada."
-
-
-@dataclass
-class FakeScheduler:
-    published: list[dict[str, Any]] = field(default_factory=list)
-    fails: bool = False
-
-    def schedule(self, *, url: str, body: dict[str, Any], at: dt.datetime) -> None:
-        if self.fails:
-            raise SchedulerError("qstash said no")
-        self.published.append({"url": url, "body": body, "at": at})
 
 
 @dataclass

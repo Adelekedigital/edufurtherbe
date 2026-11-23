@@ -39,6 +39,8 @@ class FakeCalendar:
 
     #: Set to make `add_conference` fail the way Google can.
     refuses: bool = False
+    #: Set to make `create_event` fail the way Google can.
+    refuses_create: bool = False
     #: Makes `cancel_event` fail the way Google can: `True` for every event,
     #: or the ids it refuses.
     refuses_cancel: bool | frozenset[str] = False
@@ -73,6 +75,8 @@ class FakeCalendar:
                 "join_url": join_url,
             }
         )
+        if self.refuses_create:
+            raise VenueUnavailableError("google refused the event")
         return CalendarEvent(external_id="event-1")
 
     def cancel_event(self, external_id: str) -> None:

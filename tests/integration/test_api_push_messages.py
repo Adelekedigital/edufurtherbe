@@ -19,11 +19,11 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.message_helpers import Person, close_account, pair, scalar, send
+from tests.integration.scheduler_fakes import FakeScheduler
 from tests.integration.test_api_message_emails import (
     APP,
     BASE,
     SIGNING_KEY,
-    FakeScheduler,
     read_up_to,
     signed,
 )

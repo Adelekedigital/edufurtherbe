@@ -22,6 +22,9 @@ from app.infra.db.session_writer.booking import (
 )
 from app.infra.db.session_writer.follow_ups import (
     FollowUps,
+    clear_legacy_venue,
+    confirmation_gaps,
+    migrated_to_confirm,
     on_confirmed,
     on_ended,
     retry_releases,
@@ -29,6 +32,7 @@ from app.infra.db.session_writer.follow_ups import (
 from app.infra.db.session_writer.meetings import add_meet_link
 from app.infra.db.session_writer.minutes import measure_minutes
 from app.infra.db.session_writer.reminders import (
+    REMINDER_CALLBACK_PATH,
     remind_before_session,
     remind_if_still_waiting,
     remind_unreviewed,
@@ -45,14 +49,18 @@ from app.infra.db.session_writer.transitions import (
 
 __all__ = [
     "DOUBLE_BOOKED",
+    "REMINDER_CALLBACK_PATH",
     "FollowUps",
     "add_meet_link",
     "book_session",
+    "clear_legacy_venue",
     "confirm_presence",
+    "confirmation_gaps",
     "door_row",
     "end_for_move",
     "expire_requests",
     "measure_minutes",
+    "migrated_to_confirm",
     "observe_departure",
     "observe_presence",
     "on_confirmed",
