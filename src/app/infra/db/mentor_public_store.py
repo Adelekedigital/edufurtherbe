@@ -30,11 +30,12 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, false, func, select
+from sqlalchemy import Select, false, func, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.availability import BookingWindow
 from app.domain.enums import CoverArt, MentorStatusType
+from app.domain.slugs import looks_like_legacy_id
 from app.infra.db.models.availability import MentorNextAvailability
 from app.infra.db.models.mentoring import MentorProfile, MentorStatusEvent
 from app.infra.db.models.reference import Country
@@ -56,7 +57,7 @@ _ORIGIN_COUNTRY = Country.__table__.alias("origin_country")
 
 
 def by_handle(handle: str) -> Any:
-    """Match the path segment against an id or a slug, whichever it is.
+    """Match the path segment against an id, a legacy app id or a slug.
 
     Public since mentor matching resolves `for_mentor` with it (decision 265),
     so the guest path and `/mentors/{handle}` read one handle the same way.
@@ -71,10 +72,23 @@ def by_handle(handle: str) -> Any:
     statement, one spread of `mentor_is_public()`, and no branch that can carry a
     different set of clauses.
 
-    A slug that parses as a UUID would be unreachable, since the parse wins. The
-    write path (`domain.slugs`) refuses exactly what this parse accepts
+    **A legacy app id** (``123x456``) is the third shape, so legacy profile
+    links keep resolving: the User's own id or the legacy mentor record's,
+    both carried as ``legacy_bubble_id``. Input only; the id is never returned.
+
+    A slug that parses as either id would be unreachable, since the parse wins.
+    The write path (`domain.slugs`) refuses exactly what this parse accepts
     (`looks_like_id`), and the backfill reports an imported one.
     """
+    if looks_like_legacy_id(handle):
+        # Two unique-index lookups unioned, not an `OR` with a subquery, which
+        # would filter every user on a public, unauthenticated route.
+        return User.id.in_(
+            union_all(
+                select(User.id).where(User.legacy_bubble_id == handle),
+                select(MentorProfile.user_id).where(MentorProfile.legacy_bubble_id == handle),
+            )
+        )
     try:
         return User.id == UUID(handle)
     except ValueError:

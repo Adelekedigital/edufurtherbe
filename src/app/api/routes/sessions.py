@@ -37,6 +37,7 @@ from app.api.deps import (
     DeclinedSessionDep,
     JoinedSessionDep,
     JoinLeadDep,
+    LegacySessionDep,
     MovedSessionDep,
     RefundPolicyDep,
     RemindedSessionDep,
@@ -53,6 +54,7 @@ from app.api.schemas.intake import SessionAnswerRead
 from app.api.schemas.sessions import (
     DoorRead,
     JoinRead,
+    LegacySessionRead,
     MissedReasonRead,
     SessionAcceptedRead,
     SessionCancelledRead,
@@ -180,6 +182,21 @@ async def read_session(
     session: SessionDetailDep, lead: JoinLeadDep, grace: CallGraceDep, refunds: RefundPolicyDep
 ) -> SessionRead:
     return SessionRead.from_row(session, opens_before=lead, closes_after=grace, refunds=refunds)
+
+
+@router.get(
+    "/legacy-sessions/{legacy_id}",
+    response_model=LegacySessionRead,
+    summary="Find the session a legacy room link names",
+    description=(
+        "Maps a legacy app session id (the `sessId` in old room links) to the "
+        "session's id, for the mentor and the mentee in it. Anybody else gets "
+        "the same 404 as an unknown id."
+    ),
+    responses=READ_RESPONSES,
+)
+async def read_legacy_session(session_id: LegacySessionDep) -> LegacySessionRead:
+    return LegacySessionRead(session_id=session_id)
 
 
 @router.get(
