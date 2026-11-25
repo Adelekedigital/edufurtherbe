@@ -57,7 +57,14 @@ from app.infra.db.room_stays import in_room
 from app.infra.db.session_answer_rows import answer_previews
 from app.infra.db.session_stats import MENTEE, attendance_rate, attendance_sessions, canceller
 
-__all__ = ["cancelled_by", "get_session", "is_a_party", "list_session_events", "list_sessions"]
+__all__ = [
+    "cancelled_by",
+    "get_session",
+    "is_a_party",
+    "legacy_session_id",
+    "list_session_events",
+    "list_sessions",
+]
 
 
 def cancelled_by() -> Any:
@@ -444,6 +451,19 @@ async def get_session(
     found = dict(row)
     await _with_answer_previews(session, [found], is_a_party(viewer_id))
     return found
+
+
+async def legacy_session_id(session: AsyncSession, legacy_id: str, viewer_id: UUID) -> UUID | None:
+    """The session a legacy room link names, for one of its two people.
+
+    Scoped by `is_a_party` like `get_session`: ``None`` is "no such session
+    **or** not yours", so the route's 404 never says a session exists.
+    """
+    return (
+        await session.execute(
+            select(Session.id).where(Session.legacy_bubble_id == legacy_id, is_a_party(viewer_id))
+        )
+    ).scalar_one_or_none()
 
 
 async def _with_answer_previews(

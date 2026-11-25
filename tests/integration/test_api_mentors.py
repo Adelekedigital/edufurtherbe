@@ -22,7 +22,7 @@ from tests.integration.factories import (
     make_public_mentor,
 )
 
-from conftest import add_user
+from conftest import add_user, legacy_id
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -70,9 +70,65 @@ async def set_study_country(engine: AsyncEngine, user_id: UUID, code: str) -> No
         )
 
 
+#: Every way `/mentors/{handle}` resolves a mentor: the id, the slug, and the
+#: two legacy app ids old profile links carry.
+HANDLES = ["id", "slug", "user-legacy", "mentor-legacy"]
+
+
+async def handle_for(engine: AsyncEngine, mentor: UUID, slug: str, by: str) -> str:
+    """The handle `by` names for ``mentor``, storing a legacy id if needed."""
+    if by == "id":
+        return str(mentor)
+    if by == "slug":
+        return slug
+    legacy = legacy_id()
+    statement = {
+        "user-legacy": "UPDATE users SET legacy_bubble_id = :l WHERE id = :u",
+        "mentor-legacy": "UPDATE mentor_profiles SET legacy_bubble_id = :l WHERE user_id = :u",
+    }[by]
+    async with engine.begin() as conn:
+        await conn.execute(text(statement), {"u": mentor, "l": legacy})
+    return legacy
+
+
 # --------------------------------------------------------------------------
-# Reachable, by either handle
+# Reachable, by any handle
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("by", ["user-legacy", "mentor-legacy"])
+async def test_a_legacy_profile_link_reaches_the_same_mentor(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine, by: str
+) -> None:
+    """Old profile links carry the legacy User id or the legacy mentor
+    record's id; either reads the profile, whose slug the client redirects to.
+    The legacy id is accepted, never echoed."""
+    slug = f"ada-{by}"
+    mentor = await make_bookable_mentor(db_engine, by, slug=slug)
+    legacy = await handle_for(db_engine, mentor, slug, by)
+
+    response = await api_client.get(url(legacy))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(mentor)
+    assert body["slug"] == slug
+    assert legacy not in response.text
+
+
+async def test_an_unknown_legacy_id_is_a_404(api_client: httpx.AsyncClient) -> None:
+    assert (await api_client.get(url("1726837410805x205680694778626500"))).status_code == 404
+
+
+async def test_a_legacy_id_of_a_member_who_is_not_a_mentor_is_a_404(
+    api_client: httpx.AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A member has no public page, and the 404 never says they exist."""
+    async with db_engine.begin() as conn:
+        member = await add_user(conn, "legacy-member@example.test")
+    legacy = await handle_for(db_engine, member, "", "user-legacy")
+
+    assert (await api_client.get(url(legacy))).status_code == 404
 
 
 async def test_a_mentor_is_readable_by_id_without_a_token(
@@ -137,7 +193,7 @@ async def test_a_mentor_with_no_user_profile_row_still_renders(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("by", ["id", "slug"])
+@pytest.mark.parametrize("by", HANDLES)
 @pytest.mark.parametrize(
     ("reason", "knob"),
     [("unlisted", {"listed": False}), ("unapproved", {"approved": False})],
@@ -148,12 +204,12 @@ async def test_a_mentor_who_is_not_public_is_a_404(
     slug = f"{reason}-{by}"
     mentor = await make_public_mentor(db_engine, slug, slug=slug, **knob)
 
-    response = await api_client.get(url(mentor if by == "id" else slug))
+    response = await api_client.get(url(await handle_for(db_engine, mentor, slug, by)))
 
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("by", ["id", "slug"])
+@pytest.mark.parametrize("by", HANDLES)
 @pytest.mark.parametrize("table", ["mentor_profiles", "users"])
 async def test_a_soft_deleted_mentor_is_a_404(
     api_client: httpx.AsyncClient, db_engine: AsyncEngine, by: str, table: str
@@ -170,10 +226,11 @@ async def test_a_soft_deleted_mentor_is_a_404(
         "mentor_profiles": "UPDATE mentor_profiles SET deleted_at = now() WHERE user_id = :u",
         "users": "UPDATE users SET deleted_at = now() WHERE id = :u",
     }[table]
+    handle = await handle_for(db_engine, mentor, slug, by)
     async with db_engine.begin() as conn:
         await conn.execute(text(statement), {"u": mentor})
 
-    response = await api_client.get(url(mentor if by == "id" else slug))
+    response = await api_client.get(url(handle))
 
     assert response.status_code == 404
 
