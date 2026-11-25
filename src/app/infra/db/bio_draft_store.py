@@ -7,7 +7,8 @@ text is empty or blank and no draft has ever been recorded. Re-asserting it in
 the write is what lets a person who typed a bio while the router was answering
 win: their text makes the conditional write match nothing.
 
-Every statement names the user the callback is about, and only them.
+Every statement but `owed_bio_drafts` names the user the callback is about, and
+only them; that one lists whom a one-off backfill queues.
 """
 
 from __future__ import annotations
@@ -20,22 +21,49 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.writing_assist import AssistResult
-from app.infra.db.models.user import User, UserProfile
+from app.infra.db.models.mentoring import MenteeGoal
+from app.infra.db.models.user import User, UserOnboarding, UserProfile
 from app.infra.db.predicates import LIVE, blank, has_mentor_profile
 
-__all__ = ["bio_unwritten", "save_bio_draft"]
+__all__ = ["bio_unwritten", "owed_bio_drafts", "save_bio_draft"]
 
 
 def _unwritten() -> Any:
     return blank(UserProfile.about_me) & (UserProfile.about_me_drafted_at.is_(None))
 
 
+def _bio_unwritten_for(user_id: Any) -> Any:
+    """The user's bio is unwritten, or they have no profile row yet. ``user_id``
+    is a value or a column, so the callback and the backfill read one rule."""
+    mine = UserProfile.user_id == user_id
+    return exists().where(mine, _unwritten()) | ~exists().where(mine)
+
+
 async def bio_unwritten(session: AsyncSession, user_id: UUID) -> bool:
     """Whether a live account's bio is unwritten, or it has no profile row yet."""
-    mine = UserProfile.user_id == user_id
-    unwritten = exists().where(mine, _unwritten()) | ~exists().where(mine)
     live = exists().where(User.id == user_id, LIVE)
-    return bool((await session.execute(select(live & unwritten))).scalar())
+    return bool((await session.execute(select(live & _bio_unwritten_for(user_id)))).scalar())
+
+
+async def owed_bio_drafts(session: AsyncSession) -> list[UUID]:
+    """Every live account that finished onboarding as a mentee (a goal and no
+    mentor profile, `finishes_as_mentee`) and whose bio is still unwritten.
+
+    For the one-off backfill of mentees who finished before drafts existed. It
+    only chooses whom to queue: the callback re-checks each with the domain
+    rule and `bio_unwritten`, and the save guards again, so the list going stale
+    costs nothing.
+    """
+    finished = exists().where(
+        UserOnboarding.user_id == User.id, UserOnboarding.completed_at.is_not(None)
+    )
+    goal = exists().where(MenteeGoal.user_id == User.id)
+    rows = await session.scalars(
+        select(User.id)
+        .where(LIVE, finished, goal, ~has_mentor_profile(User.id), _bio_unwritten_for(User.id))
+        .order_by(User.id)
+    )
+    return list(rows)
 
 
 async def save_bio_draft(session: AsyncSession, user_id: UUID, draft: AssistResult) -> bool:

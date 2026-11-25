@@ -17,6 +17,7 @@ from app.domain.slugs import (
     candidates,
     is_servable,
     looks_like_id,
+    looks_like_legacy_id,
     name_slug,
     placeholder_slug,
     strip_accents,
@@ -166,6 +167,8 @@ def test_counting_stops_at_nine_then_suffixes_are_random() -> None:
         "123e4567-e89b-12d3-a456-426614174000",
         "123e4567e89b12d3a456426614174000",
         "deadbeefcafebeadfaceabbadadfeed1",
+        "1726837410805x205680694778626500",
+        "1x2",
     ],
 )
 def test_anything_the_resolver_reads_as_an_id_is_refused(handle: str) -> None:
@@ -177,3 +180,24 @@ def test_anything_the_resolver_reads_as_an_id_is_refused(handle: str) -> None:
 
 def test_a_hex_only_name_never_becomes_an_id_shaped_handle() -> None:
     assert name_slug("Dead Beef Cafe Bead", "Face Abba Dada Feed") is None
+
+
+@pytest.mark.parametrize(
+    ("handle", "legacy"),
+    [
+        ("1726837410805x205680694778626500", True),
+        ("12x34", True),
+        ("x12", False),
+        ("12x", False),
+        ("12x34-ada", False),
+        ("ada-12x34", False),
+        ("12X34", False),
+    ],
+)
+def test_only_digits_x_digits_reads_as_a_legacy_id(handle: str, legacy: bool) -> None:
+    """The frontend's /^\\d+x\\d+$/, in ASCII digits only."""
+    assert looks_like_legacy_id(handle) is legacy
+
+
+def test_a_legacy_id_shaped_base_is_never_offered() -> None:
+    assert next(candidates("12x34")) == "12x34-2"

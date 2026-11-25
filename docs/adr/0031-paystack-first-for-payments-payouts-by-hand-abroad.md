@@ -293,6 +293,32 @@ price; ADPList's paid Advance sessions take a flat 10%.
     outside the platform and delivered through support's credit grants (#224),
     reported from admin analytics. An `invoices` table waits until sponsor
     volume makes the manual step the bottleneck.
+13. **Attendance evidence for paid sessions: open, for the owner before the
+    build (raised 2026-11-25).** Point 7 pays the mentor when attendance
+    settles with the mentor present, so attendance becomes payout evidence.
+    The first session completed on EduFurther video (25 Nov) shows why this
+    matters: booked for 60 minutes, both present, about 26 minutes together,
+    with the mentee rejoining four times. Three proposals:
+    - **Minutes never move money.** The price is per session. Booked length
+      stays the floor for stats (decision 281), and a per-minute price would
+      reward stretching calls.
+    - **Paid sessions default to EduFurther video.** It is the only venue whose
+      presence and time together the platform can prove today. The platform's
+      own Google account already creates every Meet event (`core/config.py`,
+      `google_calendar_refresh_token`), but it is a personal account, which
+      reports no attendance; and the legacy app's fixed links made present
+      mentors look absent (mentor-absent on 59% of own-link sessions against
+      about 18% elsewhere). Meet can carry paid sessions once that one account
+      moves to a Workspace seat and the platform reads Meet's attendance (the
+      roadmap's "Google Meet on a Workspace account"; the Meet REST API keeps
+      conference records 30 days). Confirm the plan and API access against
+      Google's documentation before relying on it.
+    - **A near-empty call waits instead of paying out.** A session both parties
+      joined counts as attended however short it was. When their time together
+      is under a threshold (a setting; for example half the booked length), the
+      release waits a dispute window (a setting; for example 48 hours), and an
+      admin decides a dispute. Otherwise it releases at settlement as point 7
+      says.
 
 ## Consequences
 

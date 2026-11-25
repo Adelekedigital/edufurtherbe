@@ -8,7 +8,8 @@ when the name does: links to it are shared. Imported handles are kept as they
 were (decision 311 folds only their accents).
 
 The frontend resolves ``/mentors/{handle}`` as an id or a slug, so a handle
-fits ``^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`` and is never shaped like a UUID.
+fits ``^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`` and is never shaped like a UUID
+or a legacy app id (legacy links resolve through the same path).
 Uniqueness is the database's: ``ix_users_slug_live`` plus the lowercase CHECK,
 tried in the order `candidates` gives.
 """
@@ -38,10 +39,24 @@ def strip_accents(value: str) -> str | None:
     return bare if bare.isascii() else None
 
 
+#: A legacy app record id (``1726837410805x205680694778626500``), the shape
+#: legacy profile and room links carry. The frontend matches the same pattern.
+_LEGACY_ID = re.compile(r"[0-9]+x[0-9]+")
+
+
+def looks_like_legacy_id(handle: str) -> bool:
+    """Would ``/mentors/{handle}`` read this as a legacy app id?"""
+    return _LEGACY_ID.fullmatch(handle) is not None
+
+
 def looks_like_id(handle: str) -> bool:
-    """Would ``/mentors/{handle}`` read this as an id? Asked exactly as the
-    resolver asks it (`UUID(handle)`), which also takes 32 hex digits with
-    the hyphens anywhere or none."""
+    """Would ``/mentors/{handle}`` read this as an id rather than a slug?
+
+    A UUID, asked exactly as the resolver asks it (`UUID(handle)`, which also
+    takes 32 hex digits with the hyphens anywhere or none), or a legacy app id.
+    """
+    if looks_like_legacy_id(handle):
+        return True
     try:
         UUID(handle)
     except ValueError:
