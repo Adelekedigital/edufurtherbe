@@ -23,13 +23,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.credits import LevelFacts
 from app.infra.db.models.mentoring import MenteeGoal
 from app.infra.db.models.referrals import Referral, ReferralUnlock
+from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.predicates import LIVE
+from app.infra.db.session_stats import received
 
 __all__ = ["NO_FACTS", "level_candidates", "level_facts"]
 
 #: A user the facts query did not return — deleted, or not a user at all. Level 0.
-NO_FACTS = LevelFacts(onboarded=False, invited=False, unlocked=False)
+NO_FACTS = LevelFacts(onboarded=False, invited=False, unlocked=False, completed_session=False)
 
 _MENTEE = exists(select(MenteeGoal.id).where(MenteeGoal.user_id == User.id))
 
@@ -46,6 +48,11 @@ _ONBOARDED = and_(
 _INVITED = exists(
     select(Referral.id).where(Referral.referrer_id == User.id, Referral.qualified_at.is_not(None))
 )
+
+#: A session of theirs as the mentee completed (both came): `received`, the
+#: one statement of it, which `sessions_held` and the dashboards read too
+#: (decision 370). Not the unlock's *attended*: a lone Join press would count.
+_COMPLETED_SESSION = exists(select(Session.id).where(received(User.id)))
 
 #: The unlock (decision 295), or a grandfathered one from the migration.
 _UNLOCKED = and_(
@@ -70,11 +77,15 @@ async def level_facts(session: AsyncSession, user_ids: Collection[UUID]) -> dict
             _ONBOARDED.label("onboarded"),
             _INVITED.label("invited"),
             _UNLOCKED.label("unlocked"),
+            _COMPLETED_SESSION.label("completed_session"),
         ).where(User.id.in_(list(user_ids)), LIVE)
     )
     return {
         row.id: LevelFacts(
-            onboarded=bool(row.onboarded), invited=bool(row.invited), unlocked=bool(row.unlocked)
+            onboarded=bool(row.onboarded),
+            invited=bool(row.invited),
+            unlocked=bool(row.unlocked),
+            completed_session=bool(row.completed_session),
         )
         for row in rows
     }

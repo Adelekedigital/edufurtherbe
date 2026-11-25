@@ -362,8 +362,8 @@ async def unlock_referrers(
     crediting the earliest qualified invite.
 
     **Every user named is topped up, unlocked now or not**: a qualification
-    alone lifts its referrer to level 2. A user whose level did not move is
-    owed nothing and gets no lot.
+    alone, or a completed session alone, lifts them to level 2 (decision 370).
+    A user whose level did not move is owed nothing and gets no lot.
     """
     if not user_ids:
         return 0
