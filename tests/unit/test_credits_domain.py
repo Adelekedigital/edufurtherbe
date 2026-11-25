@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from app.core.config import CREDIT_CEILING, Settings, get_settings
 from app.domain.credits import (
     HISTORICAL_SOURCES,
+    INVITE_NEXT,
     LEVEL_SOURCES,
     NON_EXPIRING,
     SOURCE_BUCKET,
@@ -35,6 +36,7 @@ from app.domain.credits import (
     credit_ladder,
     end_of_month,
     expiry_for,
+    invite_case,
     level_allowance,
     level_of,
     level_owed,
@@ -142,6 +144,35 @@ class TestQuantities:
         assert ladder.starter == 1
         assert ladder.invited == 2
         assert ladder.monthly == 3
+
+
+class TestInviteCase:
+    """Decision 371: a credits email asks for an invite only while one would
+    still lift the mentee."""
+
+    @pytest.mark.parametrize(
+        ("onboarded", "invited", "attended", "unlocked", "case"),
+        [
+            # Onboarded, nothing else, or attended too: an invite would lift them.
+            (True, False, False, False, INVITE_NEXT),
+            (True, False, True, False, INVITE_NEXT),
+            # Invited already, or unlocked: nothing left to invite for.
+            (True, True, False, False, ""),
+            (True, True, True, False, ""),
+            (True, False, False, True, ""),
+            (False, False, False, True, ""),
+            # Not onboarded: no credits email is owed the invite wording.
+            (False, False, False, False, ""),
+            (False, False, True, False, ""),
+        ],
+    )
+    def test_the_case_follows_the_facts(
+        self, *, onboarded: bool, invited: bool, attended: bool, unlocked: bool, case: str
+    ) -> None:
+        facts = LevelFacts(
+            onboarded=onboarded, invited=invited, unlocked=unlocked, attended=attended
+        )
+        assert invite_case(facts) == case
 
 
 class TestLevels:

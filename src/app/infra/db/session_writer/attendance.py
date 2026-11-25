@@ -530,12 +530,15 @@ async def settle_attendance(
     #    not move is owed nothing.
     #    Only the mentees who came are passed, though `unlock_referrers` checks
     #    attendance itself: it keeps the sweep from locking the row of everyone
-    #    it settled.
+    #    it settled. Each one paid is told, in the invite wording while an
+    #    invite would still lift them (decision 371): a level only rises once
+    #    per step, so this is the first attended session's email.
     await unlock_referrers(
         session,
         {row["mentee_id"] for row in settled if row["mentee_came"]},
         ladder=ladder,
         now=now,
+        tell=True,
     )
 
     return len(settled)

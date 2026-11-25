@@ -41,8 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
 from app.domain.analytics_events import AnalyticsEvent
 from app.domain.credits import CreditLadder
+from app.domain.notifications import Notification
 from app.domain.referrals import NO_INVITE, make_code, may_qualify
-from app.infra.db.credit_grants import top_up_levels
+from app.infra.db.credit_grants import tell_paid, top_up_levels
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.user import User, UserOnboarding
@@ -344,11 +345,16 @@ async def unlock_referrers(
     *,
     ladder: CreditLadder,
     now: dt.datetime,
+    tell: bool = False,
 ) -> int:
     """Unlock each of ``user_ids`` who has a qualified invite **and** has
     attended a session as a mentee (decision 295), then top each one's month up
     to their level (decision 308). Returns how many were unlocked now. Does not
     commit.
+
+    ``tell`` sends each user who was paid a `credits_granted` (`tell_paid`),
+    in the invite wording while an invite would still lift them (decision
+    371). Settlement tells; a qualification does not, as before.
 
     Called from both halves, because either can come second: qualifying an
     invite (:func:`qualify_invitee`) and settling sessions
@@ -392,5 +398,7 @@ async def unlock_referrers(
         at=now,
     )
     count = len(unlocked_ids)
-    await top_up_levels(session, user_ids, ladder=ladder, now=now)
+    paid = await top_up_levels(session, user_ids, ladder=ladder, now=now)
+    if tell:
+        await tell_paid(session, paid, Notification.CREDITS_GRANTED)
     return count
