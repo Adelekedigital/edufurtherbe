@@ -84,6 +84,7 @@ from app.domain.enums import CreditReason, CreditSource, CreditState
 
 __all__ = [
     "HISTORICAL_SOURCES",
+    "INVITE_NEXT",
     "LEVEL_SOURCES",
     "NON_EXPIRING",
     "SOURCE_BUCKET",
@@ -103,6 +104,7 @@ __all__ = [
     "credit_ladder",
     "end_of_month",
     "expiry_for",
+    "invite_case",
     "level_allowance",
     "level_of",
     "level_owed",
@@ -268,6 +270,21 @@ def level_of(facts: LevelFacts) -> int:
     if not facts.onboarded:
         return 0
     return 1 + int(facts.invited) + int(facts.attended)
+
+
+#: The credits emails' case for somebody an invite would lift (decision 371):
+#: their lines ask them to invite a friend, button to their invite link.
+INVITE_NEXT = "invite_next"
+
+
+def invite_case(facts: LevelFacts) -> str:
+    """Which case a credits email to this user uses: :data:`INVITE_NEXT` while
+    a qualified invite would still raise their level, else the email's own
+    (``""``): an onboarded mentee with no qualified invite and no unlock, who
+    is therefore below 3. Read from the facts after the payment, so somebody
+    an invite just lifted is not asked."""
+    owes_invite = facts.onboarded and not facts.invited and not facts.unlocked
+    return INVITE_NEXT if owes_invite else ""
 
 
 def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:

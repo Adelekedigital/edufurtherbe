@@ -52,6 +52,17 @@ def test_an_emails_links_carry_its_kind() -> None:
     assert built["exploreUrl"] == f"https://app.edufurther.org/explore?{TAGS}"
 
 
+def test_the_invite_button_opens_the_invite_modal_and_keeps_its_query() -> None:
+    """Decision 371: `/home?invite=open` (the frontend's own path), tagged
+    after its query rather than given a second `?`."""
+    built = build_variables(["inviteUrl"], context(Notification.CREDITS_GRANTED))
+
+    assert built["inviteUrl"] == (
+        "https://app.edufurther.org/home?invite=open"
+        "&utm_source=email&utm_medium=notification&utm_campaign=credits_granted"
+    )
+
+
 def test_a_link_for_no_named_email_stays_plain() -> None:
     built = build_variables(["sessionUrl"], context(None))
 

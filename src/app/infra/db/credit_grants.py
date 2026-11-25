@@ -27,7 +27,7 @@ and the job writes a ``level_top_up`` instead whenever one already exists.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -37,6 +37,7 @@ from app.domain.credits import (
     LEVEL_SOURCES,
     CreditLadder,
     end_of_month,
+    invite_case,
     level_allowance,
     level_owed,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "grant_monthly_credits",
     "owed_count",
     "owed_top_ups",
+    "tell_paid",
     "top_up_and_tell",
     "top_up_everyone",
     "top_up_levels",
@@ -185,20 +187,45 @@ async def top_up_and_tell(
     nothing, and telling somebody twice that their credit arrived is worse than
     a slightly late first telling.
     """
-    paid = (await top_up_levels(session, [user_id], ladder=ladder, now=now, up_to=up_to)).get(
-        user_id, 0
-    )
-    if paid:
-        # With what was paid, as `credits_renewed` carries it (decision 323).
+    paid = await top_up_levels(session, [user_id], ladder=ladder, now=now, up_to=up_to)
+    # The starter email keeps its own wording: it is the first credit, and the
+    # invite step is introduced by the first session's (decision 371).
+    await tell_paid(session, paid, Notification.CREDITS_GRANTED, invite_wording=False)
+    return paid.get(user_id, 0)
+
+
+async def tell_paid(
+    session: AsyncSession,
+    paid: Mapping[UUID, int],
+    notification: Notification,
+    *,
+    invite_wording: bool = True,
+) -> None:
+    """Tell each user what they were just paid, in the paying transaction, so
+    a message about a credit that rolled back cannot exist. Does not commit.
+    **The one statement of "pay and say so"**, read by every credits email
+    that follows a payment.
+
+    With what was paid as ``credit_count`` (decision 323). With
+    ``invite_wording``, anyone a qualified invite would still lift reads the
+    invite case (`invite_case`, decision 371), judged on the facts after the
+    payment.
+    """
+    if not paid:
+        return
+    facts = await level_facts(session, list(paid)) if invite_wording else {}
+    for user_id, amount in paid.items():
+        variables: dict[str, object] = {"credit_count": amount}
+        if case := invite_case(facts.get(user_id, NO_FACTS)):
+            variables["line_case"] = case
         await enqueue(
             session,
-            Notification.CREDITS_GRANTED,
+            notification,
             entity_type="user",
             entity_id=user_id,
             recipient_ids=(user_id,),
-            variables={"credit_count": paid},
+            variables=variables,
         )
-    return paid
 
 
 async def grant_monthly_credits(
@@ -216,16 +243,9 @@ async def grant_monthly_credits(
 
     # **Told in the same transaction, and only the people actually paid**, with
     # the amount: a level-1 mentee renews one credit, not three. A second run
-    # in one month pays nothing, so it sends nothing.
-    for user_id, amount in paid.items():
-        await enqueue(
-            session,
-            Notification.CREDITS_RENEWED,
-            entity_type="user",
-            entity_id=user_id,
-            recipient_ids=(user_id,),
-            variables={"credit_count": amount},
-        )
+    # in one month pays nothing, so it sends nothing. Anyone below 3 an invite
+    # would lift reads the invite wording (decision 371).
+    await tell_paid(session, paid, Notification.CREDITS_RENEWED)
     return len(paid)
 
 

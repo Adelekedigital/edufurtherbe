@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -284,6 +285,24 @@ async def test_the_first_pays_every_mentee_their_level(db_engine: AsyncEngine) -
     }
 
 
+async def test_the_renewal_asks_for_an_invite_only_where_one_would_lift_them(
+    db_engine: AsyncEngine,
+) -> None:
+    """Decision 371: below 3 with no qualified invite, the renewal reads the
+    invite case; a mentee invited already, or unlocked, reads the email's own."""
+    onboarded = await a_user(db_engine, unlocked=False, onboarded=True)
+    invited = await a_user(db_engine, unlocked=False, onboarded=True, invited=True)
+    unlocked = await a_user(db_engine, onboarded=True, invited=True)
+
+    await run_grant(db_engine, now=SEPTEMBER)
+
+    assert await renewal_cases(db_engine, [onboarded, invited, unlocked]) == {
+        onboarded: "invite_next",
+        invited: None,
+        unlocked: None,
+    }
+
+
 async def test_an_invite_before_onboarding_pays_nothing(db_engine: AsyncEngine) -> None:
     """Level 2 is level 1 plus an invite: an invite alone is level 0."""
     user = await a_user(db_engine, unlocked=False, invited=True)
@@ -390,12 +409,21 @@ async def sources_of(engine: AsyncEngine, user_id: UUID) -> list[str]:
 
 async def renewal_counts(engine: AsyncEngine, user_ids: list[UUID]) -> dict[UUID, str]:
     """Who was sent a renewal, and the `credit_count` it carries."""
+    return await _renewal_field(engine, user_ids, "credit_count")
+
+
+async def renewal_cases(engine: AsyncEngine, user_ids: list[UUID]) -> dict[UUID, str | None]:
+    """Who was sent a renewal, and the `line_case` it carries (none: its own)."""
+    return await _renewal_field(engine, user_ids, "line_case")
+
+
+async def _renewal_field(engine: AsyncEngine, user_ids: list[UUID], field: str) -> dict[UUID, Any]:
     async with engine.begin() as conn:
         rows = await conn.execute(
             text(
-                "SELECT entity_id, payload ->> 'credit_count' FROM outbox_events "
+                "SELECT entity_id, payload ->> :f FROM outbox_events "
                 "WHERE event_type = 'credits_renewed' AND entity_id = ANY(:ids)"
             ),
-            {"ids": user_ids},
+            {"ids": user_ids, "f": field},
         )
         return {UUID(str(row[0])): row[1] for row in rows}

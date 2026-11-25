@@ -185,6 +185,9 @@ SESSION_PATH = "/sessions/{session_id}"
 DASHBOARD_PATH = "/dashboard"
 CALENDAR_PATH = "/calendar"
 EXPLORE_PATH = "/explore"
+#: Mentee Home, opening the invite modal with the mentee's own link once
+#: (frontend, 2026-11-25); a signed-out mentee signs in and lands back here.
+INVITE_PATH = "/home?invite=open"
 #: Where an applicant follows their mentor application (Mentor Onboarding B3).
 MENTOR_APPLICATION_PATH = "/mentor-application"
 #: The admin app's Mentors page, where admins review a new application.
@@ -385,6 +388,7 @@ RESOLVERS: dict[str, Callable[[MessageContext], str]] = {
     "sessionUrl": _session_url,
     "dashboardUrl": lambda c: _app_link(c, DASHBOARD_PATH, "dashboardUrl"),
     "exploreUrl": lambda c: _app_link(c, EXPLORE_PATH, "exploreUrl"),
+    "inviteUrl": lambda c: _app_link(c, INVITE_PATH, "inviteUrl"),
     "recipientFirstName": lambda c: (
         c.recipient_first_name or _needs(c.recipient_name, "recipientFirstName")
     ),

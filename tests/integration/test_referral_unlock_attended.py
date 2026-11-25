@@ -208,6 +208,70 @@ async def test_attended_then_invited_rises_one_then_two_then_three(
     assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
+async def granted_emails(engine: AsyncEngine, user_id: UUID) -> list[tuple[str, str | None]]:
+    """Each `credits_granted` queued to ``user_id``, oldest first: what it
+    paid and its `line_case` (none: the email's own wording)."""
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT payload ->> 'credit_count', payload ->> 'line_case' FROM outbox_events "
+                "WHERE event_type = 'credits_granted' AND entity_id = :u "
+                "ORDER BY created_at, id"
+            ),
+            {"u": user_id},
+        )
+        return [(row[0], row[1]) for row in rows]
+
+
+async def test_a_first_attended_session_is_told_with_the_invite_wording(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Decision 371: the settlement that lifts a mentee to 2 tells them, and
+    asks for the invite that would make it 3. The onboarding email before it
+    keeps its own wording."""
+    _, referrer_id = await an_onboarded_referrer(api_client, db_engine)
+
+    await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=True)
+    await settle(db_engine)
+
+    assert await granted_emails(db_engine, referrer_id) == [
+        (str(ONBOARDED), None),
+        (str(ATTENDED - ONBOARDED), "invite_next"),
+    ]
+
+
+async def test_a_settlement_that_unlocks_is_told_without_the_invite_wording(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """Invited already, so attending makes 3: nothing left to invite for."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
+    await qualify_an_invitee(api_client, db_engine, referrer)
+
+    await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=False)
+    await settle(db_engine)
+
+    assert (await granted_emails(db_engine, referrer_id))[-1] == (
+        str(UNLOCKED - INVITED),
+        None,
+    )
+
+
+async def test_a_qualification_and_a_settlement_that_pay_nothing_tell_nothing(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The qualification stays silent, as before; a mentee who missed their
+    session is not paid, so not told; a second settlement pays nothing more."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
+    await qualify_an_invitee(api_client, db_engine, referrer)
+    await a_session_attended_by(
+        db_engine, referrer_id, status="confirmed", mentor_came=True, mentee_came=False
+    )
+    await settle(db_engine)
+    await settle(db_engine)
+
+    assert await granted_emails(db_engine, referrer_id) == [(str(ONBOARDED), None)]
+
+
 async def test_an_invite_before_the_referrer_onboards_pays_at_their_onboarding(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:

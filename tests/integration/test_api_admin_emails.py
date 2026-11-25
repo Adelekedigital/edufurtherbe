@@ -106,7 +106,10 @@ async def test_an_email_reads_with_its_variants_lines_and_values(
     headers = await an_admin(db_engine)
     detail = (await api_client.get(GRANTED, headers=headers)).json()
     assert detail["siblings"] == 2
-    (variant,) = detail["variants"]
+    # Decision 371 adds the invite case beside the email's own lines.
+    variant, invite = detail["variants"]
+    assert (invite["id"], invite["label"]) == ("invite_next", "An invite would add a credit")
+    assert invite["lines"]["button"]["default_text"] == "Invite a friend"
     assert variant["id"] == "default"
     assert variant["lines"]["subject"] == {
         "default_text": "Your session credits are here",
