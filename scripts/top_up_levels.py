@@ -1,12 +1,15 @@
-"""Top every mentee up to their credit level for this month, now (decision 370).
+"""Top the mentees decision 370 lifted up to their new level for this month, now.
 
     railway run uv run python scripts/top_up_levels.py           # dry run: who and how much
     railway run uv run python scripts/top_up_levels.py --apply   # pay it
 
-When the level rule changes mid-month, the 1st pays everyone their new level
-anyway; this pays it at once. Nothing here decides anything: who is owed and
-how much is `owed_top_ups`, the same arithmetic the 1st and every top-up use,
-and the payment is `top_up_everyone`, under the same per-user locks.
+The 1st pays everyone their new level anyway; this pays it at once, **only to
+those the rule change lifted** (`lifted_by_attending`: onboarded, attended,
+not already unlocked). Anybody else below their level, such as a migrated
+mentee whose cutover opening balance was under it, is left to the 1st (owner,
+2026-11-25). Nothing here decides anything: who is owed and how much is
+`owed_top_ups`, the arithmetic the 1st and every top-up use, and the payment
+is `top_up_everyone`, under the same per-user locks.
 
 **Safe to re-run**: a month already at its level owes nothing, spent or not.
 Silent, as the top-up at a settlement is. One transaction.
@@ -24,7 +27,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
-from app.domain.credits import credit_ladder
+from app.domain.credits import credit_ladder, lifted_by_attending
 from app.infra.db.credit_grants import owed_top_ups, top_up_everyone
 from app.infra.db.engine import create_database_engine, create_session_factory
 from app.infra.etl.cli import EXIT_OK, configure_streams
@@ -40,10 +43,11 @@ async def run(*, apply: bool, engine: AsyncEngine, settings: Settings, now: dt.d
     ladder = credit_ladder(settings)
     async with create_session_factory(engine)() as session:
         if not apply:
-            print(f"owed now: {_summary(await owed_top_ups(session, now=now, ladder=ladder))}")
+            owed = await owed_top_ups(session, now=now, ladder=ladder, among=lifted_by_attending)
+            print(f"owed now: {_summary(owed)}")
             print("dry run: nothing paid")
             return EXIT_OK
-        paid = await top_up_everyone(session, now=now, ladder=ladder)
+        paid = await top_up_everyone(session, now=now, ladder=ladder, among=lifted_by_attending)
         await session.commit()
     print(f"paid: {_summary(paid)}")
     return EXIT_OK
