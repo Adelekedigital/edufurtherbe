@@ -27,7 +27,7 @@ and the job writes a ``level_top_up`` instead whenever one already exists.
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.credits import (
     LEVEL_SOURCES,
     CreditLadder,
+    LevelFacts,
     end_of_month,
     invite_case,
     level_allowance,
@@ -249,19 +250,29 @@ async def grant_monthly_credits(
     return len(paid)
 
 
-async def _candidates(session: AsyncSession) -> list[UUID]:
+#: Which candidates a one-off top-up may pay, judged on their facts.
+Among = Callable[[LevelFacts], bool]
+
+
+async def _candidates(session: AsyncSession, among: Among | None = None) -> list[UUID]:
     """Everybody whose level may be above 0 (`level_candidates`): the one
-    snapshot the 1st, its dry run and the one-off top-up all start from."""
-    return list((await session.scalars(select(User.id).where(*level_candidates()))).all())
+    snapshot the 1st, its dry run and the one-off top-up all start from.
+    ``among`` narrows it to those whose facts it accepts."""
+    candidates = list((await session.scalars(select(User.id).where(*level_candidates()))).all())
+    if among is None or not candidates:
+        return candidates
+    facts = await level_facts(session, candidates)
+    return [user_id for user_id in candidates if among(facts.get(user_id, NO_FACTS))]
 
 
 async def owed_top_ups(
-    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
+    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder, among: Among | None = None
 ) -> dict[UUID, int]:
-    """What every candidate's level still owes this period, by user: the dry
+    """What each candidate's level still owes this period, by user: the dry
     run of the 1st and of `top_up_everyone`. Reads only; the same arithmetic
-    (`_owed`). Which source a payment is written under does not change it."""
-    candidates = await _candidates(session)
+    (`_owed`). Which source a payment is written under does not change it.
+    ``among`` narrows it as `top_up_everyone`'s does."""
+    candidates = await _candidates(session, among)
     if not candidates:
         return {}
     owed = await _owed(session, candidates, monthly=False, ladder=ladder, now=now)
@@ -271,16 +282,19 @@ async def owed_top_ups(
 
 
 async def top_up_everyone(
-    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
+    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder, among: Among
 ) -> dict[UUID, int]:
-    """Top every candidate up to their level this period, now. Returns what was
-    paid, by user. Does not commit.
+    """Top every candidate ``among`` accepts up to their level this period,
+    now. Returns what was paid, by user. Does not commit.
 
-    For a change to the level rule mid-month (decision 370): the 1st would pay
-    the new levels anyway, and this pays them at once. Silent, as the top-up at
-    a settlement is. Safe to re-run: a period already at its level owes nothing.
+    For a change to the level rule mid-month: the 1st would pay the new levels
+    anyway, and this pays them at once to those the change lifted. ``among`` is
+    required, so a one-off never tops up everyone below their level by default
+    (a migrated mentee's opening balance below their level is the cutover's
+    policy, not a rule change's). Silent, as the top-up at a settlement is.
+    Safe to re-run: a period already at its level owes nothing.
     """
-    return await top_up_levels(session, await _candidates(session), ladder=ladder, now=now)
+    return await top_up_levels(session, await _candidates(session, among), ladder=ladder, now=now)
 
 
 async def owed_count(session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder) -> int:

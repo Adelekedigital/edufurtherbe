@@ -108,6 +108,7 @@ __all__ = [
     "level_allowance",
     "level_of",
     "level_owed",
+    "lifted_by_attending",
     "refund_expiry",
     "split_buckets",
     "state_for",
@@ -270,6 +271,13 @@ def level_of(facts: LevelFacts) -> int:
     if not facts.onboarded:
         return 0
     return 1 + int(facts.invited) + int(facts.attended)
+
+
+def lifted_by_attending(facts: LevelFacts) -> bool:
+    """Whether decision 370 raised this mentee's level: onboarded, attended a
+    session, and not already holding the unlock (level 3 before and after).
+    Who its one-off top-up pays; nobody else is owed anything new by it."""
+    return facts.onboarded and facts.attended and not facts.unlocked
 
 
 #: The credits emails' case for somebody an invite would lift (decision 371):

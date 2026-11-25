@@ -1,6 +1,8 @@
 """The one-off top-up when the level rule changes mid-month (decision 370):
 a mentee who attended a session before the rule paid level 2 is owed the
-difference now, paid once and silently, and a re-run pays nothing.
+difference now, paid once and silently, and a re-run pays nothing. Only those
+the rule lifted are paid (`lifted_by_attending`); anybody else below their
+level waits for the 1st.
 
 The database is shared with other suites, so each test asserts about the
 mentee it made rather than the whole list.
@@ -20,11 +22,13 @@ from tests.integration.test_api_referrals import balance_of
 from tests.integration.test_referral_unlock_attended import (
     ATTENDED,
     ONBOARDED,
+    UNLOCKED,
     a_session_attended_by,
     an_onboarded_referrer,
 )
 
 from app.core.config import Settings
+from app.domain.credits import lifted_by_attending
 from app.infra.db.credit_grants import owed_top_ups
 from conftest import default_ladder
 
@@ -36,8 +40,36 @@ SETTINGS = Settings(_env_file=None)  # type: ignore[call-arg]
 
 
 async def owed(engine: AsyncEngine) -> dict[UUID, int]:
+    """What the script's dry run would pay: only those decision 370 lifted."""
     async with async_sessionmaker(engine)() as session:
-        return await owed_top_ups(session, now=dt.datetime.now(dt.UTC), ladder=LADDER)
+        return await owed_top_ups(
+            session, now=dt.datetime.now(dt.UTC), ladder=LADDER, among=lifted_by_attending
+        )
+
+
+async def test_an_unlocked_mentee_below_their_level_is_left_to_the_first(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The case that held the first production run: a grandfathered unlock
+    whose month paid under level 3 (a cutover opening balance) is owed by the
+    level rule, but the rule change did not lift them, so the one-off pays
+    them nothing and the 1st pays their level as usual (owner, 2026-11-25)."""
+    _, mentee_id = await an_onboarded_referrer(api_client, db_engine)
+    async with db_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO referral_unlocks (user_id, unlocked_by_referral_id) VALUES (:u, NULL)"
+            ),
+            {"u": mentee_id},
+        )
+    async with async_sessionmaker(db_engine)() as session:
+        everyone = await owed_top_ups(session, now=dt.datetime.now(dt.UTC), ladder=LADDER)
+    assert everyone.get(mentee_id) == UNLOCKED - ONBOARDED
+
+    await run(apply=True, engine=db_engine, settings=SETTINGS, now=dt.datetime.now(dt.UTC))
+
+    assert mentee_id not in await owed(db_engine)
+    assert await balance_of(db_engine, mentee_id) == ONBOARDED
 
 
 async def a_mentee_who_attended_before_the_rule(
