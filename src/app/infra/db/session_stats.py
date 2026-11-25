@@ -82,7 +82,19 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import TIMESTAMP, Integer, Numeric, and_, case, cast, func, literal, select, true
+from sqlalchemy import (
+    TIMESTAMP,
+    Integer,
+    Numeric,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    literal,
+    select,
+    true,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -109,6 +121,7 @@ __all__ = [
     "completed",
     "current_streak",
     "delivered",
+    "has_attended",
     "held",
     "held_count",
     "mentee_attended",
@@ -403,6 +416,16 @@ def attended_by(party: Any) -> Any:
     enclosing `sessions` or a concrete id.
     """
     return _recorded(party, ATTENDED)
+
+
+def has_attended(mentee: Any) -> Any:
+    """Whether ``mentee`` attended any session as its mentee (`attended_by`):
+    the credit rules' one *attended*, read by the level (decision 370) and the
+    unlock (decision 295) alike, so the two can never disagree. ``mentee`` is a
+    column of the enclosing statement or a concrete id."""
+    return exists(
+        select(Session.id).where(Session.mentee_id == mentee, attended_by(Session.mentee_id))
+    )
 
 
 def mentee_attended(mentee: Any) -> Any:

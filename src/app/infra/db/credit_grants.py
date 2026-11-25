@@ -4,7 +4,8 @@
 (``domain.credits.level_allowance``); what is still owed is the level less what
 the level sources already granted this period (``level_owed``). The 1st asks it
 for everybody, and a rise in level — finishing onboarding, an invite qualifying,
-the unlock — asks it for the people it touched. The difference is only which
+a session settling with them present (decision 370) — asks it for the people it
+touched. The difference is only which
 source the lot is written under.
 
 RUNNING TWICE IS THE CASE THIS IS BUILT AROUND
@@ -48,7 +49,14 @@ from app.infra.db.models.user import User
 from app.infra.db.outbox import enqueue
 from app.infra.db.user_locks import lock_users
 
-__all__ = ["grant_monthly_credits", "owed_count", "top_up_and_tell", "top_up_levels"]
+__all__ = [
+    "grant_monthly_credits",
+    "owed_count",
+    "owed_top_ups",
+    "top_up_and_tell",
+    "top_up_everyone",
+    "top_up_levels",
+]
 
 
 async def _period_grants(
@@ -202,8 +210,9 @@ async def grant_monthly_credits(
     eligible, every row locked in id order, so a mentee who levels up while the
     job runs is paid once, either here or by their own top-up after it.
     """
-    candidates = (await session.scalars(select(User.id).where(*level_candidates()))).all()
-    paid = await _pay_levels(session, candidates, monthly=True, ladder=ladder, now=now)
+    paid = await _pay_levels(
+        session, await _candidates(session), monthly=True, ladder=ladder, now=now
+    )
 
     # **Told in the same transaction, and only the people actually paid**, with
     # the amount: a level-1 mentee renews one credit, not three. A second run
@@ -220,6 +229,40 @@ async def grant_monthly_credits(
     return len(paid)
 
 
+async def _candidates(session: AsyncSession) -> list[UUID]:
+    """Everybody whose level may be above 0 (`level_candidates`): the one
+    snapshot the 1st, its dry run and the one-off top-up all start from."""
+    return list((await session.scalars(select(User.id).where(*level_candidates()))).all())
+
+
+async def owed_top_ups(
+    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
+) -> dict[UUID, int]:
+    """What every candidate's level still owes this period, by user: the dry
+    run of the 1st and of `top_up_everyone`. Reads only; the same arithmetic
+    (`_owed`). Which source a payment is written under does not change it."""
+    candidates = await _candidates(session)
+    if not candidates:
+        return {}
+    owed = await _owed(session, candidates, monthly=False, ladder=ladder, now=now)
+    return {
+        user_id: amount for quantities in owed.values() for user_id, amount in quantities.items()
+    }
+
+
+async def top_up_everyone(
+    session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder
+) -> dict[UUID, int]:
+    """Top every candidate up to their level this period, now. Returns what was
+    paid, by user. Does not commit.
+
+    For a change to the level rule mid-month (decision 370): the 1st would pay
+    the new levels anyway, and this pays them at once. Silent, as the top-up at
+    a settlement is. Safe to re-run: a period already at its level owes nothing.
+    """
+    return await top_up_levels(session, await _candidates(session), ladder=ladder, now=now)
+
+
 async def owed_count(session: AsyncSession, *, now: dt.datetime, ladder: CreditLadder) -> int:
     """How many users the 1st's grant would pay now, for the job's dry run.
 
@@ -227,8 +270,4 @@ async def owed_count(session: AsyncSession, *, now: dt.datetime, ladder: CreditL
     a dry run after the month was paid reports 0, as the real run would pay
     nobody (found by code review: it used to count candidates). Reads only.
     """
-    candidates = (await session.scalars(select(User.id).where(*level_candidates()))).all()
-    if not candidates:
-        return 0
-    owed = await _owed(session, candidates, monthly=True, ladder=ladder, now=now)
-    return sum(len(quantities) for quantities in owed.values())
+    return len(await owed_top_ups(session, now=now, ladder=ladder))

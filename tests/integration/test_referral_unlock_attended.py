@@ -6,7 +6,8 @@ Attended, not completed: a session the mentor missed still counts for the mentee
 who came.
 
 Owner, 2026-11-05 (decision 308): the unlock is level 3 and an invite alone is
-level 2. Whichever event raises a level tops the month up to it, paying only
+level 2. Owner, 2026-11-25 (decision 370): an attended session alone is level 2
+too. Whichever event raises a level tops the month up to it, paying only
 what the month has not already paid, so a referrer who onboarded (1) and whose
 friend then joined (2) and who then attended (3) holds 1, 2, then 3.
 
@@ -45,9 +46,19 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 LADDER = default_ladder()
 #: Level 1, 2 and 3 on the default ladder, from the rule rather than literals.
-ONBOARDED = level_allowance(LevelFacts(onboarded=True, invited=False, unlocked=False), LADDER)
-INVITED = level_allowance(LevelFacts(onboarded=True, invited=True, unlocked=False), LADDER)
-UNLOCKED = level_allowance(LevelFacts(onboarded=True, invited=True, unlocked=True), LADDER)
+ONBOARDED = level_allowance(
+    LevelFacts(onboarded=True, invited=False, unlocked=False, attended=False), LADDER
+)
+INVITED = level_allowance(
+    LevelFacts(onboarded=True, invited=True, unlocked=False, attended=False), LADDER
+)
+#: Decision 370: attending alone is level 2, as an invite alone is.
+ATTENDED = level_allowance(
+    LevelFacts(onboarded=True, invited=False, unlocked=False, attended=True), LADDER
+)
+UNLOCKED = level_allowance(
+    LevelFacts(onboarded=True, invited=True, unlocked=True, attended=True), LADDER
+)
 
 
 async def an_onboarded_referrer(
@@ -162,10 +173,11 @@ async def test_a_missed_session_then_a_qualified_invite_unlocks_nothing(
     assert await balance_of(db_engine, referrer_id) == INVITED
 
 
-async def test_attending_without_a_qualified_invite_unlocks_nothing(
+async def test_attending_without_a_qualified_invite_reaches_level_two_not_the_unlock(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Attending alone moves no level, so the settlement pays nothing more."""
+    """Decision 370: attending alone is level 2, paid at the settlement that
+    records it; the unlock (level 3) still needs a qualified invite too."""
     referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
     # An invite sent and claimed, but the invitee never finishes.
     invitee = uuid4()
@@ -177,7 +189,23 @@ async def test_attending_without_a_qualified_invite_unlocks_nothing(
     await settle(db_engine)
 
     assert await unlocks_of(db_engine, referrer_id) == 0
-    assert await balance_of(db_engine, referrer_id) == ONBOARDED
+    assert await balance_of(db_engine, referrer_id) == ATTENDED
+
+
+async def test_attended_then_invited_rises_one_then_two_then_three(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    """The whole ladder in the order most new mentees climb it: onboarded (1),
+    a session attended (2), then a friend who joins (3), each a top-up."""
+    referrer, referrer_id = await an_onboarded_referrer(api_client, db_engine)
+
+    await a_session_attended_by(db_engine, referrer_id, status="confirmed", mentor_came=True)
+    await settle(db_engine)
+    assert await balance_of(db_engine, referrer_id) == ATTENDED
+
+    await qualify_an_invitee(api_client, db_engine, referrer)
+    assert await unlocks_of(db_engine, referrer_id) == 1
+    assert await balance_of(db_engine, referrer_id) == UNLOCKED
 
 
 async def test_an_invite_before_the_referrer_onboards_pays_at_their_onboarding(
