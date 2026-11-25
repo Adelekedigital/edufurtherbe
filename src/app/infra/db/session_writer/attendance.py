@@ -522,20 +522,23 @@ async def settle_attendance(
         now=now,
     )
 
-    # 5. **A mentee who came may now be unlocked** (decision 295): the unlock
-    #    waits for an attended session as well as a qualified invite, and this
-    #    is where attendance becomes final. Set-based, and a no-op for anyone
-    #    with no qualified invite or already unlocked. An unlock lifts them to
-    #    level 3, and `unlock_referrers` tops their month up to it (decision
-    #    308); anybody whose level did not move is owed nothing.
+    # 5. **A mentee who came may now rise a level** (decisions 295, 308, 370):
+    #    this is where attendance becomes final. A first attended session is
+    #    level 2 on its own, and the unlock (level 3) once they also have a
+    #    qualified invite. `unlock_referrers` writes the unlock where both hold
+    #    and tops every one of them up to their level; anybody whose level did
+    #    not move is owed nothing.
     #    Only the mentees who came are passed, though `unlock_referrers` checks
     #    attendance itself: it keeps the sweep from locking the row of everyone
-    #    it settled.
+    #    it settled. Each one paid is told, in the invite wording while an
+    #    invite would still lift them (decision 371): a level only rises once
+    #    per step, so this is the first attended session's email.
     await unlock_referrers(
         session,
         {row["mentee_id"] for row in settled if row["mentee_came"]},
         ladder=ladder,
         now=now,
+        tell=True,
     )
 
     return len(settled)

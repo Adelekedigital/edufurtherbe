@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.domain.credits import INVITE_NEXT
 from app.domain.enums import EmailLine
 from app.domain.message_emails import ONE_MESSAGE, TWO_FROM_ONE, TWO_FROM_TWO
 from app.domain.notifications import Notification
@@ -138,6 +139,7 @@ class EmailLines:
 _VIEW_SESSION = ("View session", "sessionUrl")
 _REVIEW_REQUEST = ("Review request", "pendingRequestUrl")
 _FIND_MENTOR = ("Find a mentor", "exploreUrl")
+_INVITE_FRIEND = ("Invite a friend", "inviteUrl")
 _SUGGESTED = ("Book the new time", "sessionUrl")
 
 
@@ -236,14 +238,26 @@ LINES: dict[Notification, dict[str, EmailLines]] = {
             "Your session credits are here",
             "You have credits to book a session",
             _FIND_MENTOR,
-        )
+        ),
+        # Decision 371: a level rise an invite could still add to. No number:
+        # what an invite adds depends on the level and on the ladder's sizes.
+        INVITE_NEXT: _l(
+            "You earned more session credits",
+            "Invite a friend to earn more credits every month",
+            _INVITE_FRIEND,
+        ),
     },
     N.CREDITS_RENEWED: {
         "": _l(
             "Your credits for this month are ready",
             "You have new credits this month",
             _FIND_MENTOR,
-        )
+        ),
+        INVITE_NEXT: _l(
+            "Your credits for this month are ready",
+            "Invite a friend to earn more credits every month",
+            _INVITE_FRIEND,
+        ),
     },
     N.CREDITS_EXPIRING: {
         "": _l(

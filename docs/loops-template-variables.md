@@ -584,6 +584,17 @@ nobody. **Since decision 308 it carries `creditCount`**: what the month paid,
 the mentee's credit level (1 to 3), so the copy can say how many arrived rather
 than assume three. The Loops template must add the variable to use it.
 
+**The invite case (decision 371).** `credits_granted` and `credits_renewed` have a
+second case, `invite_next`, for a mentee below level 3 with no qualified invite:
+its heading asks them to invite a friend to earn more credits every month (no
+number: what an invite adds depends on their level and the ladder's sizes) and
+its button is "Invite a friend", opening `/home?invite=open` (the invite modal). Only
+the backend-written lines change (subject, heading, button and `buttonUrl`), so
+the shared **App: Credits** template needs no edit. Sent by `credits_granted`
+when a settled session lifts a mentee to level 2, and by `credits_renewed` on the
+1st; onboarding's `credits_granted` keeps its own wording. Admins can reword it
+on the emails page as its own tab.
+
 **`Unused credit` → `credits_expiring`. Built**, as a daily sweep at fourteen and
 seven days before an expiry.
 

@@ -57,10 +57,11 @@ CLAIM_WINDOW_TEXT = (
         "alone would make the programme a race to invite.\n\n"
         "**The invite pays nothing on its own.** When the invitee finishes "
         "their profile — the same signal as your own level 1 — you reach credit "
-        "level 2 (two credits a month), or 3 once you have also attended a "
-        "session as a mentee (decision 295), and this month is topped up to it "
-        "at once (decision 308). Signing up and vanishing earns nothing, and "
-        "that separation is the abuse boundary."
+        "level 2 (two credits a month), or 3 if you have also attended a "
+        "session as a mentee (decisions 295 and 370), and this month is topped "
+        "up to it at once (decision 308). Attending a session alone also "
+        "reaches level 2. Signing up and vanishing earns nothing, and that "
+        "separation is the abuse boundary."
     ),
     responses={
         **UNAUTHORISED,
@@ -79,9 +80,11 @@ async def create_own_referral(referral: CreatedReferralDep, response: Response) 
     description=(
         "Newest first. `signed_up_at` is set when the invitee claims their "
         "code, and `qualified_at` when they finish onboarding. The second lifts "
-        "you to credit level 2, and to 3 once you have also attended a session "
-        "as a mentee (decision 295): `/me` `credits.monthly.ceiling` is your "
-        "level and `credits.monthly.unlocked` says when you reached 3.\n\n"
+        "you to credit level 2, and to 3 if you have also attended a session "
+        "as a mentee (decisions 295 and 370; attending a session alone is "
+        "level 2 too): "
+        "`/me` `credits.monthly.ceiling` is your level and "
+        "`credits.monthly.unlocked` says when you reached 3.\n\n"
         "There is no `status` field: it is derivable from those two timestamps, "
         "and a computed one here would put the same rule in a third place."
     ),
@@ -159,7 +162,8 @@ HOLD_DAYS = RETIRED_CODE_HOLD.days
         "letters a-z to use).\n\n"
         "Anyone may sign up through it, and each arrival becomes its own invite "
         "with the same reward rules as any other: the first person you invited "
-        "to finish their profile lifts you to credit level 2.\n\n"
+        "to finish their profile lifts you to credit level 2, or to 3 if you "
+        "have attended a session.\n\n"
         "You may pick a handle instead (`PUT`) and revoke or reactivate the "
         "link (`PATCH`). The client builds the link itself, as `/invite/{code}`."
     ),

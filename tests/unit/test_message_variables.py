@@ -464,6 +464,7 @@ def test_a_reason_written_without_a_code_has_no_title() -> None:
         "sessionUrl",
         "dashboardUrl",
         "exploreUrl",
+        "inviteUrl",
         "calendarUrl",
         "applicationUrl",
         "adminMentorsUrl",

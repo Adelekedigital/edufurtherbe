@@ -104,8 +104,9 @@ async def read_credit_log(page: CreditLogDep) -> Page[CreditEntryRead]:
     description=(
         "What each credit level pays a month (decision 308), from the server's "
         "settings: `starter` for level 1 (finished onboarding), `invited` for "
-        "level 2 (an invite of theirs qualified) and `monthly` for level 3 (the "
-        "unlock). The 1st resets every mentee to their level. Read-only: they "
+        "level 2 (a session attended, or an invite of theirs qualified; decision "
+        "370) and `monthly` for level 3 (both: the unlock). The 1st resets every "
+        "mentee to their level. Read-only: they "
         "change with the deployment's settings, not here."
     ),
     responses=ADMIN_RESPONSES,

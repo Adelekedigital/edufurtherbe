@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from app.core.config import CREDIT_CEILING, Settings, get_settings
 from app.domain.credits import (
     HISTORICAL_SOURCES,
+    INVITE_NEXT,
     LEVEL_SOURCES,
     NON_EXPIRING,
     SOURCE_BUCKET,
@@ -35,6 +36,7 @@ from app.domain.credits import (
     credit_ladder,
     end_of_month,
     expiry_for,
+    invite_case,
     level_allowance,
     level_of,
     level_owed,
@@ -144,42 +146,90 @@ class TestQuantities:
         assert ladder.monthly == 3
 
 
+class TestInviteCase:
+    """Decision 371: a credits email asks for an invite only while one would
+    still lift the mentee."""
+
+    @pytest.mark.parametrize(
+        ("onboarded", "invited", "attended", "unlocked", "case"),
+        [
+            # Onboarded, nothing else, or attended too: an invite would lift them.
+            (True, False, False, False, INVITE_NEXT),
+            (True, False, True, False, INVITE_NEXT),
+            # Invited already, or unlocked: nothing left to invite for.
+            (True, True, False, False, ""),
+            (True, True, True, False, ""),
+            (True, False, False, True, ""),
+            (False, False, False, True, ""),
+            # Not onboarded: no credits email is owed the invite wording.
+            (False, False, False, False, ""),
+            (False, False, True, False, ""),
+        ],
+    )
+    def test_the_case_follows_the_facts(
+        self, *, onboarded: bool, invited: bool, attended: bool, unlocked: bool, case: str
+    ) -> None:
+        facts = LevelFacts(
+            onboarded=onboarded, invited=invited, unlocked=unlocked, attended=attended
+        )
+        assert invite_case(facts) == case
+
+
 class TestLevels:
     """Decision 308: a mentee's month pays their level, and the facts decide it."""
 
     @pytest.mark.parametrize(
-        ("onboarded", "invited", "unlocked", "level"),
+        ("onboarded", "invited", "attended", "unlocked", "level"),
         [
-            (False, False, False, 0),
-            (True, False, False, 1),
-            (True, True, False, 2),
-            (True, True, True, 3),
-            # An invite before its inviter has onboarded pays nothing yet.
-            (False, True, False, 0),
+            (False, False, False, False, 0),
+            (True, False, False, False, 1),
+            # Decision 370: either an invite or a completed session is level 2.
+            (True, True, False, False, 2),
+            (True, False, True, False, 2),
+            # Both are level 3, before or after the unlock row is written.
+            (True, True, True, False, 3),
+            (True, True, True, True, 3),
+            # Neither counts before the mentee has onboarded.
+            (False, True, False, False, 0),
+            (False, False, True, False, 0),
+            (False, True, True, False, 0),
             # The unlock alone is level 3: ~1,200 grandfathered migrated mentees
             # hold one with no invite and no onboarding row the API wrote.
-            (False, False, True, 3),
-            (True, False, True, 3),
-            (False, True, True, 3),
+            (False, False, False, True, 3),
+            (True, False, False, True, 3),
+            (False, True, False, True, 3),
+            (False, False, True, True, 3),
+            (True, True, False, True, 3),
+            (True, False, True, True, 3),
+            (False, True, True, True, 3),
         ],
     )
     def test_every_combination_of_facts(
-        self, *, onboarded: bool, invited: bool, unlocked: bool, level: int
+        self, *, onboarded: bool, invited: bool, attended: bool, unlocked: bool, level: int
     ) -> None:
-        """Every combination enumerated, because a predicate written with `or`
-        where it meant `and` passes the three happy rows."""
-        facts = LevelFacts(onboarded=onboarded, invited=invited, unlocked=unlocked)
+        """All sixteen combinations, because a predicate written with `or`
+        where it meant `and` passes the happy rows."""
+        facts = LevelFacts(
+            onboarded=onboarded,
+            invited=invited,
+            unlocked=unlocked,
+            attended=attended,
+        )
         assert level_allowance(facts, LADDER) == level
 
     @pytest.mark.parametrize(
         ("facts", "number"),
         [
-            (LevelFacts(onboarded=False, invited=False, unlocked=False), 0),
-            (LevelFacts(onboarded=True, invited=False, unlocked=False), 1),
-            (LevelFacts(onboarded=True, invited=True, unlocked=False), 2),
-            (LevelFacts(onboarded=True, invited=True, unlocked=True), 3),
-            (LevelFacts(onboarded=False, invited=True, unlocked=False), 0),
-            (LevelFacts(onboarded=False, invited=False, unlocked=True), 3),
+            (
+                LevelFacts(onboarded=False, invited=False, unlocked=False, attended=False),
+                0,
+            ),
+            (LevelFacts(onboarded=True, invited=False, unlocked=False, attended=False), 1),
+            (LevelFacts(onboarded=True, invited=True, unlocked=False, attended=False), 2),
+            (LevelFacts(onboarded=True, invited=False, unlocked=False, attended=True), 2),
+            (LevelFacts(onboarded=True, invited=True, unlocked=True, attended=True), 3),
+            (LevelFacts(onboarded=False, invited=True, unlocked=False, attended=False), 0),
+            (LevelFacts(onboarded=False, invited=False, unlocked=True, attended=False), 3),
         ],
     )
     def test_the_level_number_is_the_rung_not_the_amount(
@@ -194,9 +244,10 @@ class TestLevels:
 
     def test_the_levels_follow_the_ladder_not_literals(self) -> None:
         ladder = CreditLadder(starter=2, invited=4, monthly=7)
-        assert level_allowance(LevelFacts(True, False, False), ladder) == 2
-        assert level_allowance(LevelFacts(True, True, False), ladder) == 4
-        assert level_allowance(LevelFacts(True, True, True), ladder) == 7
+        assert level_allowance(LevelFacts(True, False, False, False), ladder) == 2
+        assert level_allowance(LevelFacts(True, True, False, False), ladder) == 4
+        assert level_allowance(LevelFacts(True, False, False, True), ladder) == 4
+        assert level_allowance(LevelFacts(True, True, True, True), ladder) == 7
 
     @pytest.mark.parametrize(("level", "drawn"), [(0, 1), (1, 1), (2, 2), (3, 3)])
     def test_the_card_never_draws_below_level_one(self, level: int, drawn: int) -> None:
@@ -436,7 +487,7 @@ class TestTheLadderIsConfigured:
         the card's allowance and state describe one balance against one level."""
         monkeypatch.setenv("CREDIT_MONTHLY_ALLOWANCE", "5")
         ladder = credit_ladder(Settings(_env_file=None))
-        level = level_allowance(LevelFacts(True, True, True), ladder)
+        level = level_allowance(LevelFacts(True, True, True, True), ladder)
 
         assert level == 5
         assert allowance_for(4, level) == 5

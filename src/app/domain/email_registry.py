@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
+from app.domain.credits import INVITE_NEXT
 from app.domain.email_lines import (
     LINE_HARD_MAX,
     LINES,
@@ -248,6 +249,7 @@ VARIANT_LABELS = {
     ONE_MESSAGE: "1 message",
     TWO_FROM_ONE: "2 from one person",
     TWO_FROM_TWO: "From two people",
+    INVITE_NEXT: "An invite would add a credit",
 }
 
 
@@ -301,8 +303,15 @@ SAMPLES: dict[Notification, dict[str, dict[str, str]]] = {
     N.SESSION_LAST_REMINDER: {"default": {"kind": "s5", "interval": "in 5 Minutes"}},
     N.SESSION_TIME_SUGGESTED: {"default": {"suggested_after": "declined", **_SUGGESTED}},
     N.SESSION_SUGGESTION_REMINDER: {"default": dict(_SUGGESTED)},
-    N.CREDITS_GRANTED: {"default": {"credit_count": "1"}},
-    N.CREDITS_RENEWED: {"default": {"credit_count": "2"}},
+    # Decision 371: the invite case, as `tell_paid` queues it.
+    N.CREDITS_GRANTED: {
+        "default": {"credit_count": "1"},
+        INVITE_NEXT: {"credit_count": "1", "line_case": INVITE_NEXT},
+    },
+    N.CREDITS_RENEWED: {
+        "default": {"credit_count": "2"},
+        INVITE_NEXT: {"credit_count": "2", "line_case": INVITE_NEXT},
+    },
     N.CREDITS_EXPIRING: {"default": {"kind": "c14", "interval": "two weeks", "credit_count": "1"}},
     # What `decide` queues with a note (decision 350).
     N.MENTOR_APPROVED: {

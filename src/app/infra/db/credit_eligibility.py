@@ -25,11 +25,12 @@ from app.infra.db.models.mentoring import MenteeGoal
 from app.infra.db.models.referrals import Referral, ReferralUnlock
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.predicates import LIVE
+from app.infra.db.session_stats import has_attended
 
 __all__ = ["NO_FACTS", "level_candidates", "level_facts"]
 
 #: A user the facts query did not return — deleted, or not a user at all. Level 0.
-NO_FACTS = LevelFacts(onboarded=False, invited=False, unlocked=False)
+NO_FACTS = LevelFacts(onboarded=False, invited=False, unlocked=False, attended=False)
 
 _MENTEE = exists(select(MenteeGoal.id).where(MenteeGoal.user_id == User.id))
 
@@ -46,6 +47,11 @@ _ONBOARDED = and_(
 _INVITED = exists(
     select(Referral.id).where(Referral.referrer_id == User.id, Referral.qualified_at.is_not(None))
 )
+
+#: They attended a session as its mentee, whether or not the mentor came
+#: (decision 370): `has_attended`, the unlock's own *attended*, so the level
+#: and the unlock read one rule.
+_ATTENDED = has_attended(User.id)
 
 #: The unlock (decision 295), or a grandfathered one from the migration.
 _UNLOCKED = and_(
@@ -70,11 +76,15 @@ async def level_facts(session: AsyncSession, user_ids: Collection[UUID]) -> dict
             _ONBOARDED.label("onboarded"),
             _INVITED.label("invited"),
             _UNLOCKED.label("unlocked"),
+            _ATTENDED.label("attended"),
         ).where(User.id.in_(list(user_ids)), LIVE)
     )
     return {
         row.id: LevelFacts(
-            onboarded=bool(row.onboarded), invited=bool(row.invited), unlocked=bool(row.unlocked)
+            onboarded=bool(row.onboarded),
+            invited=bool(row.invited),
+            unlocked=bool(row.unlocked),
+            attended=bool(row.attended),
         )
         for row in rows
     }

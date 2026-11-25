@@ -41,14 +41,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, InviteForNewAccountsError, NotFoundError
 from app.domain.analytics_events import AnalyticsEvent
 from app.domain.credits import CreditLadder
+from app.domain.notifications import Notification
 from app.domain.referrals import NO_INVITE, make_code, may_qualify
-from app.infra.db.credit_grants import top_up_levels
+from app.infra.db.credit_grants import tell_paid, top_up_levels
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
-from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.outbox import enqueue_analytics_each
-from app.infra.db.session_stats import attended_by
+from app.infra.db.session_stats import has_attended
 from app.infra.db.user_locks import lock_users
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee", "unlock_referrers"]
@@ -345,11 +345,16 @@ async def unlock_referrers(
     *,
     ladder: CreditLadder,
     now: dt.datetime,
+    tell: bool = False,
 ) -> int:
     """Unlock each of ``user_ids`` who has a qualified invite **and** has
     attended a session as a mentee (decision 295), then top each one's month up
     to their level (decision 308). Returns how many were unlocked now. Does not
     commit.
+
+    ``tell`` sends each user who was paid a `credits_granted` (`tell_paid`),
+    in the invite wording while an invite would still lift them (decision
+    371). Settlement tells; a qualification does not, as before.
 
     Called from both halves, because either can come second: qualifying an
     invite (:func:`qualify_invitee`) and settling sessions
@@ -362,17 +367,13 @@ async def unlock_referrers(
     crediting the earliest qualified invite.
 
     **Every user named is topped up, unlocked now or not**: a qualification
-    alone lifts its referrer to level 2. A user whose level did not move is
-    owed nothing and gets no lot.
+    alone, or an attended session alone, lifts them to level 2 (decision 370).
+    A user whose level did not move is owed nothing and gets no lot.
     """
     if not user_ids:
         return 0
     await lock_users(session, user_ids)
-    attended = (
-        select(Session.id)
-        .where(Session.mentee_id == Referral.referrer_id, attended_by(Session.mentee_id))
-        .exists()
-    )
+    attended = has_attended(Referral.referrer_id)
     first_qualified = (
         select(Referral.referrer_id, Referral.id)
         .distinct(Referral.referrer_id)
@@ -397,5 +398,7 @@ async def unlock_referrers(
         at=now,
     )
     count = len(unlocked_ids)
-    await top_up_levels(session, user_ids, ladder=ladder, now=now)
+    paid = await top_up_levels(session, user_ids, ladder=ladder, now=now)
+    if tell:
+        await tell_paid(session, paid, Notification.CREDITS_GRANTED)
     return count
