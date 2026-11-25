@@ -40,6 +40,7 @@ from app.domain.credits import (
     level_allowance,
     level_of,
     level_owed,
+    lifted_by_attending,
     refund_expiry,
     state_for,
 )
@@ -144,6 +145,30 @@ class TestQuantities:
         assert ladder.starter == 1
         assert ladder.invited == 2
         assert ladder.monthly == 3
+
+
+@pytest.mark.parametrize(
+    ("onboarded", "invited", "attended", "unlocked", "lifted"),
+    [
+        # The rule change's own: attended, onboarded, not already at 3.
+        (True, False, True, False, True),
+        (True, True, True, False, True),
+        # Already unlocked (grandfathered or not): level 3 before and after.
+        (True, False, True, True, False),
+        (False, False, True, True, False),
+        (False, False, False, True, False),
+        # Not attended, or not onboarded: the rule changed nothing for them.
+        (True, False, False, False, False),
+        (True, True, False, False, False),
+        (False, False, True, False, False),
+    ],
+)
+def test_who_the_rule_change_lifted(
+    *, onboarded: bool, invited: bool, attended: bool, unlocked: bool, lifted: bool
+) -> None:
+    """The one-off top-up's scope (decision 370, owner 2026-11-25)."""
+    facts = LevelFacts(onboarded=onboarded, invited=invited, unlocked=unlocked, attended=attended)
+    assert lifted_by_attending(facts) is lifted
 
 
 class TestInviteCase:
