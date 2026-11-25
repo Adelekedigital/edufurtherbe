@@ -854,6 +854,12 @@ class SessionDeclinedRead(BaseModel):
     declined: bool = Field(description="Always true: the request is declined.")
 
 
+class LegacySessionRead(BaseModel):
+    """Where a legacy app room link now points."""
+
+    session_id: UUID = Field(description="The session's id, for `/sessions/{id}`.")
+
+
 class SessionWithdrawnRead(BaseModel):
     """The mentee withdrew a request."""
 

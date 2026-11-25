@@ -57,7 +57,7 @@ async def mentor_matches(
         str | None,
         Query(
             description=(
-                "A mentor's id or slug, as `/mentors/{handle}` takes it. Returns only "
+                "A mentor's handle, as `/mentors/{handle}` takes it. Returns only "
                 "that mentor, with reasons, when you can book them."
             )
         ),

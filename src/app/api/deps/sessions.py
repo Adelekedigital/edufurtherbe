@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import Depends, Query, Request
+from fastapi import Depends, Path, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.calendar import _free_busy
@@ -72,6 +72,7 @@ from app.infra.db.session_store import (
     get_session as get_session_row,
 )
 from app.infra.db.session_store import (
+    legacy_session_id,
     list_session_events,
     list_sessions,
 )
@@ -194,6 +195,20 @@ async def viewer_session(
     if row is None:
         raise NotFoundError("no such session")
     return row
+
+
+async def viewer_legacy_session(
+    legacy_id: Annotated[str, Path(max_length=128)], user: CurrentUserDep, session: SessionDep
+) -> UUID:
+    """The new id of the session a legacy room link names, for its two people.
+
+    A `str`, not a pattern: a malformed id is a 404 like any other unknown one
+    (past 128 characters, a 422 before any lookup).
+    """
+    found = await legacy_session_id(session, legacy_id, user["id"])
+    if found is None:
+        raise NotFoundError("no such session")
+    return found
 
 
 async def viewer_session_events(
@@ -798,4 +813,5 @@ async def reminded_session(
 RemindedSessionDep = Annotated[dict[str, Any], Depends(reminded_session)]
 SessionsPageDep = Annotated[tuple[list[dict[str, Any]], str | None], Depends(target_sessions)]
 SessionDetailDep = Annotated[dict[str, Any], Depends(viewer_session)]
+LegacySessionDep = Annotated[UUID, Depends(viewer_legacy_session)]
 SessionEventsDep = Annotated[list[dict[str, Any]], Depends(viewer_session_events)]

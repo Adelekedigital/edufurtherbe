@@ -605,6 +605,11 @@ PLACEHOLDER: Final = _Default.PLACEHOLDER
 Placeholder = Literal[_Default.PLACEHOLDER]
 
 
+def legacy_id() -> str:
+    """A fresh legacy app record id (``<13 digits>x<digits>``), as old links carry."""
+    return f"{1_700_000_000_000 + uuid.uuid4().int % 10**12}x{uuid.uuid4().int % 10**18}"
+
+
 async def add_user(
     conn: AsyncConnection,
     email: str,

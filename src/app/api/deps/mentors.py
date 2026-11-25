@@ -99,7 +99,8 @@ async def public_mentor(
     "skip the check" variant, because a guard with a bypass parameter is a guard
     with a bypass.
 
-    `handle` is an id or a slug and the store resolves either. It is not a `UUID`
+    `handle` is an id, a legacy app id or a slug, and the store resolves each
+    (`by_handle`). It is not a `UUID`
     in the signature for that reason: FastAPI would refuse a slug at the door with
     a 422, which would tell a caller that the id they guessed was well-formed.
 
