@@ -270,7 +270,7 @@ class Settings(BaseSettings):
         default=1, gt=0, le=CREDIT_CEILING, validation_alias=env_key("credit_starter_grant")
     )
 
-    #: Level 2's month: a completed session, or an invite of theirs qualified
+    #: Level 2's month: a session attended, or an invite of theirs qualified
     #: (decision 370). The name predates the
     #: levels, when this was a one-off bonus; it is kept so no deployment has
     #: to change a variable.

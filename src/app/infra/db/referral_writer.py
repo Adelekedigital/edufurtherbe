@@ -45,10 +45,9 @@ from app.domain.referrals import NO_INVITE, make_code, may_qualify
 from app.infra.db.credit_grants import top_up_levels
 from app.infra.db.invite_links import ResolvedCode, resolve_code
 from app.infra.db.models.referrals import Referral, ReferralUnlock
-from app.infra.db.models.sessions import Session
 from app.infra.db.models.user import User, UserOnboarding
 from app.infra.db.outbox import enqueue_analytics_each
-from app.infra.db.session_stats import attended_by
+from app.infra.db.session_stats import has_attended
 from app.infra.db.user_locks import lock_users
 
 __all__ = ["claim_referral", "create_referral", "qualify_invitee", "unlock_referrers"]
@@ -362,17 +361,13 @@ async def unlock_referrers(
     crediting the earliest qualified invite.
 
     **Every user named is topped up, unlocked now or not**: a qualification
-    alone, or a completed session alone, lifts them to level 2 (decision 370).
+    alone, or an attended session alone, lifts them to level 2 (decision 370).
     A user whose level did not move is owed nothing and gets no lot.
     """
     if not user_ids:
         return 0
     await lock_users(session, user_ids)
-    attended = (
-        select(Session.id)
-        .where(Session.mentee_id == Referral.referrer_id, attended_by(Session.mentee_id))
-        .exists()
-    )
+    attended = has_attended(Referral.referrer_id)
     first_qualified = (
         select(Referral.referrer_id, Referral.id)
         .distinct(Referral.referrer_id)

@@ -523,7 +523,7 @@ async def settle_attendance(
     )
 
     # 5. **A mentee who came may now rise a level** (decisions 295, 308, 370):
-    #    this is where attendance becomes final. A first completed session is
+    #    this is where attendance becomes final. A first attended session is
     #    level 2 on its own, and the unlock (level 3) once they also have a
     #    qualified invite. `unlock_referrers` writes the unlock where both hold
     #    and tops every one of them up to their level; anybody whose level did

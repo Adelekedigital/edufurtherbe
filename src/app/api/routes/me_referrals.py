@@ -59,7 +59,7 @@ CLAIM_WINDOW_TEXT = (
         "their profile — the same signal as your own level 1 — you reach credit "
         "level 2 (two credits a month), or 3 if you have also attended a "
         "session as a mentee (decisions 295 and 370), and this month is topped "
-        "up to it at once (decision 308). A completed session alone also "
+        "up to it at once (decision 308). Attending a session alone also "
         "reaches level 2. Signing up and vanishing earns nothing, and that "
         "separation is the abuse boundary."
     ),
@@ -81,7 +81,7 @@ async def create_own_referral(referral: CreatedReferralDep, response: Response) 
         "Newest first. `signed_up_at` is set when the invitee claims their "
         "code, and `qualified_at` when they finish onboarding. The second lifts "
         "you to credit level 2, and to 3 if you have also attended a session "
-        "as a mentee (decisions 295 and 370; a completed session alone is "
+        "as a mentee (decisions 295 and 370; attending a session alone is "
         "level 2 too): "
         "`/me` `credits.monthly.ceiling` is your level and "
         "`credits.monthly.unlocked` says when you reached 3.\n\n"

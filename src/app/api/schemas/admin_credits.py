@@ -224,7 +224,7 @@ class CreditRulesRead(BaseModel):
 
     #: Level 1: a mentee who finished onboarding, each month.
     starter: int
-    #: Level 2: plus a completed session or an invite of theirs qualified
+    #: Level 2: plus a session attended or an invite of theirs qualified
     #: (decision 370), each month. Named for the invite, as its setting is.
     #: Optional in the spec because it was added after the other two; always sent.
     invited: int | None = None

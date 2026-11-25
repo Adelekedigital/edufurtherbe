@@ -148,7 +148,7 @@ class TestLevels:
     """Decision 308: a mentee's month pays their level, and the facts decide it."""
 
     @pytest.mark.parametrize(
-        ("onboarded", "invited", "completed_session", "unlocked", "level"),
+        ("onboarded", "invited", "attended", "unlocked", "level"),
         [
             (False, False, False, False, 0),
             (True, False, False, False, 1),
@@ -174,7 +174,7 @@ class TestLevels:
         ],
     )
     def test_every_combination_of_facts(
-        self, *, onboarded: bool, invited: bool, completed_session: bool, unlocked: bool, level: int
+        self, *, onboarded: bool, invited: bool, attended: bool, unlocked: bool, level: int
     ) -> None:
         """All sixteen combinations, because a predicate written with `or`
         where it meant `and` passes the happy rows."""
@@ -182,7 +182,7 @@ class TestLevels:
             onboarded=onboarded,
             invited=invited,
             unlocked=unlocked,
-            completed_session=completed_session,
+            attended=attended,
         )
         assert level_allowance(facts, LADDER) == level
 
@@ -190,15 +190,15 @@ class TestLevels:
         ("facts", "number"),
         [
             (
-                LevelFacts(onboarded=False, invited=False, unlocked=False, completed_session=False),
+                LevelFacts(onboarded=False, invited=False, unlocked=False, attended=False),
                 0,
             ),
-            (LevelFacts(onboarded=True, invited=False, unlocked=False, completed_session=False), 1),
-            (LevelFacts(onboarded=True, invited=True, unlocked=False, completed_session=False), 2),
-            (LevelFacts(onboarded=True, invited=False, unlocked=False, completed_session=True), 2),
-            (LevelFacts(onboarded=True, invited=True, unlocked=True, completed_session=True), 3),
-            (LevelFacts(onboarded=False, invited=True, unlocked=False, completed_session=False), 0),
-            (LevelFacts(onboarded=False, invited=False, unlocked=True, completed_session=False), 3),
+            (LevelFacts(onboarded=True, invited=False, unlocked=False, attended=False), 1),
+            (LevelFacts(onboarded=True, invited=True, unlocked=False, attended=False), 2),
+            (LevelFacts(onboarded=True, invited=False, unlocked=False, attended=True), 2),
+            (LevelFacts(onboarded=True, invited=True, unlocked=True, attended=True), 3),
+            (LevelFacts(onboarded=False, invited=True, unlocked=False, attended=False), 0),
+            (LevelFacts(onboarded=False, invited=False, unlocked=True, attended=False), 3),
         ],
     )
     def test_the_level_number_is_the_rung_not_the_amount(

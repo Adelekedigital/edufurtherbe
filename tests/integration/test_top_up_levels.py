@@ -1,5 +1,5 @@
 """The one-off top-up when the level rule changes mid-month (decision 370):
-a mentee who completed a session before the rule paid level 2 is owed the
+a mentee who attended a session before the rule paid level 2 is owed the
 difference now, paid once and silently, and a re-run pays nothing.
 
 The database is shared with other suites, so each test asserts about the
@@ -43,8 +43,8 @@ async def owed(engine: AsyncEngine) -> dict[UUID, int]:
 async def a_mentee_who_attended_before_the_rule(
     client: httpx.AsyncClient, engine: AsyncEngine
 ) -> UUID:
-    """Onboarded and paid level 1; a completed session recorded with no
-    settlement since, as every mentee who completed one before decision 370 is."""
+    """Onboarded and paid level 1; an attended session recorded with no
+    settlement since, as every mentee who attended one before decision 370 is."""
     _, mentee_id = await an_onboarded_referrer(client, engine)
     await a_session_attended_by(engine, mentee_id, status="completed", mentor_came=True)
     assert await balance_of(engine, mentee_id) == ONBOARDED
@@ -68,13 +68,24 @@ async def emails_to(engine: AsyncEngine, user_id: UUID) -> int:
         )
 
 
-async def test_a_session_the_mentor_missed_is_not_a_level(
+async def test_a_session_the_mentor_missed_still_counts_for_the_mentee_who_came(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Completed, not attended (decision 370): the mentee who came to a session
-    the mentor missed is refunded, and does not also rise a level for good."""
+    """Attended, not completed (decision 370): a mentee is not punished for a
+    mentor who did not come."""
     _, mentee_id = await an_onboarded_referrer(api_client, db_engine)
     await a_session_attended_by(db_engine, mentee_id, status="no_show", mentor_came=False)
+
+    assert (await owed(db_engine)).get(mentee_id) == ATTENDED - ONBOARDED
+
+
+async def test_a_session_the_mentee_missed_is_not_a_level(
+    db_engine: AsyncEngine, api_client: httpx.AsyncClient
+) -> None:
+    _, mentee_id = await an_onboarded_referrer(api_client, db_engine)
+    await a_session_attended_by(
+        db_engine, mentee_id, status="no_show", mentor_came=True, mentee_came=False
+    )
 
     assert mentee_id not in await owed(db_engine)
 
@@ -82,7 +93,7 @@ async def test_a_session_the_mentor_missed_is_not_a_level(
 async def test_a_user_with_no_mentee_goal_is_owed_nothing(
     db_engine: AsyncEngine, api_client: httpx.AsyncClient
 ) -> None:
-    """Credits buy sessions as a mentee: no goal is level 0, completed session
+    """Credits buy sessions as a mentee: no goal is level 0, attended
     or not."""
     mentee_id = await a_mentee_who_attended_before_the_rule(api_client, db_engine)
     async with db_engine.begin() as conn:

@@ -123,7 +123,7 @@ class MonthlyCreditsRead(BaseModel):
         le=3,
         description=(
             "The caller's credit level (decisions 308 and 370): 0 not onboarded, "
-            "1 profile finished, +1 for a completed session as the mentee, +1 for "
+            "1 profile finished, +1 for a session attended as the mentee, +1 for "
             "an invited friend who qualified, so 3 with both. `ceiling` is this, "
             "at least 1."
         ),

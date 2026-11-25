@@ -4,7 +4,7 @@
 (``domain.credits.level_allowance``); what is still owed is the level less what
 the level sources already granted this period (``level_owed``). The 1st asks it
 for everybody, and a rise in level — finishing onboarding, an invite qualifying,
-a session settling as completed (decision 370) — asks it for the people it
+a session settling with them present (decision 370) — asks it for the people it
 touched. The difference is only which
 source the lot is written under.
 

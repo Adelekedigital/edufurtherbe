@@ -13,20 +13,20 @@ CREDIT LEVELS (decision 308, amended by 370)
 
     not onboarded, or not a mentee                          0
     finished onboarding                                     1   (ladder.starter)
-    + a completed session, OR an invite of theirs qualified 2   (ladder.invited)
+    + attended a session, OR an invite of theirs qualified  2   (ladder.invited)
     + both (the unlock, #295)                               3   (ladder.monthly)
 
-Decision 370 (owner, 2026-11-25): "a booked and completed session" alone
-reaches level 2, as a qualified invite alone does. **Completed, not attended**:
-a session is completed only when both parties came, so a mentee's lone Join
-press on a session the mentor missed (refunded under decision 229) does not
-also lift their level for good. The unlock itself still reads *attended*
-(decision 295).
+Decision 370 (owner, 2026-11-25): attending a session as its mentee alone
+reaches level 2, as a qualified invite alone does. **Attended, not completed**
+(owner: a mentee who came is not punished for a mentor who did not), the same
+*attended* the unlock reads (decision 295). On a venue that reports no
+presence, attended is the mentee's own Join press; that cannot be farmed, since
+the step pays once per person and the ladder stops at 3.
 
 Every level credit dies at the month end, so nothing carries over and the 1st
 needs no arithmetic beyond granting the level. Reaching a higher level mid-month
 through one of its events — finishing onboarding, an invite qualifying, a
-session settling as completed — tops the month up to it; any other change
+session settling with them present — tops the month up to it; any other change
 counts from the next 1st.
 **The level is a monthly allowance, not a balance to refill**: what a month
 pays is ``level - already granted this period``, so a rise after spending pays
@@ -138,7 +138,7 @@ class CreditLadder:
 
     #: Level 1: finished onboarding.
     starter: int
-    #: Level 2: a completed session, or an invite of theirs qualified (decision
+    #: Level 2: attended a session, or an invite of theirs qualified (decision
     #: 370). Named for the invite, as its setting is, so no deployment changes.
     invited: int
     #: Level 3: invited and attended (the unlock, decision 295). Also the cap on
@@ -244,9 +244,9 @@ class LevelFacts:
     #: A mentee holding the unlock: a qualified invite and an attended session
     #: (decision 295), or grandfathered from the migration.
     unlocked: bool
-    #: A session of theirs as the mentee settled as completed: both parties
-    #: came (`session_stats.received`, the dashboards' *held*). Decision 370.
-    completed_session: bool
+    #: They attended a session as its mentee, the mentor there or not
+    #: (`session_stats.has_attended`, the unlock's own *attended*). Decision 370.
+    attended: bool
 
 
 def level_of(facts: LevelFacts) -> int:
@@ -256,7 +256,7 @@ def level_of(facts: LevelFacts) -> int:
     grandfathered unlock with no invite behind it and no onboarding row the API
     wrote; they received the monthly grant before this decision and still do.
 
-    **An invite or a completed session counts only once the mentee has
+    **An invite or an attended session counts only once the mentee has
     onboarded.** Level 2 is level 1 plus either of them (decision 370), so
     either alone, from somebody who never finished their own profile, is level
     0 until they do. Both are level 3 even before `unlock_referrers` writes the
@@ -267,7 +267,7 @@ def level_of(facts: LevelFacts) -> int:
         return 3
     if not facts.onboarded:
         return 0
-    return 1 + int(facts.invited) + int(facts.completed_session)
+    return 1 + int(facts.invited) + int(facts.attended)
 
 
 def level_allowance(facts: LevelFacts, ladder: CreditLadder) -> int:

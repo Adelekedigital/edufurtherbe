@@ -47,17 +47,17 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 LADDER = default_ladder()
 #: Level 1, 2 and 3 on the default ladder, from the rule rather than literals.
 ONBOARDED = level_allowance(
-    LevelFacts(onboarded=True, invited=False, unlocked=False, completed_session=False), LADDER
+    LevelFacts(onboarded=True, invited=False, unlocked=False, attended=False), LADDER
 )
 INVITED = level_allowance(
-    LevelFacts(onboarded=True, invited=True, unlocked=False, completed_session=False), LADDER
+    LevelFacts(onboarded=True, invited=True, unlocked=False, attended=False), LADDER
 )
 #: Decision 370: attending alone is level 2, as an invite alone is.
 ATTENDED = level_allowance(
-    LevelFacts(onboarded=True, invited=False, unlocked=False, completed_session=True), LADDER
+    LevelFacts(onboarded=True, invited=False, unlocked=False, attended=True), LADDER
 )
 UNLOCKED = level_allowance(
-    LevelFacts(onboarded=True, invited=True, unlocked=True, completed_session=True), LADDER
+    LevelFacts(onboarded=True, invited=True, unlocked=True, attended=True), LADDER
 )
 
 
